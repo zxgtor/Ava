@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { join } from 'node:path'
 import {
@@ -13,6 +13,7 @@ import {
   abortStream,
   type StreamChatArgs,
 } from './llm'
+import { mcpSupervisor, type McpServerConfig } from './services/mcpSupervisor'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -35,6 +36,7 @@ function createMainWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
+    if (mainWindow) mcpSupervisor.wire(mainWindow.webContents)
     mainWindow?.show()
   })
 
@@ -58,6 +60,8 @@ function registerIpc(): void {
   ipcMain.handle('ava:settings:load', async () => loadSettings())
   ipcMain.handle('ava:settings:save', async (_e, data: unknown) => {
     await saveSettings(data)
+    const mcpServers = readMcpServers(data)
+    if (mcpServers) await mcpSupervisor.applyConfigs(mcpServers)
     return true
   })
 
@@ -80,6 +84,29 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('ava:llm:abort', (_e, streamId: string) => abortStream(streamId))
+
+  // ── MCP runtime ─────────────────────────────
+  ipcMain.handle('ava:mcp:listServers', () => mcpSupervisor.listServers())
+  ipcMain.handle('ava:mcp:restart', async (_e, serverId: string) => {
+    await mcpSupervisor.restart(serverId)
+    return true
+  })
+
+  // ── Dialog helpers ──────────────────────────
+  ipcMain.handle('ava:dialog:pickDirectory', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          title: '选择允许访问的目录',
+          properties: ['openDirectory'],
+        })
+      : await dialog.showOpenDialog({
+          title: '选择允许访问的目录',
+          properties: ['openDirectory'],
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
 
   // ── Provider connectivity probe ─────────────
   ipcMain.handle('ava:llm:probe', async (
@@ -142,6 +169,13 @@ function registerIpc(): void {
 app.whenReady().then(() => {
   registerIpc()
   createMainWindow()
+  loadSettings()
+    .then(raw => {
+      const mcpServers = readMcpServers(raw)
+      if (mcpServers) return mcpSupervisor.applyConfigs(mcpServers)
+      return undefined
+    })
+    .catch(err => console.warn('[mcp] initial apply failed:', err))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
@@ -151,3 +185,15 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+app.on('before-quit', () => {
+  mcpSupervisor.shutdown().catch(err => console.warn('[mcp] shutdown failed:', err))
+})
+
+function readMcpServers(raw: unknown): McpServerConfig[] | null {
+  if (!raw || typeof raw !== 'object') return null
+  const src = raw as { version?: unknown; mcpServers?: unknown }
+  if (src.version !== 2 || !Array.isArray(src.mcpServers)) return null
+  return src.mcpServers
+    .filter((item): item is McpServerConfig => Boolean(item && typeof item === 'object' && typeof (item as McpServerConfig).id === 'string'))
+}

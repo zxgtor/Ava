@@ -13,6 +13,21 @@ import {
 import { getEnabledProviders } from '../lib/llm/providers'
 import type { Conversation } from '../types'
 
+function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
+  const message = conversation.messages.find(m => m.id === messageId)
+  return Boolean(message?.content.some(part =>
+    part.type === 'tool_call' && (part.status === 'error' || part.status === 'aborted'),
+  ))
+}
+
+function lastStreamingAssistant(conversation: Conversation): string | null {
+  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
+    const message = conversation.messages[i]
+    if (message.role === 'assistant' && message.streaming) return message.id
+  }
+  return null
+}
+
 export function ChatView() {
   const { state, dispatch, activeConversation, createConversation } = useStore()
   const [isStreaming, setIsStreaming] = useState(false)
@@ -55,9 +70,40 @@ export function ChatView() {
               delta,
             })
           },
+          onPart: ({ part }) => {
+            dispatch({
+              type: 'ADD_PART',
+              conversationId,
+              messageId: placeholderId,
+              part,
+            })
+          },
+          onPartUpdate: ({ partIndex, partId, patch }) => {
+            dispatch({
+              type: 'UPDATE_PART',
+              conversationId,
+              messageId: placeholderId,
+              partIndex,
+              partId,
+              patch,
+            })
+          },
         })
 
         if (result.ok) {
+          if (result.detectedToolFormat !== 'none') {
+            const key = `${result.providerId}:${result.model}`
+            dispatch({
+              type: 'UPDATE_SETTINGS',
+              settings: {
+                ...state.settings,
+                modelToolFormatMap: {
+                  ...state.settings.modelToolFormatMap,
+                  [key]: result.detectedToolFormat,
+                },
+              },
+            })
+          }
           dispatch({
             type: 'UPDATE_MESSAGE',
             conversationId,
@@ -138,9 +184,17 @@ export function ChatView() {
 
   const handleStop = useCallback(() => {
     if (streamId) {
+      const lastAssistantId = activeConversation ? lastStreamingAssistant(activeConversation) : null
+      if (activeConversation && lastAssistantId) {
+        dispatch({
+          type: 'ABORT_RUNNING_PARTS',
+          conversationId: activeConversation.id,
+          messageId: lastAssistantId,
+        })
+      }
       window.ava.llm.abort(streamId).catch(() => { /* noop */ })
     }
-  }, [streamId])
+  }, [activeConversation, dispatch, streamId])
 
   const handleDeleteMessage = useCallback(
     (id: string) => {
@@ -174,7 +228,10 @@ export function ChatView() {
       const idx = msgs.findIndex(m => m.id === failedId)
       if (idx < 0) return
       const target = msgs[idx]
-      if (target.role !== 'assistant' || (!target.error && !target.aborted)) return
+      if (
+        target.role !== 'assistant' ||
+        (!target.error && !target.aborted && !hasFailedToolCall(activeConversation, failedId))
+      ) return
       // Only allow retrying the last message, to avoid desynchronizing later turns.
       if (idx !== msgs.length - 1) return
 
@@ -222,7 +279,7 @@ export function ChatView() {
                 isLast &&
                 m.role === 'assistant' &&
                 !m.streaming &&
-                (Boolean(m.error) || Boolean(m.aborted))
+                (Boolean(m.error) || Boolean(m.aborted) || hasFailedToolCall(activeConversation, m.id))
               return (
                 <MessageBubble
                   key={m.id}

@@ -1,9 +1,43 @@
+// ── Message content parts ───────────────────────────────────────────
+
+export interface TextPart {
+  type: 'text'
+  text: string
+}
+
+export type ToolCallStatus = 'pending' | 'running' | 'ok' | 'error' | 'aborted'
+
+export interface ToolCallPart {
+  type: 'tool_call'
+  /** Stable tool-call id (matches the OpenAI `tool_call_id` / Hermes id) */
+  id: string
+  /** Namespaced tool name, e.g. `filesystem.read_file` */
+  name: string
+  args: Record<string, unknown>
+  status: ToolCallStatus
+  /** Result payload (arbitrary JSON) once the tool call completes. */
+  result?: unknown
+  /** Error message when status = 'error'. */
+  error?: string
+  startedAt?: number
+  endedAt?: number
+}
+
+export type ContentPart = TextPart | ToolCallPart
+
 // ── Message / Conversation ──────────────────────────────────────────
 
 export interface Message {
   id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
+  /** 'tool' role carries a tool execution result that is fed back to the LLM. */
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  /**
+   * Breaking change in schema v2: was `string`, now an array of parts.
+   * `role: 'tool'` messages carry exactly one text part (the stringified result).
+   */
+  content: ContentPart[]
+  /** Only set when role === 'tool'; ties the result back to the matching tool_call part. */
+  toolCallId?: string
   createdAt: number
   streaming?: boolean
   error?: string
@@ -33,16 +67,45 @@ export interface ModelProvider {
   defaultModel: string
 }
 
+// ── MCP servers ─────────────────────────────────────────────────────
+
+export interface McpServerConfig {
+  /** Stable id. `filesystem` is the only built-in in P2. */
+  id: string
+  name: string
+  command: string
+  /** Base args; the supervisor may append extra args (e.g. allowedDirs) at spawn time. */
+  args: string[]
+  env?: Record<string, string>
+  enabled: boolean
+  /** Filesystem-only: directories the server is allowed to read/write. Appended to args on spawn. */
+  allowedDirs?: string[]
+  /** Built-in servers cannot be removed from the list, only toggled/configured. */
+  builtin?: boolean
+}
+
+/** Per-model detected tool-call format, cached so we do not re-probe every request. */
+export type ToolCallFormat = 'openai' | 'hermes' | 'none'
+
 // ── Settings ────────────────────────────────────────────────────────
 
+/**
+ * Schema v2 — breaking change from v1:
+ *   - Message.content: string → ContentPart[]
+ *   - Settings.mcpServers / modelToolFormatMap added
+ * Loader resets settings + conversations when version !== 2.
+ */
 export interface Settings {
-  version: number
+  version: 2
   modelProviders: ModelProvider[]
   primaryModelChain: string[]
   persona: {
     userName: string
     assistantName: string
   }
+  mcpServers: McpServerConfig[]
+  /** Key = `${providerId}:${modelId}` → detected format. */
+  modelToolFormatMap: Record<string, ToolCallFormat>
 }
 
 // ── View mode ───────────────────────────────────────────────────────

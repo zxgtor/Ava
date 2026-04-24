@@ -1,14 +1,17 @@
 // ─────────────────────────────────────────────
 // Main-process LLM client.
 // Runs in Node, so no CORS, no cert issues.
-// Exposes: streamChat() → emits chunks to renderer via IPC.
+// Exposes: streamChat() → emits text / tool-call parts to renderer via IPC.
 // ─────────────────────────────────────────────
 
 import { WebContents } from 'electron'
+import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
 
 export interface LlmMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  toolCallId?: string
+  toolCalls?: ToolCallCandidate[]
 }
 
 export interface ModelProvider {
@@ -31,28 +34,72 @@ export interface LlmAttempt {
   error?: string
 }
 
+export type ToolCallFormat = 'openai' | 'hermes' | 'none'
+export type ToolCallStatus = 'pending' | 'running' | 'ok' | 'error' | 'aborted'
+
+export interface ToolCallPart {
+  type: 'tool_call'
+  id: string
+  name: string
+  args: Record<string, unknown>
+  status: ToolCallStatus
+  result?: unknown
+  error?: string
+  startedAt?: number
+  endedAt?: number
+}
+
 export interface StreamChatArgs {
   streamId: string
   messages: LlmMessage[]
-  providers: ModelProvider[]      // already filtered + ordered by renderer
+  providers: ModelProvider[]
   temperature?: number
+  toolFormatMap?: Record<string, ToolCallFormat>
 }
 
 export interface StreamChatResult {
   fullContent: string
+  parts: Array<{ type: 'text'; text: string } | ToolCallPart>
   provider: ModelProvider
   model: string
   attempts: LlmAttempt[]
   fallbackUsed: boolean
+  toolCallsIssued: number
+  loopRounds: number
+  detectedToolFormat: ToolCallFormat
 }
 
-// active streams, for cancellation
-const activeStreams = new Map<string, AbortController>()
+interface ToolCallCandidate {
+  id: string
+  name: string
+  args: Record<string, unknown>
+}
+
+interface ToolCallAccumulator {
+  id?: string
+  name?: string
+  argsText: string
+}
+
+interface StreamStepResult {
+  visibleText: string
+  toolCalls: ToolCallCandidate[]
+  model: string
+  detectedToolFormat: ToolCallFormat
+}
+
+interface ActiveStream {
+  controller: AbortController
+  aborted: boolean
+}
+
+const activeStreams = new Map<string, ActiveStream>()
 
 const ANTHROPIC_API_VERSION = '2023-06-01'
 const ANTHROPIC_MAX_TOKENS = 4096
-
-// ── URL helpers ─────────────────────────────────────────────────────
+const MAX_TOOL_LOOP = 10
+const WINDOWS_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：、]+/g
+const WINDOWS_DRIVE_SCOPE_RE = /\b[A-Za-z]:\\?(?![^\s"'`<>|?*])/g
 
 function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
@@ -68,15 +115,10 @@ function anthropicMessagesEndpoint(baseUrl: string): string {
   return `${trimmed}/v1/messages`
 }
 
-// ── Leading-whitespace stripper ─────────────────────────────────────
-
 function makeDeltaPusher(onChunk: (text: string) => void) {
   let fullContent = ''
   let seenFirstVisible = false
 
-  // Many chat-tuned models (e.g. Qwen) emit a leading "\n" after the
-  // assistant role token because the template already appended one.
-  // Strip leading whitespace until the first visible char arrives.
   const push = (delta: string) => {
     let text = delta
     if (!seenFirstVisible) {
@@ -94,46 +136,273 @@ function makeDeltaPusher(onChunk: (text: string) => void) {
   }
 }
 
-// ── OpenAI-compatible SSE ───────────────────────────────────────────
+function toolKey(providerId: string, model: string): string {
+  return `${providerId}:${model}`
+}
 
-function extractOpenAiDelta(line: string): string | null {
-  if (!line.startsWith('data:')) return null
-  const payload = line.slice(5).trim()
-  if (!payload || payload === '[DONE]') return null
-  try {
-    const json = JSON.parse(payload)
-    const delta = json.choices?.[0]?.delta?.content
-    if (typeof delta === 'string') return delta
-    // Some providers send full message at end (e.g. in streaming-disabled mode)
-    const content = json.choices?.[0]?.message?.content
-    if (typeof content === 'string') return content
+function latestUserRequest(messages: LlmMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') return messages[i].content
+  }
+  return ''
+}
+
+function extractPathScopes(text: string): string[] {
+  const scopes = new Set<string>()
+  for (const match of text.matchAll(WINDOWS_PATH_RE)) {
+    scopes.add(match[0].replace(/[),.;:，。；：、]+$/, '').toLowerCase())
+  }
+  for (const match of text.matchAll(WINDOWS_DRIVE_SCOPE_RE)) {
+    scopes.add(match[0].replace(/\\?$/, ':').toLowerCase())
+  }
+  return Array.from(scopes)
+}
+
+function pathArgFromToolCall(toolCall: ToolCallCandidate): string | null {
+  const raw = toolCall.args.path ?? toolCall.args.root ?? toolCall.args.dir ?? toolCall.args.directory
+  return typeof raw === 'string' ? raw : null
+}
+
+function isPathWithinScope(path: string, scope: string): boolean {
+  const p = path.toLowerCase()
+  const s = scope.toLowerCase()
+  if (/^[a-z]:$/.test(s)) return p === `${s}\\` || p === s || p.startsWith(`${s}\\`)
+  return p === s || p.startsWith(`${s}\\`)
+}
+
+function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask: string): string | null {
+  if (!toolCall.name.startsWith('filesystem.')) return null
+  const path = pathArgFromToolCall(toolCall)
+  if (!path) {
+    const task = currentTask.toLowerCase()
+    const isAllowedDirsQuery = /allowed directories|allowlist|whitelist|白名单|允许目录|可访问目录/.test(task)
+    if (toolCall.name === 'filesystem.list_allowed_directories' && !isAllowedDirsQuery) {
+      return `Blocked filesystem tool call "${toolCall.name}" because it is not required by the latest user request.`
+    }
     return null
+  }
+
+  const scopes = extractPathScopes(currentTask)
+  if (scopes.length === 0) return null
+  if (scopes.some(scope => isPathWithinScope(path, scope))) return null
+
+  return `Blocked stale filesystem tool call. The requested path "${path}" is outside the latest user request scope: ${scopes.join(', ')}.`
+}
+
+function buildToolPrompt(tools: McpToolDescriptor[]): string {
+  const toolLines = tools.map(tool => {
+    const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema) : '{}'
+    return `- ${tool.name}: ${tool.description ?? 'No description'} | args schema: ${schema}`
+  })
+  return [
+    'Available tools:',
+    ...toolLines,
+    'To call a tool, respond with exactly one or more blocks like:',
+    '<tool_call>{"name":"filesystem.read_file","arguments":{"path":"D:\\\\example.txt"}}</tool_call>',
+    'Do not wrap tool calls in markdown fences.',
+  ].join('\n')
+}
+
+function toOpenAiMessages(messages: LlmMessage[]) {
+  return messages.map(message => {
+    if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: message.content || '',
+        tool_calls: message.toolCalls.map(call => ({
+          id: call.id,
+          type: 'function',
+          function: {
+            name: call.name,
+            arguments: JSON.stringify(call.args),
+          },
+        })),
+      }
+    }
+    if (message.role === 'tool') {
+      return {
+        role: 'tool',
+        tool_call_id: message.toolCallId,
+        content: message.content,
+      }
+    }
+    return {
+      role: message.role,
+      content: message.content,
+    }
+  })
+}
+
+function injectHermesToolPrompt(messages: LlmMessage[], tools: McpToolDescriptor[]): LlmMessage[] {
+  if (tools.length === 0) return messages
+  const prompt = buildToolPrompt(tools)
+  if (messages[0]?.role === 'system') {
+    return [{ ...messages[0], content: `${messages[0].content}\n\n${prompt}` }, ...messages.slice(1)]
+  }
+  return [{ role: 'system', content: prompt }, ...messages]
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
   } catch {
     return null
   }
 }
 
+function parseHermesToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
+  const toolCalls: ToolCallCandidate[] = []
+  const toolCallBlockRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
+  const visibleText = text.replace(toolCallBlockRe, (_match, body) => {
+    const parsed = parseJsonObject(body)
+    if (parsed) {
+      const name = typeof parsed.name === 'string' ? parsed.name : null
+      const argsSource = parsed.arguments ?? parsed.args
+      const args = argsSource && typeof argsSource === 'object' ? argsSource as Record<string, unknown> : {}
+      if (name) {
+        toolCalls.push({
+          id: `hermes_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name,
+          args,
+        })
+      }
+      return ''
+    }
+
+    const functionMatch = String(body).match(/<function=([A-Za-z0-9_.-]+)>\s*([\s\S]*?)\s*(?:<\/function>)?$/)
+    if (functionMatch) {
+      const args = parseJsonObject(functionMatch[2].trim()) ?? {}
+      toolCalls.push({
+        id: `hermes_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: functionMatch[1],
+        args,
+      })
+      return ''
+    }
+
+    return ''
+  }).trim()
+  return { visibleText, toolCalls }
+}
+
+function stripResidualToolMarkup(text: string): string {
+  return text
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+    .replace(/<function=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/function>)?/g, '')
+    .trim()
+}
+
+function extractOpenAiPayload(line: string): Record<string, unknown> | null {
+  if (!line.startsWith('data:')) return null
+  const payload = line.slice(5).trim()
+  if (!payload || payload === '[DONE]') return null
+  return parseJsonObject(payload)
+}
+
+function normalizeToolCallCandidates(accs: ToolCallAccumulator[]): ToolCallCandidate[] {
+  const out: ToolCallCandidate[] = []
+  for (let i = 0; i < accs.length; i += 1) {
+    const acc = accs[i]
+    if (!acc?.name) continue
+    out.push({
+      id: acc.id || `tc_${Date.now()}_${i}`,
+      name: acc.name,
+      args: parseJsonObject(acc.argsText) ?? {},
+    })
+  }
+  return out
+}
+
+function applyToolCallDelta(accs: ToolCallAccumulator[], payload: Record<string, unknown>): boolean {
+  const deltaObj = payload.choices && Array.isArray(payload.choices)
+    ? payload.choices[0] as Record<string, unknown> | undefined
+    : undefined
+  const delta = deltaObj?.delta
+  if (!delta || typeof delta !== 'object') return false
+  const toolCalls = (delta as Record<string, unknown>).tool_calls
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return false
+
+  for (const raw of toolCalls) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as Record<string, unknown>
+    const index = typeof item.index === 'number' ? item.index : accs.length
+    if (!accs[index]) accs[index] = { argsText: '' }
+    if (typeof item.id === 'string') accs[index].id = item.id
+    const fn = item.function
+    if (fn && typeof fn === 'object') {
+      const f = fn as Record<string, unknown>
+      if (typeof f.name === 'string') accs[index].name = f.name
+      if (typeof f.arguments === 'string') accs[index].argsText += f.arguments
+    }
+  }
+  return true
+}
+
+function extractMessageToolCalls(payload: Record<string, unknown>): ToolCallCandidate[] {
+  const choice = Array.isArray(payload.choices) ? payload.choices[0] as Record<string, unknown> | undefined : undefined
+  const message = choice?.message
+  if (!message || typeof message !== 'object') return []
+  const toolCalls = (message as Record<string, unknown>).tool_calls
+  if (!Array.isArray(toolCalls)) return []
+
+  return toolCalls.flatMap((raw, idx) => {
+    if (!raw || typeof raw !== 'object') return []
+    const item = raw as Record<string, unknown>
+    const fn = item.function
+    if (!fn || typeof fn !== 'object') return []
+    const name = typeof (fn as Record<string, unknown>).name === 'string'
+      ? (fn as Record<string, unknown>).name as string
+      : ''
+    if (!name) return []
+    const argsText = typeof (fn as Record<string, unknown>).arguments === 'string'
+      ? (fn as Record<string, unknown>).arguments as string
+      : '{}'
+    return [{
+      id: typeof item.id === 'string' ? item.id : `tc_${Date.now()}_${idx}`,
+      name,
+      args: parseJsonObject(argsText) ?? {},
+    }]
+  })
+}
+
 async function streamOpenAiCompat(
   provider: ModelProvider,
-  args: StreamChatArgs,
+  args: StreamChatArgs & {
+    messages: LlmMessage[]
+    tools: McpToolDescriptor[]
+    toolFormatHint?: ToolCallFormat
+  },
   controller: AbortController,
   onChunk: (text: string) => void,
-): Promise<{ fullContent: string; model: string }> {
+): Promise<StreamStepResult> {
   const model = provider.defaultModel
   const endpoint = chatCompletionsEndpoint(provider.baseUrl)
-
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`
+  if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`
+
+  const requestBody: Record<string, unknown> = {
+    model,
+    messages: toOpenAiMessages(args.messages),
+    temperature: args.temperature ?? 0.4,
+    stream: true,
+  }
+  if (args.tools.length > 0 && args.toolFormatHint !== 'hermes' && args.toolFormatHint !== 'none') {
+    requestBody.tools = args.tools.map(tool => ({
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description ?? '',
+        parameters: tool.inputSchema ?? { type: 'object', properties: {} },
+      },
+    }))
+    requestBody.tool_choice = 'auto'
+  }
 
   const response = await fetch(endpoint, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      model,
-      messages: args.messages,
-      temperature: args.temperature ?? 0.4,
-      stream: true,
-    }),
+    body: JSON.stringify(requestBody),
     signal: controller.signal,
   })
 
@@ -141,48 +410,82 @@ async function streamOpenAiCompat(
     const errorText = await response.text().catch(() => '')
     throw new Error(`HTTP ${response.status}${errorText ? ` — ${errorText.slice(0, 300)}` : ''}`)
   }
-
   if (!response.body) {
     throw new Error('No response body from provider')
   }
 
-  const pusher = makeDeltaPusher(onChunk)
+  const streamChunks = args.toolFormatHint !== 'hermes'
+  const pusher = makeDeltaPusher(streamChunks ? onChunk : () => { /* buffer Hermes text until tool tags are stripped */ })
   const reader = response.body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
+  const toolAccs: ToolCallAccumulator[] = []
+  let finalPayload: Record<string, unknown> | null = null
+
+  const processPayload = (payload: Record<string, unknown>) => {
+    finalPayload = payload
+    const deltaObj = Array.isArray(payload.choices) ? payload.choices[0] as Record<string, unknown> | undefined : undefined
+    const delta = deltaObj?.delta
+    if (delta && typeof delta === 'object') {
+      const content = (delta as Record<string, unknown>).content
+      if (typeof content === 'string') pusher.push(content)
+    }
+    applyToolCallDelta(toolAccs, payload)
+    const messageContent = deltaObj?.message && typeof deltaObj.message === 'object'
+      ? (deltaObj.message as Record<string, unknown>).content
+      : undefined
+    if (typeof messageContent === 'string' && !toolAccs.length && !pusher.fullContent) {
+      pusher.push(messageContent)
+    }
+  }
 
   try {
     while (true) {
       const { value, done } = await reader.read()
-      if (done) break
+      if (done) {
+        buffer += decoder.decode()
+        break
+      }
       buffer += decoder.decode(value, { stream: true })
-
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
-
       for (const raw of lines) {
         const line = raw.trim()
         if (!line) continue
-        const delta = extractOpenAiDelta(line)
-        if (delta) pusher.push(delta)
+        const payload = extractOpenAiPayload(line)
+        if (payload) processPayload(payload)
       }
     }
     if (buffer.trim()) {
-      const delta = extractOpenAiDelta(buffer.trim())
-      if (delta) pusher.push(delta)
+      const payload = extractOpenAiPayload(buffer.trim())
+      if (payload) processPayload(payload)
     }
   } finally {
     try { reader.releaseLock() } catch { /* noop */ }
   }
 
-  if (!pusher.fullContent.trim()) {
-    throw new Error('LLM returned empty content')
+  let toolCalls = normalizeToolCallCandidates(toolAccs)
+  if (toolCalls.length === 0 && finalPayload) {
+    toolCalls = extractMessageToolCalls(finalPayload)
   }
 
-  return { fullContent: pusher.fullContent, model }
-}
+  let visibleText = pusher.fullContent
+  let detected: ToolCallFormat = toolCalls.length > 0 ? 'openai' : 'none'
+  if (toolCalls.length === 0 && args.tools.length > 0) {
+    const hermes = parseHermesToolCalls(visibleText)
+    if (hermes.toolCalls.length > 0) {
+      toolCalls = hermes.toolCalls
+      visibleText = hermes.visibleText
+      detected = 'hermes'
+    }
+  }
+  visibleText = stripResidualToolMarkup(visibleText)
+  if (!streamChunks && visibleText) {
+    onChunk(visibleText)
+  }
 
-// ── Anthropic /v1/messages ──────────────────────────────────────────
+  return { visibleText, toolCalls, model, detectedToolFormat: detected }
+}
 
 interface AnthropicSseEvent {
   type: string
@@ -190,7 +493,6 @@ interface AnthropicSseEvent {
 }
 
 function extractAnthropicDelta(jsonLine: string): { delta?: string; error?: string } {
-  // Line is `data: {json}`. Non-data lines (event:, id:, retry:, empty) are ignored upstream.
   try {
     const event = JSON.parse(jsonLine) as AnthropicSseEvent
     if (event.type === 'content_block_delta') {
@@ -211,19 +513,20 @@ function extractAnthropicDelta(jsonLine: string): { delta?: string; error?: stri
 
 async function streamAnthropic(
   provider: ModelProvider,
-  args: StreamChatArgs,
+  args: StreamChatArgs & { messages: LlmMessage[]; tools: McpToolDescriptor[] },
   controller: AbortController,
   onChunk: (text: string) => void,
-): Promise<{ fullContent: string; model: string }> {
+): Promise<StreamStepResult> {
   const model = provider.defaultModel
   const endpoint = anthropicMessagesEndpoint(provider.baseUrl)
 
-  // Pull system messages out — Anthropic expects `system` as a top-level string.
   const systemParts: string[] = []
   const chat: Array<{ role: 'user' | 'assistant'; content: string }> = []
   for (const m of args.messages) {
     if (m.role === 'system') {
       if (m.content) systemParts.push(m.content)
+    } else if (m.role === 'tool') {
+      chat.push({ role: 'user', content: `Tool result for ${m.toolCallId ?? 'tool'}:\n${m.content}` })
     } else {
       chat.push({ role: m.role, content: m.content })
     }
@@ -242,9 +545,7 @@ async function streamAnthropic(
     messages: chat,
     stream: true,
   }
-  if (systemParts.length > 0) {
-    body.system = systemParts.join('\n\n')
-  }
+  if (systemParts.length > 0) body.system = systemParts.join('\n\n')
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -257,7 +558,6 @@ async function streamAnthropic(
     const errorText = await response.text().catch(() => '')
     throw new Error(`HTTP ${response.status}${errorText ? ` — ${errorText.slice(0, 300)}` : ''}`)
   }
-
   if (!response.body) {
     throw new Error('No response body from Anthropic')
   }
@@ -280,12 +580,13 @@ async function streamAnthropic(
   try {
     while (true) {
       const { value, done } = await reader.read()
-      if (done) break
+      if (done) {
+        buffer += decoder.decode()
+        break
+      }
       buffer += decoder.decode(value, { stream: true })
-
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
-
       for (const raw of lines) {
         const line = raw.trim()
         if (!line) continue
@@ -297,28 +598,186 @@ async function streamAnthropic(
     try { reader.releaseLock() } catch { /* noop */ }
   }
 
-  if (streamError) {
-    throw new Error(streamError)
+  if (streamError) throw new Error(streamError)
+  return {
+    visibleText: pusher.fullContent,
+    toolCalls: [],
+    model,
+    detectedToolFormat: 'none',
   }
-  if (!pusher.fullContent.trim()) {
-    throw new Error('LLM returned empty content')
-  }
-
-  return { fullContent: pusher.fullContent, model }
 }
-
-// ── Dispatcher ──────────────────────────────────────────────────────
 
 function streamFromProvider(
   provider: ModelProvider,
-  args: StreamChatArgs,
+  args: StreamChatArgs & {
+    messages: LlmMessage[]
+    tools: McpToolDescriptor[]
+    toolFormatHint?: ToolCallFormat
+  },
   controller: AbortController,
   onChunk: (text: string) => void,
-): Promise<{ fullContent: string; model: string }> {
+): Promise<StreamStepResult> {
   if (provider.id === 'anthropic') {
     return streamAnthropic(provider, args, controller, onChunk)
   }
   return streamOpenAiCompat(provider, args, controller, onChunk)
+}
+
+async function runToolLoop(
+  webContents: WebContents,
+  provider: ModelProvider,
+  args: StreamChatArgs,
+  controller: AbortController,
+): Promise<Omit<StreamChatResult, 'provider' | 'attempts' | 'fallbackUsed'>> {
+  const model = provider.defaultModel
+  const tools = mcpSupervisor.listAllTools()
+  const initialHint = args.toolFormatMap?.[toolKey(provider.id, model)]
+  const effectiveInitialHint: ToolCallFormat | undefined =
+    initialHint ?? (provider.id === 'lmstudio' && tools.length > 0 ? 'hermes' : undefined)
+  const workingMessages: LlmMessage[] = [...args.messages]
+  const currentTask = latestUserRequest(args.messages)
+  const parts: StreamChatResult['parts'] = []
+  let fullContent = ''
+  let detectedToolFormat: ToolCallFormat = initialHint ?? 'none'
+  let toolCallsIssued = 0
+
+  for (let round = 0; round < MAX_TOOL_LOOP; round += 1) {
+    if (controller.signal.aborted) throw new Error('aborted')
+
+    const stepMessages =
+      effectiveInitialHint === 'hermes'
+        ? injectHermesToolPrompt(workingMessages, tools)
+        : workingMessages
+
+    const step = await streamFromProvider(
+      provider,
+      {
+        ...args,
+        messages: stepMessages,
+        tools,
+        toolFormatHint: detectedToolFormat === 'none' ? effectiveInitialHint : detectedToolFormat,
+      },
+      controller,
+      text => {
+        if (!webContents.isDestroyed()) {
+          webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
+        }
+      },
+    )
+
+    if (step.detectedToolFormat !== 'none') {
+      detectedToolFormat = step.detectedToolFormat
+    } else if (!effectiveInitialHint) {
+      detectedToolFormat = 'none'
+    }
+
+    if (step.visibleText) {
+      fullContent += step.visibleText
+      parts.push({ type: 'text', text: step.visibleText })
+    }
+
+    if (step.toolCalls.length === 0) {
+      if (step.visibleText) {
+        workingMessages.push({ role: 'assistant', content: step.visibleText })
+      }
+      return {
+        fullContent,
+        parts,
+        model,
+        toolCallsIssued,
+        loopRounds: round + 1,
+        detectedToolFormat,
+      }
+    }
+
+    toolCallsIssued += step.toolCalls.length
+    workingMessages.push({
+      role: 'assistant',
+      content: step.visibleText,
+      toolCalls: step.toolCalls,
+    })
+    for (const toolCall of step.toolCalls) {
+      if (controller.signal.aborted) throw new Error('aborted')
+
+      const partIndex = parts.length
+      const staleReason = validateToolAgainstCurrentTask(toolCall, currentTask)
+      const toolPart: ToolCallPart = {
+        type: 'tool_call',
+        id: toolCall.id,
+        name: toolCall.name,
+        args: toolCall.args,
+        status: staleReason ? 'error' : 'running',
+        startedAt: Date.now(),
+        ...(staleReason ? { endedAt: Date.now(), error: staleReason } : {}),
+      }
+      parts.push(toolPart)
+
+      if (!webContents.isDestroyed()) {
+        webContents.send('ava:llm:part', {
+          streamId: args.streamId,
+          partIndex,
+          part: toolPart,
+        })
+      }
+
+      if (staleReason) {
+        workingMessages.push({
+          role: 'tool',
+          toolCallId: toolCall.id,
+          content: JSON.stringify({ error: staleReason }, null, 2),
+        })
+        continue
+      }
+
+      const result = await mcpSupervisor.callTool({
+        namespacedName: toolCall.name,
+        rawArgs: toolCall.args,
+      })
+
+      const patch: Partial<ToolCallPart> = {
+        endedAt: Date.now(),
+        status: result.ok ? (result.isError ? 'error' : 'ok') : (result.aborted ? 'aborted' : 'error'),
+      }
+      if (result.ok) patch.result = result.content
+      else patch.error = result.error
+
+      Object.assign(toolPart, patch)
+      if (!webContents.isDestroyed()) {
+        webContents.send('ava:llm:partUpdate', {
+          streamId: args.streamId,
+          partIndex,
+          partId: toolCall.id,
+          patch,
+        })
+      }
+
+      if (!result.ok && result.aborted) {
+        throw new Error('aborted')
+      }
+
+      const toolText = JSON.stringify(result.ok ? result.content : { error: result.error }, null, 2)
+      workingMessages.push({
+        role: 'tool',
+        toolCallId: toolCall.id,
+        content: toolText,
+      })
+    }
+  }
+
+  const stopText = 'Tool loop exceeded, stopping.'
+  fullContent += stopText
+  parts.push({ type: 'text', text: stopText })
+  if (!webContents.isDestroyed()) {
+    webContents.send('ava:llm:chunk', { streamId: args.streamId, text: stopText })
+  }
+  return {
+    fullContent,
+    parts,
+    model,
+    toolCallsIssued,
+    loopRounds: MAX_TOOL_LOOP,
+    detectedToolFormat,
+  }
 }
 
 export async function streamChat(
@@ -330,7 +789,7 @@ export async function streamChat(
   }
 
   const controller = new AbortController()
-  activeStreams.set(args.streamId, controller)
+  activeStreams.set(args.streamId, { controller, aborted: false })
 
   const attempts: LlmAttempt[] = []
 
@@ -338,25 +797,16 @@ export async function streamChat(
     for (const provider of args.providers) {
       const model = provider.defaultModel
       try {
-        const onChunk = (text: string) => {
-          if (!webContents.isDestroyed()) {
-            webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
-          }
-        }
-        const { fullContent } = await streamFromProvider(provider, args, controller, onChunk)
+        const result = await runToolLoop(webContents, provider, args, controller)
         attempts.push({ providerId: provider.id, providerName: provider.name, model, ok: true })
-
         return {
-          fullContent,
+          ...result,
           provider,
-          model,
           attempts,
           fallbackUsed: attempts.length > 1,
         }
       } catch (err) {
-        if (controller.signal.aborted) {
-          throw new Error('aborted')
-        }
+        if (controller.signal.aborted) throw new Error('aborted')
         attempts.push({
           providerId: provider.id,
           providerName: provider.name,
@@ -364,7 +814,6 @@ export async function streamChat(
           ok: false,
           error: err instanceof Error ? err.message : String(err),
         })
-        // notify renderer about fallback attempt failure
         if (!webContents.isDestroyed()) {
           webContents.send('ava:llm:attempt', { streamId: args.streamId, attempts: [...attempts] })
         }
@@ -379,9 +828,11 @@ export async function streamChat(
 }
 
 export function abortStream(streamId: string): boolean {
-  const controller = activeStreams.get(streamId)
-  if (!controller) return false
-  controller.abort()
+  const active = activeStreams.get(streamId)
+  if (!active) return false
+  active.aborted = true
+  active.controller.abort()
+  mcpSupervisor.abortAllCalls()
   activeStreams.delete(streamId)
   return true
 }

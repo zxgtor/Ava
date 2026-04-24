@@ -16,6 +16,7 @@
     "@ava/mcp": "*",
     "@electron-toolkit/utils": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.1.14",
     "lucide-react": "^0.460.0",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",

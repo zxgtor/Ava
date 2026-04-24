@@ -14,8 +14,9 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 
 // ── Type mirror (kept minimal — renderer has its own types.ts) ──────
 interface LlmMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  toolCallId?: string
 }
 
 interface ModelProvider {
@@ -43,16 +44,34 @@ interface StreamChatArgs {
   messages: LlmMessage[]
   providers: ModelProvider[]
   temperature?: number
+  toolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
 }
 
 interface StreamChatOk {
   ok: true
   result: {
     fullContent: string
+    parts: Array<
+      | { type: 'text'; text: string }
+      | {
+          type: 'tool_call'
+          id: string
+          name: string
+          args: Record<string, unknown>
+          status: 'pending' | 'running' | 'ok' | 'error' | 'aborted'
+          result?: unknown
+          error?: string
+          startedAt?: number
+          endedAt?: number
+        }
+    >
     provider: ModelProvider
     model: string
     attempts: LlmAttempt[]
     fallbackUsed: boolean
+    toolCallsIssued: number
+    loopRounds: number
+    detectedToolFormat: 'openai' | 'hermes' | 'none'
   }
 }
 
@@ -71,6 +90,39 @@ interface ChunkPayload {
 interface AttemptPayload {
   streamId: string
   attempts: LlmAttempt[]
+}
+
+interface PartPayload {
+  streamId: string
+  partIndex: number
+  part: StreamChatOk['result']['parts'][number]
+}
+
+interface PartUpdatePayload {
+  streamId: string
+  partIndex: number
+  partId?: string
+  patch: Record<string, unknown>
+}
+
+interface McpToolDescriptor {
+  rawName: string
+  name: string
+  description?: string
+  inputSchema?: unknown
+}
+
+interface McpServerRuntime {
+  id: string
+  name: string
+  enabled: boolean
+  allowedDirs?: string[]
+  builtin?: boolean
+  status: 'stopped' | 'starting' | 'running' | 'error'
+  pid?: number
+  tools?: McpToolDescriptor[]
+  lastError?: string
+  startedAt?: number
 }
 
 // ── Event subscriptions (cleanup-aware) ─────────────────────────────
@@ -107,6 +159,18 @@ const ava = {
     > => ipcRenderer.invoke('ava:llm:probe', args),
     onChunk: (handler: (payload: ChunkPayload) => void) => on<ChunkPayload>('ava:llm:chunk', handler),
     onAttempt: (handler: (payload: AttemptPayload) => void) => on<AttemptPayload>('ava:llm:attempt', handler),
+    onPart: (handler: (payload: PartPayload) => void) => on<PartPayload>('ava:llm:part', handler),
+    onPartUpdate: (handler: (payload: PartUpdatePayload) => void) => on<PartUpdatePayload>('ava:llm:partUpdate', handler),
+  },
+
+  mcp: {
+    listServers: (): Promise<McpServerRuntime[]> => ipcRenderer.invoke('ava:mcp:listServers'),
+    restart: (serverId: string): Promise<boolean> => ipcRenderer.invoke('ava:mcp:restart', serverId),
+    onStatus: (handler: (payload: McpServerRuntime) => void) => on<McpServerRuntime>('ava:mcp:status', handler),
+  },
+
+  dialog: {
+    pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('ava:dialog:pickDirectory'),
   },
 }
 

@@ -1,4 +1,4 @@
-import type { ModelProvider, Settings } from '../../types'
+import type { McpServerConfig, ModelProvider, Settings } from '../../types'
 
 export const DEFAULT_MODEL_CHAIN = ['lmstudio', 'openai']
 
@@ -193,14 +193,86 @@ export function modelsEndpoint(baseUrl: string): string {
   return `${trimmed}/v1/models`
 }
 
+// ── MCP server defaults ─────────────────────────────────────────────
+
+/**
+ * Built-in filesystem MCP server. Uses the officially-installed npm package
+ * (@modelcontextprotocol/server-filesystem, declared as a dep of @ava/shell)
+ * resolved via `npx -p <pkg> mcp-server-filesystem`, so no network fetch is
+ * required at launch. Allowed directories are appended to args at spawn time
+ * by the supervisor.
+ *
+ * Disabled by default so the user is forced to configure at least one
+ * allowed directory before the server is launched.
+ */
+export const DEFAULT_MCP_SERVERS: McpServerConfig[] = [
+  {
+    id: 'filesystem',
+    name: 'Filesystem',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem'],
+    enabled: false,
+    allowedDirs: [],
+    builtin: true,
+  },
+]
+
 export function defaultSettings(): Settings {
   return {
-    version: 1,
+    version: 2,
     modelProviders: mergeModelProviders(),
     primaryModelChain: [...DEFAULT_MODEL_CHAIN],
     persona: {
       userName: 'Jason',
       assistantName: 'Ava',
     },
+    mcpServers: DEFAULT_MCP_SERVERS.map(s => ({ ...s, args: [...s.args], allowedDirs: [...(s.allowedDirs ?? [])] })),
+    modelToolFormatMap: {},
   }
+}
+
+/**
+ * Merge user-saved mcpServers with defaults.
+ * - Built-in entries are always present (identified by id).
+ * - Built-in command/args/builtin flags cannot be overridden; only
+ *   enabled/allowedDirs/env are preserved from user overrides.
+ * - P2 only ships one built-in (filesystem). Custom (non-builtin) entries
+ *   are preserved as-is for forward compatibility with P3.
+ */
+export function mergeMcpServers(overrides?: McpServerConfig[] | null): McpServerConfig[] {
+  const byId = new Map<string, McpServerConfig>()
+
+  for (const def of DEFAULT_MCP_SERVERS) {
+    byId.set(def.id, { ...def, args: [...def.args], allowedDirs: [...(def.allowedDirs ?? [])] })
+  }
+
+  for (const raw of overrides ?? []) {
+    if (!raw?.id) continue
+    const existing = byId.get(raw.id)
+    if (existing?.builtin) {
+      byId.set(raw.id, {
+        ...existing,
+        enabled: Boolean(raw.enabled),
+        allowedDirs: Array.isArray(raw.allowedDirs)
+          ? raw.allowedDirs.map(d => String(d)).filter(d => d.trim().length > 0)
+          : [],
+        env: typeof raw.env === 'object' && raw.env ? { ...raw.env } : existing.env,
+      })
+    } else {
+      byId.set(raw.id, {
+        id: String(raw.id),
+        name: String(raw.name || raw.id),
+        command: String(raw.command || ''),
+        args: Array.isArray(raw.args) ? raw.args.map(String) : [],
+        env: typeof raw.env === 'object' && raw.env ? { ...raw.env } : undefined,
+        enabled: Boolean(raw.enabled),
+        allowedDirs: Array.isArray(raw.allowedDirs)
+          ? raw.allowedDirs.map(d => String(d)).filter(d => d.trim().length > 0)
+          : undefined,
+        builtin: false,
+      })
+    }
+  }
+
+  return Array.from(byId.values())
 }
