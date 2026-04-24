@@ -1,0 +1,20 @@
+{
+  "name": "ava",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Ava — Minimal Electron shell with a Cowork-compatible plugin runtime.",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "plugins/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@ava/shell",
+    "build": "npm run build --workspace=@ava/shell",
+    "start": "npm run start --workspace=@ava/shell",
+    "typecheck": "npm run typecheck --workspace=@ava/shell"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

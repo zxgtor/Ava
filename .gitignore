@@ -1,0 +1,33 @@
+# Node
+node_modules/
+dist/
+out/
+.vite/
+.eslintcache
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Env
+.env
+.env.local
+
+# User data (runtime, not source)
+user-plugins/*
+!user-plugins/.gitkeep
+!user-plugins/README.md
+
+# Reference copy of the old project — will be moved out once the migration is done.
+_reference/
+
+# Logs
+logs/
+*.log
+
+# Architecture scratchpad
+.tmp-*

@@ -1,0 +1,37 @@
+{
+  "name": "@ava/shell",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Ava desktop shell — chat UI + plugin host.",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ava/plugin-sdk": "*",
+    "@ava/mcp": "*",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "lucide-react": "^0.460.0",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0",
+    "rehype-highlight": "^7.0.1",
+    "highlight.js": "^11.11.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "electron": "^41.2.0",
+    "electron-vite": "^5.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
