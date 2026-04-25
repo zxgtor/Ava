@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P3.10 complete (plugin diagnostics, command UX, permissions, packaged paths)_
+_Last updated: 2026-04-25 · P4.4 complete (plugin install/update/uninstall and trust metadata)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -34,6 +34,10 @@ _Last updated: 2026-04-25 · P3.10 complete (plugin diagnostics, command UX, per
 - [x] **P3.8 插件能力详情**：Settings 里展示插件实际 MCP servers / skills / commands 列表和运行时 MCP 状态
 - [x] **P3.9 权限透明**：启用插件前展示将获得的能力，例如 MCP 进程、cwd、env、skills/commands 注入
 - [x] **P3.10 打包路径处理**：插件扫描支持 dev 项目目录，也支持 packaged app 的 resources/app/userData 路径
+- [x] **P4.1 本地安装源**：Settings 可从本地文件夹导入插件到 `user-plugins`
+- [x] **P4.2 Git/Zip 安装**：Settings 可从 zip 或 git URL 安装插件，安装前校验 manifest
+- [x] **P4.3 更新/卸载**：用户插件可卸载；git 安装的插件支持 `git pull --ff-only` 更新
+- [x] **P4.4 信任/安全策略**：插件记录来源 metadata，UI 展示 source/updateable，启用时展示权限确认
 
 ---
 
@@ -64,7 +68,7 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `preload.ts` | `contextBridge.exposeInMainWorld('ava', …)` 暴露 API |
 | `storage.ts` | `loadSettings/saveSettings/loadConversations/saveConversations`，原子写（`.tmp` → `rename`） |
 | `llm.ts` | Node 端 `streamChat`：按 providers 顺序 fetch SSE，失败降级。chunk 通过 `webContents.send('ava:llm:chunk', ...)` 推给 renderer。支持 abort |
-| `services/pluginManager.ts` | P3 插件发现：扫描 dev/packaged 插件目录，解析 manifest、skills、commands、`.mcp.json`，输出启用插件的 stdio MCP server、skill context、command 内容、warnings、permissions |
+| `services/pluginManager.ts` | P3/P4 插件管理：扫描 dev/packaged 插件目录，安装 folder/zip/git，卸载/更新，解析 manifest、skills、commands、`.mcp.json`，输出 stdio MCP server、skill context、command 内容、warnings、permissions/source |
 
 ### Renderer `apps/shell/src/`
 
@@ -193,16 +197,16 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ---
 
-## 下一步 — P4 / 后续
+## 下一步 — P5 / 后续
 
-**P3.10 已完成**：本地插件闭环已完成（发现、启用、MCP、skills、commands、诊断、权限、打包路径）。
+**P4.4 已完成**：本地插件闭环 + 安装闭环已完成（发现、启用、MCP、skills、commands、诊断、权限、打包路径、folder/zip/git 安装、更新、卸载）。
 
 后续优先项：
-- P4 插件市场 / 安装源：从本地目录、git repo、zip 导入插件
-- P4.1 插件更新/卸载：版本检测、禁用后清理状态
-- P4.2 插件信任策略：签名/来源标记/首次启用更严格确认
+- P5 命令系统正式化：把 plugin commands 从“插入文本”升级为可追踪命令执行记录
+- P5.1 参数表单：根据 command frontmatter/schema 生成参数 UI
+- P5.2 插件命令历史：命令运行历史、失败重试、收藏
 
-**推荐顺序**：**P4 插件安装源 → P4.1 更新/卸载 → P1.5 零散 UI**
+**推荐顺序**：**P5 命令系统正式化 → P5.1 参数表单 → P1.5 零散 UI**
 
 ---
 

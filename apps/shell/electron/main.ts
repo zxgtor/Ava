@@ -100,6 +100,46 @@ function registerIpc(): void {
   ipcMain.handle('ava:plugins:listCommands', async (_e, states: Record<string, PluginState> | undefined) =>
     pluginManager.commandsForStates(states ?? {}),
   )
+  ipcMain.handle('ava:plugins:installFolder', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          title: '选择插件目录',
+          properties: ['openDirectory'],
+        })
+      : await dialog.showOpenDialog({
+          title: '选择插件目录',
+          properties: ['openDirectory'],
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return pluginManager.installFromFolder(result.filePaths[0])
+  })
+  ipcMain.handle('ava:plugins:installZip', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          title: '选择插件 zip',
+          properties: ['openFile'],
+          filters: [{ name: 'Zip archives', extensions: ['zip'] }],
+        })
+      : await dialog.showOpenDialog({
+          title: '选择插件 zip',
+          properties: ['openFile'],
+          filters: [{ name: 'Zip archives', extensions: ['zip'] }],
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return pluginManager.installFromZip(result.filePaths[0])
+  })
+  ipcMain.handle('ava:plugins:installGit', async (_e, url: string) =>
+    pluginManager.installFromGit(url),
+  )
+  ipcMain.handle('ava:plugins:uninstall', async (_e, pluginId: string) => {
+    await pluginManager.uninstall(pluginId)
+    return true
+  })
+  ipcMain.handle('ava:plugins:update', async (_e, pluginId: string) =>
+    pluginManager.update(pluginId),
+  )
 
   // ── Dialog helpers ──────────────────────────
   ipcMain.handle('ava:dialog:pickDirectory', async () => {

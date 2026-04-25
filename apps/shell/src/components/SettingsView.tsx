@@ -221,6 +221,8 @@ function PluginsSection({ settings, update }: { settings: Settings; update: (p: 
   const [plugins, setPlugins] = useState<DiscoveredPlugin[]>([])
   const [runtime, setRuntime] = useState<Record<string, Awaited<ReturnType<typeof window.ava.mcp.listServers>>[number]>>({})
   const [loading, setLoading] = useState(false)
+  const [installing, setInstalling] = useState(false)
+  const [gitUrl, setGitUrl] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -270,6 +272,58 @@ function PluginsSection({ settings, update }: { settings: Settings; update: (p: 
     }))
   }
 
+  const install = async (kind: 'folder' | 'zip' | 'git') => {
+    setInstalling(true)
+    setError(null)
+    try {
+      if (kind === 'folder') await window.ava.plugins.installFolder()
+      else if (kind === 'zip') await window.ava.plugins.installZip()
+      else {
+        if (!gitUrl.trim()) return
+        await window.ava.plugins.installGit(gitUrl.trim())
+        setGitUrl('')
+      }
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  const uninstall = async (plugin: DiscoveredPlugin) => {
+    const ok = window.confirm(`卸载插件 "${plugin.manifest?.name ?? plugin.id}"？\n\n这会删除插件目录：\n${plugin.rootPath}`)
+    if (!ok) return
+    setInstalling(true)
+    setError(null)
+    try {
+      await window.ava.plugins.uninstall(plugin.id)
+      update(s => {
+        const nextStates = { ...s.pluginStates }
+        delete nextStates[plugin.id]
+        return { ...s, pluginStates: nextStates }
+      })
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  const updatePlugin = async (plugin: DiscoveredPlugin) => {
+    setInstalling(true)
+    setError(null)
+    try {
+      await window.ava.plugins.update(plugin.id)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setInstalling(false)
+    }
+  }
+
   return (
     <section>
       <div className="flex items-center justify-between mb-3">
@@ -288,6 +342,43 @@ function PluginsSection({ settings, update }: { settings: Settings; update: (p: 
         </button>
       </div>
 
+      <div className="mb-3 p-3 bg-surface border border-border-subtle rounded-lg space-y-2">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => install('folder')}
+            disabled={installing}
+            className="px-2.5 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Install folder
+          </button>
+          <button
+            type="button"
+            onClick={() => install('zip')}
+            disabled={installing}
+            className="px-2.5 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Install zip
+          </button>
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={gitUrl}
+            onChange={e => setGitUrl(e.target.value)}
+            placeholder="Git plugin URL..."
+            className="flex-1 px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
+          />
+          <button
+            type="button"
+            onClick={() => install('git')}
+            disabled={installing || !gitUrl.trim()}
+            className="px-2.5 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Install git
+          </button>
+        </div>
+      </div>
+
       {error && <div className="text-xs text-error mb-2">{error}</div>}
       {plugins.length === 0 ? (
         <div className="px-3 py-3 text-xs text-text-3 bg-surface border border-border-subtle rounded-lg">
@@ -301,6 +392,8 @@ function PluginsSection({ settings, update }: { settings: Settings; update: (p: 
               plugin={plugin}
               runtimeServers={Object.values(runtime).filter(server => server.pluginId === plugin.id)}
               onToggle={enabled => setPluginEnabled(plugin.id, enabled)}
+              onUninstall={() => uninstall(plugin)}
+              onUpdate={() => updatePlugin(plugin)}
             />
           ))}
         </div>
@@ -313,10 +406,14 @@ function PluginRow({
   plugin,
   runtimeServers,
   onToggle,
+  onUninstall,
+  onUpdate,
 }: {
   plugin: DiscoveredPlugin
   runtimeServers: Awaited<ReturnType<typeof window.ava.mcp.listServers>>
   onToggle: (enabled: boolean) => void
+  onUninstall: () => void
+  onUpdate: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const title = plugin.manifest?.name ?? plugin.id
@@ -346,7 +443,7 @@ function PluginRow({
               </span>
             )}
             <span className="px-1.5 py-0.5 text-[10px] text-text-3 bg-surface-2 rounded">
-              {plugin.bundled ? 'bundled' : 'user'}
+              {plugin.source.kind}
             </span>
           </div>
           <div className="text-xs text-text-3 truncate">
@@ -368,6 +465,29 @@ function PluginRow({
             <div className="px-2 py-1.5 bg-surface-2 rounded text-text-2">Commands: {plugin.commandCount}</div>
           </div>
           <div className="text-xs text-text-3 break-all">{plugin.rootPath}</div>
+          <div className="flex flex-wrap gap-2">
+            {plugin.source.uri && (
+              <span className="px-2 py-1 text-xs text-text-3 bg-surface-2 rounded-full break-all">
+                Source: {plugin.source.uri}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onUpdate}
+              disabled={!plugin.source.updateable}
+              className="px-2.5 py-1 text-xs text-text bg-surface-2 rounded-full cursor-pointer hover:bg-surface-3 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Update
+            </button>
+            <button
+              type="button"
+              onClick={onUninstall}
+              disabled={plugin.bundled}
+              className="px-2.5 py-1 text-xs text-error bg-error/10 rounded-full cursor-pointer hover:bg-error/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Uninstall
+            </button>
+          </div>
           <PluginDetailList
             title="Permissions"
             empty="没有声明额外权限"

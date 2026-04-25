@@ -106,6 +106,7 @@ export interface DiscoveredPlugin {
   enabled: boolean
   valid: boolean
   bundled: boolean
+  source: PluginSourceInfo
   mcpServerCount: number
   skillCount: number
   commandCount: number
@@ -115,6 +116,13 @@ export interface DiscoveredPlugin {
   permissions: string[]
   errors: string[]
   warnings: string[]
+}
+
+export interface PluginSourceInfo {
+  kind: 'bundled' | 'local' | 'git' | 'zip' | 'unknown'
+  uri?: string
+  installedAt?: number
+  updateable: boolean
 }
 
 export interface PluginMcpServerView {

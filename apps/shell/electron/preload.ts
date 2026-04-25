@@ -142,6 +142,7 @@ interface DiscoveredPlugin {
   enabled: boolean
   valid: boolean
   bundled: boolean
+  source: PluginSourceInfo
   mcpServerCount: number
   skillCount: number
   commandCount: number
@@ -151,6 +152,13 @@ interface DiscoveredPlugin {
   permissions: string[]
   errors: string[]
   warnings: string[]
+}
+
+interface PluginSourceInfo {
+  kind: 'bundled' | 'local' | 'git' | 'zip' | 'unknown'
+  uri?: string
+  installedAt?: number
+  updateable: boolean
 }
 
 interface PluginMcpServerView {
@@ -229,6 +237,16 @@ const ava = {
       ipcRenderer.invoke('ava:plugins:list', states),
     listCommands: (states: Record<string, PluginState>): Promise<PluginCommand[]> =>
       ipcRenderer.invoke('ava:plugins:listCommands', states),
+    installFolder: (): Promise<DiscoveredPlugin | null> =>
+      ipcRenderer.invoke('ava:plugins:installFolder'),
+    installZip: (): Promise<DiscoveredPlugin | null> =>
+      ipcRenderer.invoke('ava:plugins:installZip'),
+    installGit: (url: string): Promise<DiscoveredPlugin> =>
+      ipcRenderer.invoke('ava:plugins:installGit', url),
+    uninstall: (pluginId: string): Promise<boolean> =>
+      ipcRenderer.invoke('ava:plugins:uninstall', pluginId),
+    update: (pluginId: string): Promise<DiscoveredPlugin> =>
+      ipcRenderer.invoke('ava:plugins:update', pluginId),
   },
 
   dialog: {

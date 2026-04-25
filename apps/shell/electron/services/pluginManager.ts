@@ -1,5 +1,7 @@
 import { existsSync } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { app } from 'electron'
 import type { PluginManifest } from '@ava/plugin-sdk'
@@ -22,6 +24,7 @@ export interface DiscoveredPlugin {
   enabled: boolean
   valid: boolean
   bundled: boolean
+  source: PluginSourceInfo
   mcpServerCount: number
   skillCount: number
   commandCount: number
@@ -31,6 +34,15 @@ export interface DiscoveredPlugin {
   permissions: string[]
   errors: string[]
   warnings: string[]
+}
+
+export type PluginSourceKind = 'bundled' | 'local' | 'git' | 'zip' | 'unknown'
+
+export interface PluginSourceInfo {
+  kind: PluginSourceKind
+  uri?: string
+  installedAt?: number
+  updateable: boolean
 }
 
 export interface PluginMcpServerView {
@@ -80,6 +92,7 @@ const MAX_SKILL_CHARS = 12_000
 const MAX_TOTAL_SKILL_CHARS = 48_000
 const MAX_COMMAND_CHARS = 8_000
 const MAX_TOTAL_COMMAND_CHARS = 32_000
+const SOURCE_META = '.ava-plugin-source.json'
 
 function findProjectRoot(): string {
   let dir = process.cwd()
@@ -124,6 +137,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
+function execFileAsync(command: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(command, args, { cwd, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${command} ${args.join(' ')} failed: ${stderr || error.message}`))
+        return
+      }
+      resolvePromise({ stdout: String(stdout), stderr: String(stderr) })
+    })
+  })
+}
+
 function isInside(parent: string, child: string): boolean {
   const root = resolve(parent)
   const target = resolve(child)
@@ -147,6 +172,57 @@ function manifestView(raw: unknown): { manifest?: PluginManifestView; errors: st
     },
     errors,
   }
+}
+
+function pluginIdForRoot(rootPath: string, bundled: boolean): string {
+  return `${bundled ? 'bundled' : 'user'}-${sanitizeId(basename(rootPath)) || 'plugin'}`
+}
+
+function userPluginsDir(): string {
+  return app.isPackaged
+    ? join(app.getPath('userData'), USER_DIR)
+    : join(findProjectRoot(), USER_DIR)
+}
+
+function installFolderName(raw: string): string {
+  return sanitizeId(raw) || `plugin-${Date.now()}`
+}
+
+async function readSourceInfo(rootPath: string, bundled: boolean): Promise<PluginSourceInfo> {
+  if (bundled) return { kind: 'bundled', updateable: false }
+  const metaPath = join(rootPath, SOURCE_META)
+  if (!existsSync(metaPath)) return { kind: 'unknown', updateable: false }
+  try {
+    const raw = await readJsonFile<Partial<PluginSourceInfo>>(metaPath)
+    const kind: PluginSourceKind =
+      raw.kind === 'local' || raw.kind === 'git' || raw.kind === 'zip' || raw.kind === 'unknown'
+        ? raw.kind
+        : 'unknown'
+    return {
+      kind,
+      uri: typeof raw.uri === 'string' ? raw.uri : undefined,
+      installedAt: typeof raw.installedAt === 'number' ? raw.installedAt : undefined,
+      updateable: kind === 'git',
+    }
+  } catch {
+    return { kind: 'unknown', updateable: false }
+  }
+}
+
+async function writeSourceInfo(rootPath: string, source: PluginSourceInfo): Promise<void> {
+  await writeFile(join(rootPath, SOURCE_META), JSON.stringify(source, null, 2), 'utf8')
+}
+
+async function findPluginRoot(rootPath: string): Promise<string | null> {
+  const direct = join(rootPath, PLUGIN_MANIFEST)
+  if (existsSync(direct)) return rootPath
+  const entries = await readdir(rootPath, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const candidate = join(rootPath, entry.name)
+    if (existsSync(join(candidate, PLUGIN_MANIFEST))) return candidate
+  }
+  return null
 }
 
 async function readJsonFile<T>(path: string): Promise<T> {
@@ -385,6 +461,79 @@ export class PluginManager {
     return commands
   }
 
+  async installFromFolder(sourcePath: string): Promise<DiscoveredPlugin> {
+    const root = await findPluginRoot(resolve(sourcePath))
+    if (!root) throw new Error('Selected folder is not a plugin: missing .claude-plugin/plugin.json')
+    const manifest = await readJsonFile<PluginManifest>(join(root, PLUGIN_MANIFEST))
+    const name = installFolderName(manifest.name || basename(root))
+    return this.installRoot(root, name, { kind: 'local', uri: root, installedAt: Date.now(), updateable: false })
+  }
+
+  async installFromZip(zipPath: string): Promise<DiscoveredPlugin> {
+    const temp = await mkdtemp(join(tmpdir(), 'ava-plugin-zip-'))
+    try {
+      await execFileAsync('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
+        resolve(zipPath),
+        temp,
+      ])
+      const root = await findPluginRoot(temp)
+      if (!root) throw new Error('Zip does not contain a plugin: missing .claude-plugin/plugin.json')
+      const manifest = await readJsonFile<PluginManifest>(join(root, PLUGIN_MANIFEST))
+      const name = installFolderName(manifest.name || basename(zipPath).replace(/\.zip$/i, ''))
+      return await this.installRoot(root, name, { kind: 'zip', uri: resolve(zipPath), installedAt: Date.now(), updateable: false })
+    } finally {
+      await rm(temp, { recursive: true, force: true }).catch(() => { /* noop */ })
+    }
+  }
+
+  async installFromGit(url: string): Promise<DiscoveredPlugin> {
+    const trimmed = url.trim()
+    if (!/^https?:\/\/|^git@|^ssh:\/\//i.test(trimmed)) throw new Error('Git URL must be http(s), ssh, or git@ format')
+    const temp = await mkdtemp(join(tmpdir(), 'ava-plugin-git-'))
+    try {
+      await execFileAsync('git', ['clone', '--depth', '1', trimmed, temp])
+      const root = await findPluginRoot(temp)
+      if (!root) throw new Error('Git repo does not contain a plugin: missing .claude-plugin/plugin.json')
+      const manifest = await readJsonFile<PluginManifest>(join(root, PLUGIN_MANIFEST))
+      const name = installFolderName(manifest.name || basename(trimmed).replace(/\.git$/i, ''))
+      const rootIsRepoRoot = resolve(root).toLowerCase() === resolve(temp).toLowerCase()
+      return await this.installRoot(
+        root,
+        name,
+        { kind: 'git', uri: trimmed, installedAt: Date.now(), updateable: rootIsRepoRoot },
+        { preserveGit: rootIsRepoRoot },
+      )
+    } finally {
+      await rm(temp, { recursive: true, force: true }).catch(() => { /* noop */ })
+    }
+  }
+
+  async uninstall(pluginId: string): Promise<void> {
+    const plugin = (await this.load({})).find(item => item.id === pluginId)
+    if (!plugin) throw new Error(`Plugin not found: ${pluginId}`)
+    if (plugin.bundled || !isInside(userPluginsDir(), plugin.rootPath)) {
+      throw new Error('Only user-installed plugins can be uninstalled')
+    }
+    await rm(plugin.rootPath, { recursive: true, force: true })
+  }
+
+  async update(pluginId: string): Promise<DiscoveredPlugin> {
+    const plugin = (await this.load({})).find(item => item.id === pluginId)
+    if (!plugin) throw new Error(`Plugin not found: ${pluginId}`)
+    if (plugin.source.kind !== 'git' || !plugin.source.uri) {
+      throw new Error('Only git-installed plugins can be updated')
+    }
+    await execFileAsync('git', ['pull', '--ff-only'], plugin.rootPath)
+    const updated = await this.loadOne(plugin.rootPath, false, {})
+    const { runtimeMcpServers: _runtimeMcpServers, ...view } = updated
+    return view
+  }
+
   private async load(states: Record<string, PluginState>): Promise<LoadedPlugin[]> {
     const plugins: LoadedPlugin[] = []
     for (const root of this.roots()) {
@@ -474,6 +623,7 @@ export class PluginManager {
       enabled,
       valid: Boolean(manifest) && errors.length === 0,
       bundled,
+      source: await readSourceInfo(rootPath, bundled),
       mcpServerCount,
       skillCount,
       commandCount,
@@ -485,6 +635,30 @@ export class PluginManager {
       warnings,
       runtimeMcpServers,
     }
+  }
+
+  private async installRoot(
+    sourceRoot: string,
+    requestedName: string,
+    source: PluginSourceInfo,
+    options: { preserveGit?: boolean } = {},
+  ): Promise<DiscoveredPlugin> {
+    const targetBase = userPluginsDir()
+    await mkdir(targetBase, { recursive: true })
+    let target = join(targetBase, requestedName)
+    let suffix = 2
+    while (existsSync(target)) {
+      target = join(targetBase, `${requestedName}-${suffix}`)
+      suffix += 1
+    }
+    await cp(sourceRoot, target, {
+      recursive: true,
+      filter: src => options.preserveGit || !src.split(/[\\/]/).includes('.git'),
+    })
+    await writeSourceInfo(target, source)
+    const loaded = await this.loadOne(target, false, {})
+    const { runtimeMcpServers: _runtimeMcpServers, ...view } = loaded
+    return view
   }
 }
 
