@@ -45,6 +45,7 @@ interface StreamChatArgs {
   providers: ModelProvider[]
   temperature?: number
   toolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
+  pluginStates?: Record<string, PluginState>
 }
 
 interface StreamChatOk {

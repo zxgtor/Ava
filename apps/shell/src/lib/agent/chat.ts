@@ -181,6 +181,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       providers,
       temperature: 0.4,
       toolFormatMap: options.settings.modelToolFormatMap,
+      pluginStates: options.settings.pluginStates,
     })
 
     if (!reply.ok) {

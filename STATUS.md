@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P3.1/P3.2/P3.3 complete (plugin discovery + plugin MCP enable/disable)_
+_Last updated: 2026-04-25 · P3.4 complete (enabled plugin skills injected into agent context)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -27,6 +27,7 @@ _Last updated: 2026-04-25 · P3.1/P3.2/P3.3 complete (plugin discovery + plugin 
 - [x] **P2.3 Active task context filtering**：发送给 LLM 时过滤旧失败 tool 调用，旧 tool role 不再原样进入后续请求
 - [x] **P3 插件发现 / 启用**：扫描 `plugins/` + `user-plugins/`，读取 `.claude-plugin/plugin.json` + `.mcp.json`
 - [x] **插件 MCP server 接入**：启用插件后，其 stdio MCP server 会合并进现有 MCP supervisor；Settings 里可刷新/启用/禁用插件
+- [x] **P3.4 插件 skills 注入**：启用插件后，`skills/*/SKILL.md` 会在每次聊天时注入 agent system context（带单个/总量上限）
 
 ---
 
@@ -57,7 +58,7 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `preload.ts` | `contextBridge.exposeInMainWorld('ava', …)` 暴露 API |
 | `storage.ts` | `loadSettings/saveSettings/loadConversations/saveConversations`，原子写（`.tmp` → `rename`） |
 | `llm.ts` | Node 端 `streamChat`：按 providers 顺序 fetch SSE，失败降级。chunk 通过 `webContents.send('ava:llm:chunk', ...)` 推给 renderer。支持 abort |
-| `services/pluginManager.ts` | P3 插件发现：扫描 `plugins/` / `user-plugins/`，解析 manifest、skills、commands、`.mcp.json`，输出启用插件的 stdio MCP server |
+| `services/pluginManager.ts` | P3 插件发现：扫描 `plugins/` / `user-plugins/`，解析 manifest、skills、commands、`.mcp.json`，输出启用插件的 stdio MCP server 和 skill context |
 
 ### Renderer `apps/shell/src/`
 
@@ -162,7 +163,7 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 5. **Git 仓库初始化当前在 Windows 完成**（沙箱 `rm -rf .git` 权限拒绝过，不要在沙箱重置 `.git/`）
 6. **P3 只接入插件内 stdio MCP server**
    - `.mcp.json` 里的 `http` / `sse` MCP server 会显示为 invalid error，暂不启动
-   - skills / commands 目前只统计和展示，尚未注入 prompt 或命令面板
+   - skills 已注入 prompt；commands 目前只统计和展示，尚未进入命令面板
 7. **Task boundary 不是完整 planner**
    - 已防止典型“旧 D: 请求失败后又自动续跑”的问题
    - 当前路径防护主要覆盖 Windows 路径/scope；更复杂的语义级任务隔离需要后续 task id / compaction
@@ -188,14 +189,13 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ## 下一步 — P3 / 后续
 
-**P3.1/P3.2/P3.3 已完成**：插件发现 + 插件 enable/disable + 插件 stdio MCP server 接入现有 supervisor。
+**P3.4 已完成**：插件发现 + 插件 enable/disable + 插件 stdio MCP server 接入 + 启用插件的 `SKILL.md` 注入 agent context。
 
 后续优先项：
-- P3.4 插件 skills 注入：把启用插件的 `skills/*/SKILL.md` 纳入 agent 可用上下文
 - P3.5 插件 commands：读取 `commands/*.md`，提供命令选择/执行入口
 - P3.6 插件校验增强：更清楚地区分 manifest 错误、MCP server 错误、运行时启动错误
 
-**推荐顺序**：**P3.4 skills 注入 → P3.5 commands → P1.5 零散 UI → P4 市场**
+**推荐顺序**：**P3.5 commands → P3.6 插件校验增强 → P1.5 零散 UI → P4 市场**
 
 ---
 

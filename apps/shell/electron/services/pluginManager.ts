@@ -27,6 +27,15 @@ export interface DiscoveredPlugin {
   errors: string[]
 }
 
+export interface PluginSkill {
+  pluginId: string
+  pluginName: string
+  name: string
+  sourcePath: string
+  content: string
+  truncated: boolean
+}
+
 interface LoadedPlugin extends DiscoveredPlugin {
   mcpServers: McpServerConfig[]
 }
@@ -34,6 +43,8 @@ interface LoadedPlugin extends DiscoveredPlugin {
 const PLUGIN_MANIFEST = join('.claude-plugin', 'plugin.json')
 const BUNDLED_DIR = 'plugins'
 const USER_DIR = 'user-plugins'
+const MAX_SKILL_CHARS = 12_000
+const MAX_TOTAL_SKILL_CHARS = 48_000
 
 function findProjectRoot(): string {
   let dir = process.cwd()
@@ -89,6 +100,36 @@ async function countSkillDirs(rootPath: string, manifest?: PluginManifest): Prom
     if (entry.isDirectory() && existsSync(join(skillsDir, entry.name, 'SKILL.md'))) count += 1
   }
   return count
+}
+
+async function discoverSkillPaths(rootPath: string, manifest?: PluginManifest): Promise<Array<{ name: string; path: string }>> {
+  const skillsRoot = resolve(rootPath, 'skills')
+  if (Array.isArray(manifest?.skills) && manifest.skills.length > 0) {
+    return manifest.skills
+      .map(raw => String(raw).trim())
+      .filter(Boolean)
+      .flatMap(name => {
+        const path = resolve(skillsRoot, name, 'SKILL.md')
+        return path.startsWith(`${skillsRoot}\\`) || path.startsWith(`${skillsRoot}/`)
+          ? [{ name, path }]
+          : []
+      })
+  }
+
+  if (!existsSync(skillsRoot)) return []
+  const entries = await readdir(skillsRoot, { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter(entry => entry.isDirectory() && existsSync(join(skillsRoot, entry.name, 'SKILL.md')))
+    .map(entry => ({ name: entry.name, path: join(skillsRoot, entry.name, 'SKILL.md') }))
+}
+
+async function readSkill(path: string): Promise<{ content: string; truncated: boolean }> {
+  const raw = await readFile(path, 'utf8')
+  if (raw.length <= MAX_SKILL_CHARS) return { content: raw, truncated: false }
+  return {
+    content: raw.slice(0, MAX_SKILL_CHARS),
+    truncated: true,
+  }
 }
 
 async function countCommandFiles(rootPath: string, manifest?: PluginManifest): Promise<number> {
@@ -167,6 +208,34 @@ export class PluginManager {
   async mcpServersForStates(states: Record<string, PluginState> = {}): Promise<McpServerConfig[]> {
     const loaded = await this.load(states)
     return loaded.flatMap(plugin => plugin.enabled && plugin.valid ? plugin.mcpServers : [])
+  }
+
+  async skillsForStates(states: Record<string, PluginState> = {}): Promise<PluginSkill[]> {
+    const loaded = await this.load(states)
+    const skills: PluginSkill[] = []
+    let totalChars = 0
+    for (const plugin of loaded) {
+      if (!plugin.enabled || !plugin.valid) continue
+      const manifest = await readJsonFile<PluginManifest>(join(plugin.rootPath, PLUGIN_MANIFEST)).catch(() => undefined)
+      const paths = await discoverSkillPaths(plugin.rootPath, manifest)
+      for (const skill of paths) {
+        if (!existsSync(skill.path) || totalChars >= MAX_TOTAL_SKILL_CHARS) continue
+        const read = await readSkill(skill.path).catch(() => null)
+        if (!read) continue
+        const remaining = MAX_TOTAL_SKILL_CHARS - totalChars
+        const content = read.content.length > remaining ? read.content.slice(0, remaining) : read.content
+        totalChars += content.length
+        skills.push({
+          pluginId: plugin.id,
+          pluginName: plugin.manifest?.name ?? plugin.id,
+          name: skill.name,
+          sourcePath: skill.path,
+          content,
+          truncated: read.truncated || content.length < read.content.length,
+        })
+      }
+    }
+    return skills
   }
 
   private async load(states: Record<string, PluginState>): Promise<LoadedPlugin[]> {

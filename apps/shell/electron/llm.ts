@@ -6,6 +6,7 @@
 
 import { WebContents } from 'electron'
 import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
+import { pluginManager, type PluginSkill, type PluginState } from './services/pluginManager'
 
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -55,6 +56,7 @@ export interface StreamChatArgs {
   providers: ModelProvider[]
   temperature?: number
   toolFormatMap?: Record<string, ToolCallFormat>
+  pluginStates?: Record<string, PluginState>
 }
 
 export interface StreamChatResult {
@@ -236,6 +238,29 @@ function toOpenAiMessages(messages: LlmMessage[]) {
 function injectHermesToolPrompt(messages: LlmMessage[], tools: McpToolDescriptor[]): LlmMessage[] {
   if (tools.length === 0) return messages
   const prompt = buildToolPrompt(tools)
+  if (messages[0]?.role === 'system') {
+    return [{ ...messages[0], content: `${messages[0].content}\n\n${prompt}` }, ...messages.slice(1)]
+  }
+  return [{ role: 'system', content: prompt }, ...messages]
+}
+
+function buildSkillsPrompt(skills: PluginSkill[]): string {
+  if (skills.length === 0) return ''
+  const blocks = skills.map(skill => [
+    `--- Skill: ${skill.pluginName} / ${skill.name}`,
+    `Source: ${skill.sourcePath}${skill.truncated ? ' (truncated)' : ''}`,
+    skill.content.trim(),
+  ].join('\n'))
+  return [
+    'Enabled plugin skills:',
+    'Use these instructions when they are relevant to the current task. They do not replace the latest user request or task boundary rules.',
+    ...blocks,
+  ].join('\n\n')
+}
+
+function injectPluginSkills(messages: LlmMessage[], skills: PluginSkill[]): LlmMessage[] {
+  const prompt = buildSkillsPrompt(skills)
+  if (!prompt) return messages
   if (messages[0]?.role === 'system') {
     return [{ ...messages[0], content: `${messages[0].content}\n\n${prompt}` }, ...messages.slice(1)]
   }
@@ -794,10 +819,15 @@ export async function streamChat(
   const attempts: LlmAttempt[] = []
 
   try {
+    const pluginSkills = await pluginManager.skillsForStates(args.pluginStates ?? {})
+    const argsWithSkills: StreamChatArgs = {
+      ...args,
+      messages: injectPluginSkills(args.messages, pluginSkills),
+    }
     for (const provider of args.providers) {
       const model = provider.defaultModel
       try {
-        const result = await runToolLoop(webContents, provider, args, controller)
+        const result = await runToolLoop(webContents, provider, argsWithSkills, controller)
         attempts.push({ providerId: provider.id, providerName: provider.name, model, ok: true })
         return {
           ...result,
