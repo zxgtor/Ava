@@ -97,6 +97,9 @@ function registerIpc(): void {
   ipcMain.handle('ava:plugins:list', async (_e, states: Record<string, PluginState> | undefined) =>
     pluginManager.discover(states ?? {}),
   )
+  ipcMain.handle('ava:plugins:listCommands', async (_e, states: Record<string, PluginState> | undefined) =>
+    pluginManager.commandsForStates(states ?? {}),
+  )
 
   // ── Dialog helpers ──────────────────────────
   ipcMain.handle('ava:dialog:pickDirectory', async () => {

@@ -145,7 +145,39 @@ interface DiscoveredPlugin {
   mcpServerCount: number
   skillCount: number
   commandCount: number
+  mcpServers: PluginMcpServerView[]
+  skills: PluginCapabilityView[]
+  commands: PluginCapabilityView[]
+  permissions: string[]
   errors: string[]
+  warnings: string[]
+}
+
+interface PluginMcpServerView {
+  id?: string
+  name: string
+  type: 'stdio' | 'http' | 'sse' | 'unknown'
+  status: 'loaded' | 'unsupported' | 'invalid'
+  command?: string
+  args?: string[]
+  cwd?: string
+  error?: string
+}
+
+interface PluginCapabilityView {
+  name: string
+  sourcePath: string
+  status: 'loaded' | 'missing' | 'invalid'
+  error?: string
+}
+
+interface PluginCommand {
+  pluginId: string
+  pluginName: string
+  name: string
+  sourcePath: string
+  content: string
+  truncated: boolean
 }
 
 // ── Event subscriptions (cleanup-aware) ─────────────────────────────
@@ -195,6 +227,8 @@ const ava = {
   plugins: {
     list: (states: Record<string, PluginState>): Promise<DiscoveredPlugin[]> =>
       ipcRenderer.invoke('ava:plugins:list', states),
+    listCommands: (states: Record<string, PluginState>): Promise<PluginCommand[]> =>
+      ipcRenderer.invoke('ava:plugins:listCommands', states),
   },
 
   dialog: {

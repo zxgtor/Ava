@@ -109,7 +109,39 @@ export interface DiscoveredPlugin {
   mcpServerCount: number
   skillCount: number
   commandCount: number
+  mcpServers: PluginMcpServerView[]
+  skills: PluginCapabilityView[]
+  commands: PluginCapabilityView[]
+  permissions: string[]
   errors: string[]
+  warnings: string[]
+}
+
+export interface PluginMcpServerView {
+  id?: string
+  name: string
+  type: 'stdio' | 'http' | 'sse' | 'unknown'
+  status: 'loaded' | 'unsupported' | 'invalid'
+  command?: string
+  args?: string[]
+  cwd?: string
+  error?: string
+}
+
+export interface PluginCapabilityView {
+  name: string
+  sourcePath: string
+  status: 'loaded' | 'missing' | 'invalid'
+  error?: string
+}
+
+export interface PluginCommand {
+  pluginId: string
+  pluginName: string
+  name: string
+  sourcePath: string
+  content: string
+  truncated: boolean
 }
 
 // ── Settings ────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P3.4 complete (enabled plugin skills injected into agent context)_
+_Last updated: 2026-04-25 · P3.10 complete (plugin diagnostics, command UX, permissions, packaged paths)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -28,6 +28,12 @@ _Last updated: 2026-04-25 · P3.4 complete (enabled plugin skills injected into 
 - [x] **P3 插件发现 / 启用**：扫描 `plugins/` + `user-plugins/`，读取 `.claude-plugin/plugin.json` + `.mcp.json`
 - [x] **插件 MCP server 接入**：启用插件后，其 stdio MCP server 会合并进现有 MCP supervisor；Settings 里可刷新/启用/禁用插件
 - [x] **P3.4 插件 skills 注入**：启用插件后，`skills/*/SKILL.md` 会在每次聊天时注入 agent system context（带单个/总量上限）
+- [x] **P3.5 插件 commands**：启用插件后，`commands/*.md` 可从输入框 `/` 命令菜单插入并发送
+- [x] **P3.6 插件校验增强**：manifest fatal errors 和 MCP/skill/command warnings 分离；unsupported MCP 不再让整个插件 invalid
+- [x] **P3.7 命令体验增强**：输入 `/` 打开命令菜单；支持搜索、最近使用优先、参数占位符提示
+- [x] **P3.8 插件能力详情**：Settings 里展示插件实际 MCP servers / skills / commands 列表和运行时 MCP 状态
+- [x] **P3.9 权限透明**：启用插件前展示将获得的能力，例如 MCP 进程、cwd、env、skills/commands 注入
+- [x] **P3.10 打包路径处理**：插件扫描支持 dev 项目目录，也支持 packaged app 的 resources/app/userData 路径
 
 ---
 
@@ -58,7 +64,7 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `preload.ts` | `contextBridge.exposeInMainWorld('ava', …)` 暴露 API |
 | `storage.ts` | `loadSettings/saveSettings/loadConversations/saveConversations`，原子写（`.tmp` → `rename`） |
 | `llm.ts` | Node 端 `streamChat`：按 providers 顺序 fetch SSE，失败降级。chunk 通过 `webContents.send('ava:llm:chunk', ...)` 推给 renderer。支持 abort |
-| `services/pluginManager.ts` | P3 插件发现：扫描 `plugins/` / `user-plugins/`，解析 manifest、skills、commands、`.mcp.json`，输出启用插件的 stdio MCP server 和 skill context |
+| `services/pluginManager.ts` | P3 插件发现：扫描 dev/packaged 插件目录，解析 manifest、skills、commands、`.mcp.json`，输出启用插件的 stdio MCP server、skill context、command 内容、warnings、permissions |
 
 ### Renderer `apps/shell/src/`
 
@@ -162,8 +168,8 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
    - 用户在自己的 Windows 终端跑这些命令就没事
 5. **Git 仓库初始化当前在 Windows 完成**（沙箱 `rm -rf .git` 权限拒绝过，不要在沙箱重置 `.git/`）
 6. **P3 只接入插件内 stdio MCP server**
-   - `.mcp.json` 里的 `http` / `sse` MCP server 会显示为 invalid error，暂不启动
-   - skills 已注入 prompt；commands 目前只统计和展示，尚未进入命令面板
+   - `.mcp.json` 里的 `http` / `sse` MCP server 会显示为 unsupported warning，暂不启动
+   - skills 已注入 prompt；commands 已能从输入框菜单插入
 7. **Task boundary 不是完整 planner**
    - 已防止典型“旧 D: 请求失败后又自动续跑”的问题
    - 当前路径防护主要覆盖 Windows 路径/scope；更复杂的语义级任务隔离需要后续 task id / compaction
@@ -187,15 +193,16 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ---
 
-## 下一步 — P3 / 后续
+## 下一步 — P4 / 后续
 
-**P3.4 已完成**：插件发现 + 插件 enable/disable + 插件 stdio MCP server 接入 + 启用插件的 `SKILL.md` 注入 agent context。
+**P3.10 已完成**：本地插件闭环已完成（发现、启用、MCP、skills、commands、诊断、权限、打包路径）。
 
 后续优先项：
-- P3.5 插件 commands：读取 `commands/*.md`，提供命令选择/执行入口
-- P3.6 插件校验增强：更清楚地区分 manifest 错误、MCP server 错误、运行时启动错误
+- P4 插件市场 / 安装源：从本地目录、git repo、zip 导入插件
+- P4.1 插件更新/卸载：版本检测、禁用后清理状态
+- P4.2 插件信任策略：签名/来源标记/首次启用更严格确认
 
-**推荐顺序**：**P3.5 commands → P3.6 插件校验增强 → P1.5 零散 UI → P4 市场**
+**推荐顺序**：**P4 插件安装源 → P4.1 更新/卸载 → P1.5 零散 UI**
 
 ---
 

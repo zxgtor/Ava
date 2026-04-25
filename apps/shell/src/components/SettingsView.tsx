@@ -219,6 +219,7 @@ function McpSection({ settings, update }: { settings: Settings; update: (p: (s: 
 
 function PluginsSection({ settings, update }: { settings: Settings; update: (p: (s: Settings) => Settings) => void }) {
   const [plugins, setPlugins] = useState<DiscoveredPlugin[]>([])
+  const [runtime, setRuntime] = useState<Record<string, Awaited<ReturnType<typeof window.ava.mcp.listServers>>[number]>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -239,7 +240,27 @@ function PluginsSection({ settings, update }: { settings: Settings; update: (p: 
     refresh()
   }, [refresh])
 
+  useEffect(() => {
+    window.ava.mcp.listServers()
+      .then(list => setRuntime(Object.fromEntries(list.map(item => [item.id, item]))))
+      .catch(() => { /* noop */ })
+    const off = window.ava.mcp.onStatus(server => {
+      setRuntime(prev => ({ ...prev, [server.id]: server }))
+    })
+    return off
+  }, [])
+
   const setPluginEnabled = (pluginId: string, enabled: boolean) => {
+    const plugin = plugins.find(item => item.id === pluginId)
+    if (enabled && plugin?.permissions.length) {
+      const ok = window.confirm([
+        `启用插件 "${plugin.manifest?.name ?? plugin.id}"？`,
+        '',
+        '它会获得这些能力：',
+        ...plugin.permissions.map(item => `- ${item}`),
+      ].join('\n'))
+      if (!ok) return
+    }
     update(s => ({
       ...s,
       pluginStates: {
@@ -278,6 +299,7 @@ function PluginsSection({ settings, update }: { settings: Settings; update: (p: 
             <PluginRow
               key={plugin.id}
               plugin={plugin}
+              runtimeServers={Object.values(runtime).filter(server => server.pluginId === plugin.id)}
               onToggle={enabled => setPluginEnabled(plugin.id, enabled)}
             />
           ))}
@@ -289,9 +311,11 @@ function PluginsSection({ settings, update }: { settings: Settings; update: (p: 
 
 function PluginRow({
   plugin,
+  runtimeServers,
   onToggle,
 }: {
   plugin: DiscoveredPlugin
+  runtimeServers: Awaited<ReturnType<typeof window.ava.mcp.listServers>>
   onToggle: (enabled: boolean) => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -316,6 +340,11 @@ function PluginRow({
             <span className={`px-1.5 py-0.5 text-[10px] rounded ${plugin.valid ? 'text-success bg-success/10' : 'text-error bg-error/10'}`}>
               {plugin.valid ? 'valid' : 'invalid'}
             </span>
+            {plugin.warnings.length > 0 && (
+              <span className="px-1.5 py-0.5 text-[10px] text-warning bg-warning/10 rounded">
+                {plugin.warnings.length} warning
+              </span>
+            )}
             <span className="px-1.5 py-0.5 text-[10px] text-text-3 bg-surface-2 rounded">
               {plugin.bundled ? 'bundled' : 'user'}
             </span>
@@ -339,6 +368,44 @@ function PluginRow({
             <div className="px-2 py-1.5 bg-surface-2 rounded text-text-2">Commands: {plugin.commandCount}</div>
           </div>
           <div className="text-xs text-text-3 break-all">{plugin.rootPath}</div>
+          <PluginDetailList
+            title="Permissions"
+            empty="没有声明额外权限"
+            items={plugin.permissions.map(item => ({ key: item, label: item, tone: 'normal' as const }))}
+          />
+          <PluginDetailList
+            title="MCP Servers"
+            empty="没有 MCP server"
+            items={plugin.mcpServers.map(server => {
+              const runtime = server.id ? runtimeServers.find(item => item.id === server.id) : undefined
+              return {
+                key: server.name,
+                label: `${server.name} · ${server.type} · ${server.status}${runtime?.status ? ` · runtime ${runtime.status}` : ''}${server.command ? ` · ${server.command} ${(server.args ?? []).join(' ')}` : ''}`,
+                detail: runtime?.lastError ?? server.cwd ?? server.error,
+                tone: (server.status === 'loaded' && runtime?.status !== 'error') ? 'normal' as const : 'warning' as const,
+              }
+            })}
+          />
+          <PluginDetailList
+            title="Skills"
+            empty="没有 skills"
+            items={plugin.skills.map(skill => ({
+              key: skill.sourcePath,
+              label: `${skill.name} · ${skill.status}`,
+              detail: skill.sourcePath,
+              tone: skill.status === 'loaded' ? 'normal' as const : 'warning' as const,
+            }))}
+          />
+          <PluginDetailList
+            title="Commands"
+            empty="没有 commands"
+            items={plugin.commands.map(command => ({
+              key: command.sourcePath,
+              label: `${command.name} · ${command.status}`,
+              detail: command.sourcePath,
+              tone: command.status === 'loaded' ? 'normal' as const : 'warning' as const,
+            }))}
+          />
           {plugin.errors.length > 0 && (
             <div className="space-y-1">
               {plugin.errors.map(err => (
@@ -346,6 +413,41 @@ function PluginRow({
               ))}
             </div>
           )}
+          {plugin.warnings.length > 0 && (
+            <div className="space-y-1">
+              {plugin.warnings.map(warning => (
+                <div key={warning} className="text-xs text-warning">{warning}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PluginDetailList({
+  title,
+  empty,
+  items,
+}: {
+  title: string
+  empty: string
+  items: Array<{ key: string; label: string; detail?: string; tone: 'normal' | 'warning' }>
+}) {
+  return (
+    <div>
+      <div className="text-xs text-text-3 mb-1">{title}</div>
+      {items.length === 0 ? (
+        <div className="text-xs text-text-3">{empty}</div>
+      ) : (
+        <div className="space-y-1">
+          {items.map(item => (
+            <div key={item.key} className="px-2 py-1.5 text-xs bg-surface-2 rounded">
+              <div className={item.tone === 'warning' ? 'text-warning' : 'text-text-2'}>{item.label}</div>
+              {item.detail && <div className="text-text-3 break-all">{item.detail}</div>}
+            </div>
+          ))}
         </div>
       )}
     </div>

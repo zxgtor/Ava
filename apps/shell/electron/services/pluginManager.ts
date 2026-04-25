@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
+import { app } from 'electron'
 import type { PluginManifest } from '@ava/plugin-sdk'
 import type { McpServerConfig } from './mcpSupervisor'
 
@@ -24,7 +25,30 @@ export interface DiscoveredPlugin {
   mcpServerCount: number
   skillCount: number
   commandCount: number
+  mcpServers: PluginMcpServerView[]
+  skills: PluginCapabilityView[]
+  commands: PluginCapabilityView[]
+  permissions: string[]
   errors: string[]
+  warnings: string[]
+}
+
+export interface PluginMcpServerView {
+  id?: string
+  name: string
+  type: 'stdio' | 'http' | 'sse' | 'unknown'
+  status: 'loaded' | 'unsupported' | 'invalid'
+  command?: string
+  args?: string[]
+  cwd?: string
+  error?: string
+}
+
+export interface PluginCapabilityView {
+  name: string
+  sourcePath: string
+  status: 'loaded' | 'missing' | 'invalid'
+  error?: string
 }
 
 export interface PluginSkill {
@@ -36,8 +60,17 @@ export interface PluginSkill {
   truncated: boolean
 }
 
+export interface PluginCommand {
+  pluginId: string
+  pluginName: string
+  name: string
+  sourcePath: string
+  content: string
+  truncated: boolean
+}
+
 interface LoadedPlugin extends DiscoveredPlugin {
-  mcpServers: McpServerConfig[]
+  runtimeMcpServers: McpServerConfig[]
 }
 
 const PLUGIN_MANIFEST = join('.claude-plugin', 'plugin.json')
@@ -45,6 +78,8 @@ const BUNDLED_DIR = 'plugins'
 const USER_DIR = 'user-plugins'
 const MAX_SKILL_CHARS = 12_000
 const MAX_TOTAL_SKILL_CHARS = 48_000
+const MAX_COMMAND_CHARS = 8_000
+const MAX_TOTAL_COMMAND_CHARS = 32_000
 
 function findProjectRoot(): string {
   let dir = process.cwd()
@@ -54,6 +89,27 @@ function findProjectRoot(): string {
     if (parent === dir) return process.cwd()
     dir = parent
   }
+}
+
+function uniqueRoots(roots: Array<{ path: string; bundled: boolean }>): Array<{ path: string; bundled: boolean }> {
+  const seen = new Set<string>()
+  const out: Array<{ path: string; bundled: boolean }> = []
+  for (const root of roots) {
+    const key = resolve(root.path).toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ ...root, path: resolve(root.path) })
+  }
+  return out
+}
+
+function packagedRoots(): Array<{ path: string; bundled: boolean }> {
+  if (!app.isPackaged) return []
+  return [
+    { path: join(process.resourcesPath, BUNDLED_DIR), bundled: true },
+    { path: join(app.getAppPath(), BUNDLED_DIR), bundled: true },
+    { path: join(app.getPath('userData'), USER_DIR), bundled: false },
+  ]
 }
 
 function sanitizeId(raw: string): string {
@@ -66,6 +122,13 @@ function sanitizeId(raw: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isInside(parent: string, child: string): boolean {
+  const root = resolve(parent)
+  const target = resolve(child)
+  const prefix = root.endsWith('\\') || root.endsWith('/') ? root : `${root}\\`
+  return target === root || target.startsWith(prefix) || target.startsWith(prefix.replace(/\\/g, '/'))
 }
 
 function manifestView(raw: unknown): { manifest?: PluginManifestView; errors: string[] } {
@@ -140,6 +203,37 @@ async function countCommandFiles(rootPath: string, manifest?: PluginManifest): P
   return entries.filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.md')).length
 }
 
+async function discoverCommandPaths(rootPath: string, manifest?: PluginManifest): Promise<Array<{ name: string; path: string }>> {
+  const commandsRoot = resolve(rootPath, 'commands')
+  if (Array.isArray(manifest?.commands) && manifest.commands.length > 0) {
+    return manifest.commands
+      .map(raw => String(raw).trim())
+      .filter(Boolean)
+      .flatMap(name => {
+        const fileName = name.toLowerCase().endsWith('.md') ? name : `${name}.md`
+        const path = resolve(commandsRoot, fileName)
+        return path.startsWith(`${commandsRoot}\\`) || path.startsWith(`${commandsRoot}/`)
+          ? [{ name: fileName.replace(/\.md$/i, ''), path }]
+          : []
+      })
+  }
+
+  if (!existsSync(commandsRoot)) return []
+  const entries = await readdir(commandsRoot, { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
+    .map(entry => ({ name: entry.name.replace(/\.md$/i, ''), path: join(commandsRoot, entry.name) }))
+}
+
+async function readCommand(path: string): Promise<{ content: string; truncated: boolean }> {
+  const raw = await readFile(path, 'utf8')
+  if (raw.length <= MAX_COMMAND_CHARS) return { content: raw, truncated: false }
+  return {
+    content: raw.slice(0, MAX_COMMAND_CHARS),
+    truncated: true,
+  }
+}
+
 interface StdioSpecView {
   type?: unknown
   command: string
@@ -155,59 +249,84 @@ function isStdioServer(spec: unknown): spec is StdioSpecView {
 
 function parseMcpServers(pluginId: string, rootPath: string, manifestName: string, raw: unknown): {
   servers: McpServerConfig[]
+  views: PluginMcpServerView[]
   count: number
   errors: string[]
+  warnings: string[]
+  permissions: string[]
 } {
   const errors: string[] = []
+  const warnings: string[] = []
   const servers: McpServerConfig[] = []
+  const views: PluginMcpServerView[] = []
+  const permissions: string[] = []
   if (!isRecord(raw) || !isRecord(raw.mcpServers)) {
-    return { servers, count: 0, errors: ['.mcp.json missing object field: mcpServers'] }
+    return {
+      servers,
+      views,
+      count: 0,
+      errors,
+      warnings: ['.mcp.json missing object field: mcpServers'],
+      permissions,
+    }
   }
 
   const serverSpecs = raw.mcpServers
   for (const [name, spec] of Object.entries(serverSpecs)) {
     if (!isRecord(spec)) {
-      errors.push(`MCP server "${name}" must be an object`)
+      warnings.push(`MCP server "${name}" must be an object`)
+      views.push({ name, type: 'unknown', status: 'invalid', error: 'server spec must be an object' })
       continue
     }
     if (!isStdioServer(spec)) {
-      errors.push(`MCP server "${name}" is not stdio; only stdio is supported now`)
+      const type = spec.type === 'http' || spec.type === 'sse' ? spec.type : 'unknown'
+      warnings.push(`MCP server "${name}" is ${type}; only stdio is supported now`)
+      views.push({ name, type, status: 'unsupported', error: 'only stdio MCP servers are supported now' })
       continue
     }
     const serverId = `${pluginId}-${sanitizeId(name) || 'server'}`
+    const cwd = typeof spec.cwd === 'string' && spec.cwd.trim() ? resolve(rootPath, spec.cwd) : rootPath
+    const args = Array.isArray(spec.args) ? spec.args.map(String) : []
     servers.push({
       id: serverId,
       name: `${manifestName}: ${name}`,
       command: spec.command,
-      args: Array.isArray(spec.args) ? spec.args.map(String) : [],
+      args,
       env: isRecord(spec.env) ? Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, String(v)])) : undefined,
-      cwd: typeof spec.cwd === 'string' && spec.cwd.trim() ? resolve(rootPath, spec.cwd) : rootPath,
+      cwd,
       enabled: true,
       builtin: false,
       pluginId,
     })
+    views.push({ id: serverId, name, type: 'stdio', status: 'loaded', command: spec.command, args, cwd })
+    permissions.push(`Starts MCP process: ${spec.command}${args.length ? ` ${args.join(' ')}` : ''}`)
+    permissions.push(`MCP working directory: ${cwd}`)
+    if (isRecord(spec.env) && Object.keys(spec.env).length > 0) {
+      permissions.push(`Sets environment variables: ${Object.keys(spec.env).join(', ')}`)
+    }
   }
 
-  return { servers, count: Object.keys(serverSpecs).length, errors }
+  return { servers, views, count: Object.keys(serverSpecs).length, errors, warnings, permissions }
 }
 
 export class PluginManager {
   private roots(): Array<{ path: string; bundled: boolean }> {
     const cwd = findProjectRoot()
-    return [
+    return uniqueRoots([
       { path: join(cwd, BUNDLED_DIR), bundled: true },
       { path: join(cwd, USER_DIR), bundled: false },
-    ]
+      ...packagedRoots(),
+    ])
   }
 
   async discover(states: Record<string, PluginState> = {}): Promise<DiscoveredPlugin[]> {
     const loaded = await this.load(states)
-    return loaded.map(({ mcpServers: _mcpServers, ...view }) => view)
+    return loaded.map(({ runtimeMcpServers: _runtimeMcpServers, ...view }) => view)
   }
 
   async mcpServersForStates(states: Record<string, PluginState> = {}): Promise<McpServerConfig[]> {
     const loaded = await this.load(states)
-    return loaded.flatMap(plugin => plugin.enabled && plugin.valid ? plugin.mcpServers : [])
+    return loaded.flatMap(plugin => plugin.enabled && plugin.valid ? plugin.runtimeMcpServers : [])
   }
 
   async skillsForStates(states: Record<string, PluginState> = {}): Promise<PluginSkill[]> {
@@ -238,6 +357,34 @@ export class PluginManager {
     return skills
   }
 
+  async commandsForStates(states: Record<string, PluginState> = {}): Promise<PluginCommand[]> {
+    const loaded = await this.load(states)
+    const commands: PluginCommand[] = []
+    let totalChars = 0
+    for (const plugin of loaded) {
+      if (!plugin.enabled || !plugin.valid) continue
+      const manifest = await readJsonFile<PluginManifest>(join(plugin.rootPath, PLUGIN_MANIFEST)).catch(() => undefined)
+      const paths = await discoverCommandPaths(plugin.rootPath, manifest)
+      for (const command of paths) {
+        if (!existsSync(command.path) || totalChars >= MAX_TOTAL_COMMAND_CHARS) continue
+        const read = await readCommand(command.path).catch(() => null)
+        if (!read) continue
+        const remaining = MAX_TOTAL_COMMAND_CHARS - totalChars
+        const content = read.content.length > remaining ? read.content.slice(0, remaining) : read.content
+        totalChars += content.length
+        commands.push({
+          pluginId: plugin.id,
+          pluginName: plugin.manifest?.name ?? plugin.id,
+          name: command.name,
+          sourcePath: command.path,
+          content,
+          truncated: read.truncated || content.length < read.content.length,
+        })
+      }
+    }
+    return commands
+  }
+
   private async load(states: Record<string, PluginState>): Promise<LoadedPlugin[]> {
     const plugins: LoadedPlugin[] = []
     for (const root of this.roots()) {
@@ -256,6 +403,8 @@ export class PluginManager {
 
   private async loadOne(rootPath: string, bundled: boolean, states: Record<string, PluginState>): Promise<LoadedPlugin> {
     const errors: string[] = []
+    const warnings: string[] = []
+    const permissions: string[] = []
     let manifestRaw: PluginManifest | undefined
     let manifest: PluginManifestView | undefined
     try {
@@ -269,20 +418,52 @@ export class PluginManager {
 
     const id = `${bundled ? 'bundled' : 'user'}-${sanitizeId(basename(rootPath)) || 'plugin'}`
     const enabled = Boolean(states[id]?.enabled)
-    const skillCount = await countSkillDirs(rootPath, manifestRaw).catch(() => 0)
-    const commandCount = await countCommandFiles(rootPath, manifestRaw).catch(() => 0)
-    let mcpServers: McpServerConfig[] = []
+    const skillPaths = await discoverSkillPaths(rootPath, manifestRaw).catch(err => {
+      warnings.push(`failed to inspect skills: ${err instanceof Error ? err.message : String(err)}`)
+      return []
+    })
+    const commandPaths = await discoverCommandPaths(rootPath, manifestRaw).catch(err => {
+      warnings.push(`failed to inspect commands: ${err instanceof Error ? err.message : String(err)}`)
+      return []
+    })
+    if (Array.isArray(manifestRaw?.skills) && skillPaths.length < manifestRaw.skills.length) {
+      warnings.push('some declared skills were skipped because they are missing or outside skills/')
+    }
+    if (Array.isArray(manifestRaw?.commands) && commandPaths.length < manifestRaw.commands.length) {
+      warnings.push('some declared commands were skipped because they are missing or outside commands/')
+    }
+    const skills: PluginCapabilityView[] = skillPaths.map(skill => ({
+      name: skill.name,
+      sourcePath: skill.path,
+      status: existsSync(skill.path) && isInside(join(rootPath, 'skills'), skill.path) ? 'loaded' : 'missing',
+      ...(!existsSync(skill.path) ? { error: 'SKILL.md not found' } : {}),
+    }))
+    const commands: PluginCapabilityView[] = commandPaths.map(command => ({
+      name: command.name,
+      sourcePath: command.path,
+      status: existsSync(command.path) && isInside(join(rootPath, 'commands'), command.path) ? 'loaded' : 'missing',
+      ...(!existsSync(command.path) ? { error: 'command markdown not found' } : {}),
+    }))
+    const skillCount = skills.filter(item => item.status === 'loaded').length
+    const commandCount = commands.filter(item => item.status === 'loaded').length
+    if (skillCount > 0) permissions.push(`Injects ${skillCount} skill file(s) into agent context`)
+    if (commandCount > 0) permissions.push(`Exposes ${commandCount} command file(s) in chat input`)
+    let runtimeMcpServers: McpServerConfig[] = []
+    let mcpServerViews: PluginMcpServerView[] = []
     let mcpServerCount = 0
 
     const mcpPath = join(rootPath, '.mcp.json')
     if (existsSync(mcpPath)) {
       try {
         const parsed = parseMcpServers(id, rootPath, manifest?.name ?? id, await readJsonFile(mcpPath))
-        mcpServers = parsed.servers
+        runtimeMcpServers = parsed.servers
+        mcpServerViews = parsed.views
         mcpServerCount = parsed.count
         errors.push(...parsed.errors)
+        warnings.push(...parsed.warnings)
+        permissions.push(...parsed.permissions)
       } catch (err) {
-        errors.push(`failed to read .mcp.json: ${err instanceof Error ? err.message : String(err)}`)
+        warnings.push(`failed to read .mcp.json: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
 
@@ -296,8 +477,13 @@ export class PluginManager {
       mcpServerCount,
       skillCount,
       commandCount,
+      mcpServers: mcpServerViews,
+      skills,
+      commands,
+      permissions: Array.from(new Set(permissions)),
       errors,
-      mcpServers,
+      warnings,
+      runtimeMcpServers,
     }
   }
 }

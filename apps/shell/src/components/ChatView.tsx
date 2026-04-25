@@ -11,7 +11,7 @@ import {
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
-import type { Conversation } from '../types'
+import type { Conversation, PluginCommand } from '../types'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -32,6 +32,8 @@ export function ChatView() {
   const { state, dispatch, activeConversation, createConversation } = useStore()
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamId, setStreamId] = useState<string | null>(null)
+  const [commands, setCommands] = useState<PluginCommand[]>([])
+  const [commandsLoading, setCommandsLoading] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const hasProvider = useMemo(
@@ -41,6 +43,22 @@ export function ChatView() {
 
   const userInitial = (state.settings.persona.userName || 'U').slice(0, 1).toUpperCase()
   const assistantInitial = (state.settings.persona.assistantName || 'A').slice(0, 1).toUpperCase()
+
+  const refreshCommands = useCallback(async () => {
+    setCommandsLoading(true)
+    try {
+      const list = await window.ava.plugins.listCommands(state.settings.pluginStates)
+      setCommands(list)
+    } catch {
+      setCommands([])
+    } finally {
+      setCommandsLoading(false)
+    }
+  }, [state.settings.pluginStates])
+
+  useEffect(() => {
+    refreshCommands()
+  }, [refreshCommands])
 
   // Auto-scroll on new messages / streaming
   useEffect(() => {
@@ -301,6 +319,9 @@ export function ChatView() {
         isStreaming={isStreaming}
         disabled={!hasProvider}
         disabledReason="请先在设置中启用至少一个 LLM 供应商"
+        commands={commands}
+        commandsLoading={commandsLoading}
+        onRefreshCommands={refreshCommands}
       />
     </div>
   )
