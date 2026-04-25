@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import type {
+  CommandInvocation,
   ContentPart,
   Conversation,
   Message,
@@ -353,6 +354,31 @@ function sanitizeMessage(raw: unknown): Message | null {
     streaming: m.streaming ? true : undefined,
     error: typeof m.error === 'string' ? m.error : undefined,
     aborted: m.aborted ? true : undefined,
+    commandInvocation: sanitizeCommandInvocation(m.commandInvocation),
+  }
+}
+
+function sanitizeCommandInvocation(raw: unknown): CommandInvocation | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const src = raw as Partial<CommandInvocation> & Record<string, unknown>
+  if (
+    typeof src.pluginId !== 'string' ||
+    typeof src.pluginName !== 'string' ||
+    typeof src.commandName !== 'string' ||
+    typeof src.sourcePath !== 'string'
+  ) return undefined
+  const args: Record<string, string> = {}
+  if (src.arguments && typeof src.arguments === 'object') {
+    for (const [key, value] of Object.entries(src.arguments)) {
+      if (typeof value === 'string') args[key] = value
+    }
+  }
+  return {
+    pluginId: src.pluginId,
+    pluginName: src.pluginName,
+    commandName: src.commandName,
+    sourcePath: src.sourcePath,
+    arguments: args,
   }
 }
 

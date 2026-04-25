@@ -11,7 +11,7 @@ import {
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
-import type { Conversation, PluginCommand } from '../types'
+import type { CommandInvocation, Conversation, PluginCommand } from '../types'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -169,8 +169,8 @@ export function ChatView() {
   )
 
   const runSend = useCallback(
-    async (content: string, conversation: Conversation) => {
-      const userMsg = makeUserMessage(content)
+    async (content: string, conversation: Conversation, commandInvocation?: CommandInvocation) => {
+      const userMsg = makeUserMessage(content, commandInvocation)
       const placeholder = makeAssistantPlaceholder()
       const conversationId = conversation.id
 
@@ -193,9 +193,9 @@ export function ChatView() {
   )
 
   const handleSend = useCallback(
-    (content: string) => {
+    (content: string, commandInvocation?: CommandInvocation) => {
       const conversation = activeConversation ?? createConversation()
-      runSend(content, conversation)
+      runSend(content, conversation, commandInvocation)
     },
     [activeConversation, createConversation, runSend],
   )

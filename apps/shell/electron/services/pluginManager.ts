@@ -76,9 +76,18 @@ export interface PluginCommand {
   pluginId: string
   pluginName: string
   name: string
+  description?: string
+  arguments: PluginCommandArgument[]
   sourcePath: string
   content: string
   truncated: boolean
+}
+
+export interface PluginCommandArgument {
+  name: string
+  description?: string
+  required: boolean
+  defaultValue?: string
 }
 
 interface LoadedPlugin extends DiscoveredPlugin {
@@ -301,11 +310,78 @@ async function discoverCommandPaths(rootPath: string, manifest?: PluginManifest)
     .map(entry => ({ name: entry.name.replace(/\.md$/i, ''), path: join(commandsRoot, entry.name) }))
 }
 
-async function readCommand(path: string): Promise<{ content: string; truncated: boolean }> {
+function parseBoolean(raw: string | undefined): boolean {
+  return raw === 'true' || raw === 'yes' || raw === 'required'
+}
+
+function parseCommandFrontmatter(raw: string): {
+  body: string
+  description?: string
+  arguments: PluginCommandArgument[]
+} {
+  if (!raw.startsWith('---\n') && !raw.startsWith('---\r\n')) {
+    return { body: raw, arguments: inferArguments(raw) }
+  }
+  const end = raw.indexOf('\n---', 4)
+  if (end < 0) return { body: raw, arguments: inferArguments(raw) }
+  const fm = raw.slice(4, end).replace(/\r/g, '')
+  const body = raw.slice(raw.indexOf('\n', end + 1) + 1)
+  let description: string | undefined
+  const args: PluginCommandArgument[] = []
+  let current: PluginCommandArgument | null = null
+
+  for (const line of fm.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const top = trimmed.match(/^([A-Za-z0-9_-]+):\s*(.*)$/)
+    if (top && !line.startsWith(' ')) {
+      current = null
+      if (top[1] === 'description') description = top[2].replace(/^["']|["']$/g, '')
+      continue
+    }
+    const argStart = line.match(/^\s{2}([A-Za-z0-9_-]+):\s*(.*)$/)
+    if (argStart) {
+      current = {
+        name: argStart[1],
+        required: false,
+      }
+      args.push(current)
+      continue
+    }
+    const argProp = line.match(/^\s{4}([A-Za-z0-9_-]+):\s*(.*)$/)
+    if (argProp && current) {
+      const value = argProp[2].replace(/^["']|["']$/g, '')
+      if (argProp[1] === 'description') current.description = value
+      if (argProp[1] === 'required') current.required = parseBoolean(value)
+      if (argProp[1] === 'default') current.defaultValue = value
+    }
+  }
+
+  const merged = new Map<string, PluginCommandArgument>()
+  for (const arg of [...args, ...inferArguments(body)]) {
+    if (!merged.has(arg.name)) merged.set(arg.name, arg)
+  }
+  return { body, description, arguments: Array.from(merged.values()) }
+}
+
+function inferArguments(content: string): PluginCommandArgument[] {
+  const names = new Set<string>()
+  if (content.includes('$ARGUMENTS')) names.add('ARGUMENTS')
+  for (const match of content.matchAll(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g)) {
+    names.add(match[1])
+  }
+  return Array.from(names).map(name => ({ name, required: false }))
+}
+
+async function readCommand(path: string): Promise<{ content: string; description?: string; arguments: PluginCommandArgument[]; truncated: boolean }> {
   const raw = await readFile(path, 'utf8')
-  if (raw.length <= MAX_COMMAND_CHARS) return { content: raw, truncated: false }
+  const truncated = raw.length > MAX_COMMAND_CHARS
+  const parsed = parseCommandFrontmatter(truncated ? raw.slice(0, MAX_COMMAND_CHARS) : raw)
+  if (!truncated) return { content: parsed.body, description: parsed.description, arguments: parsed.arguments, truncated: false }
   return {
-    content: raw.slice(0, MAX_COMMAND_CHARS),
+    content: parsed.body,
+    description: parsed.description,
+    arguments: parsed.arguments,
     truncated: true,
   }
 }
@@ -452,6 +528,8 @@ export class PluginManager {
           pluginId: plugin.id,
           pluginName: plugin.manifest?.name ?? plugin.id,
           name: command.name,
+          description: read.description,
+          arguments: read.arguments,
           sourcePath: command.path,
           content,
           truncated: read.truncated || content.length < read.content.length,

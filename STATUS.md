@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P4.4 complete (plugin install/update/uninstall and trust metadata)_
+_Last updated: 2026-04-25 · P5.4 complete (formalized plugin command execution UX)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -38,6 +38,10 @@ _Last updated: 2026-04-25 · P4.4 complete (plugin install/update/uninstall and 
 - [x] **P4.2 Git/Zip 安装**：Settings 可从 zip 或 git URL 安装插件，安装前校验 manifest
 - [x] **P4.3 更新/卸载**：用户插件可卸载；git 安装的插件支持 `git pull --ff-only` 更新
 - [x] **P4.4 信任/安全策略**：插件记录来源 metadata，UI 展示 source/updateable，启用时展示权限确认
+- [x] **P5.1 Command frontmatter/schema**：解析 command markdown frontmatter 的 `description` / `arguments`
+- [x] **P5.2 参数表单**：选择 command 后显示参数表单，支持 `$ARGUMENTS` / `{{param}}` 渲染
+- [x] **P5.3 命令执行记录**：用户消息保存 command invocation metadata（plugin、command、source、arguments）
+- [x] **P5.4 命令历史 / 收藏**：命令菜单支持最近使用排序和收藏
 
 ---
 
@@ -197,16 +201,16 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ---
 
-## 下一步 — P5 / 后续
+## 下一步 — P6 / 后续
 
-**P4.4 已完成**：本地插件闭环 + 安装闭环已完成（发现、启用、MCP、skills、commands、诊断、权限、打包路径、folder/zip/git 安装、更新、卸载）。
+**P5.4 已完成**：插件命令已从“插入文本”升级为可解析参数、可记录 invocation、可收藏/最近使用的命令执行 UX。
 
 后续优先项：
-- P5 命令系统正式化：把 plugin commands 从“插入文本”升级为可追踪命令执行记录
-- P5.1 参数表单：根据 command frontmatter/schema 生成参数 UI
-- P5.2 插件命令历史：命令运行历史、失败重试、收藏
+- P6 Agent task model：引入 task id，把 tool calls / command invocation / retry 绑定到明确任务
+- P6.1 Conversation compaction：旧上下文摘要化，减少旧请求污染
+- P6.2 Command retry：基于保存的 command invocation 一键重跑
 
-**推荐顺序**：**P5 命令系统正式化 → P5.1 参数表单 → P1.5 零散 UI**
+**推荐顺序**：**P6 task model → P6.1 compaction → P6.2 command retry**
 
 ---
 

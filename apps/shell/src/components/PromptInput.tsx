@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { ListPlus, Send, StopCircle } from 'lucide-react'
-import type { PluginCommand } from '../types'
+import { ListPlus, Send, Star, StopCircle } from 'lucide-react'
+import type { CommandInvocation, PluginCommand } from '../types'
 
 interface Props {
-  onSend: (content: string) => void
+  onSend: (content: string, commandInvocation?: CommandInvocation) => void
   onStop?: () => void
   isStreaming: boolean
   disabled?: boolean
@@ -26,9 +26,19 @@ export function PromptInput({
   const [value, setValue] = useState('')
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [commandQuery, setCommandQuery] = useState('')
+  const [selectedCommand, setSelectedCommand] = useState<PluginCommand | null>(null)
+  const [commandArgs, setCommandArgs] = useState<Record<string, string>>({})
   const [recentCommandKeys, setRecentCommandKeys] = useState<string[]>(() => {
     try {
       const parsed = JSON.parse(window.localStorage.getItem('ava.recentPluginCommands') ?? '[]') as unknown
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+    } catch {
+      return []
+    }
+  })
+  const [favoriteCommandKeys, setFavoriteCommandKeys] = useState<string[]>(() => {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem('ava.favoritePluginCommands') ?? '[]') as unknown
       return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
     } catch {
       return []
@@ -59,12 +69,15 @@ export function PromptInput({
       .sort((a, b) => {
         const ak = `${a.pluginId}:${a.name}`
         const bk = `${b.pluginId}:${b.name}`
+        const af = favoriteCommandKeys.includes(ak)
+        const bf = favoriteCommandKeys.includes(bk)
+        if (af !== bf) return af ? -1 : 1
         const ai = recentCommandKeys.indexOf(ak)
         const bi = recentCommandKeys.indexOf(bk)
         if (ai >= 0 || bi >= 0) return (ai >= 0 ? ai : 999) - (bi >= 0 ? bi : 999)
         return a.name.localeCompare(b.name)
       })
-  }, [commandQuery, commands, recentCommandKeys])
+  }, [commandQuery, commands, favoriteCommandKeys, recentCommandKeys])
 
   const submit = () => {
     const content = value.trim()
@@ -91,30 +104,68 @@ export function PromptInput({
     submit()
   }
 
-  const insertCommand = (command: PluginCommand) => {
+  const selectCommand = (command: PluginCommand) => {
+    setSelectedCommand(command)
+    setCommandArgs(Object.fromEntries(command.arguments.map(arg => [arg.name, arg.defaultValue ?? ''])))
+    setCommandsOpen(false)
+  }
+
+  const renderCommandContent = (command: PluginCommand, args: Record<string, string>): string => {
+    let rendered = command.content
+    const allArgs = args.ARGUMENTS ?? Object.entries(args)
+      .filter(([key]) => key !== 'ARGUMENTS')
+      .map(([key, val]) => `${key}: ${val}`)
+      .join('\n')
+    rendered = rendered.replace(/\$ARGUMENTS/g, allArgs)
+    for (const [key, val] of Object.entries(args)) {
+      rendered = rendered.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), val)
+    }
+    return rendered.trim()
+  }
+
+  const runSelectedCommand = () => {
+    if (!selectedCommand || isStreaming || disabled) return
+    const missing = selectedCommand.arguments.find(arg => arg.required && !commandArgs[arg.name]?.trim())
+    if (missing) return
+    const command = selectedCommand
     const key = `${command.pluginId}:${command.name}`
-    const placeholders = Array.from(command.content.matchAll(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g))
-      .map(match => match[1])
-    const hasArgumentsToken = command.content.includes('$ARGUMENTS')
     const block = [
       `Run plugin command: ${command.pluginName} / ${command.name}`,
       command.truncated ? '(Command file was truncated.)' : '',
+      Object.keys(commandArgs).length > 0 ? 'Command arguments:' : '',
+      ...Object.entries(commandArgs).map(([name, val]) => `- ${name}: ${val}`),
       '',
-      command.content.trim(),
-      hasArgumentsToken || placeholders.length > 0 ? '\nCommand arguments:' : '',
-      hasArgumentsToken ? '- $ARGUMENTS: ' : '',
-      ...Array.from(new Set(placeholders)).map(name => `- ${name}: `),
+      renderCommandContent(command, commandArgs),
       '',
     ].filter(Boolean).join('\n')
-    setValue(current => current.trim() ? `${current.trim()}\n\n${block}` : block)
+    const content = value.trim() ? `${value.trim()}\n\n${block}` : block
     setRecentCommandKeys(current => {
       const next = [key, ...current.filter(item => item !== key)].slice(0, 8)
       window.localStorage.setItem('ava.recentPluginCommands', JSON.stringify(next))
       return next
     })
+    onSend(content, {
+      pluginId: command.pluginId,
+      pluginName: command.pluginName,
+      commandName: command.name,
+      sourcePath: command.sourcePath,
+      arguments: commandArgs,
+    })
+    setValue('')
+    setSelectedCommand(null)
+    setCommandArgs({})
     setCommandQuery('')
-    setCommandsOpen(false)
-    window.setTimeout(() => textareaRef.current?.focus(), 0)
+  }
+
+  const toggleFavorite = (command: PluginCommand) => {
+    const key = `${command.pluginId}:${command.name}`
+    setFavoriteCommandKeys(current => {
+      const next = current.includes(key)
+        ? current.filter(item => item !== key)
+        : [key, ...current].slice(0, 24)
+      window.localStorage.setItem('ava.favoritePluginCommands', JSON.stringify(next))
+      return next
+    })
   }
 
   return (
@@ -163,17 +214,32 @@ export function PromptInput({
                 <div className="px-3 py-3 text-xs text-text-3">没有匹配的命令。</div>
               )}
               {sortedCommands.map(command => (
-                <button
+                <div
                   key={`${command.pluginId}:${command.name}`}
-                  type="button"
-                  onClick={() => insertCommand(command)}
-                  className="block w-full text-left px-3 py-2 cursor-pointer hover:bg-surface-2"
+                  className="flex w-full items-center gap-2 text-left px-3 py-2 cursor-pointer hover:bg-surface-2"
                 >
-                  <div className="text-sm text-text">{command.name}</div>
-                  <div className="text-xs text-text-3 truncate">
-                    {command.pluginName} · {command.sourcePath}
-                  </div>
-                </button>
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation()
+                      toggleFavorite(command)
+                    }}
+                    className={`p-1 rounded ${favoriteCommandKeys.includes(`${command.pluginId}:${command.name}`) ? 'text-warning' : 'text-text-3'}`}
+                    title="收藏命令"
+                  >
+                    <Star size={13} fill={favoriteCommandKeys.includes(`${command.pluginId}:${command.name}`) ? 'currentColor' : 'none'} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectCommand(command)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div className="text-sm text-text">{command.name}</div>
+                    <div className="text-xs text-text-3 truncate">
+                      {command.description || `${command.pluginName} · ${command.sourcePath}`}
+                    </div>
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -196,6 +262,49 @@ export function PromptInput({
         >
           <ListPlus size={18} />
         </button>
+        {selectedCommand && (
+          <div className="absolute left-6 right-6 bottom-[5.25rem] z-10 rounded-xl border border-border-subtle bg-surface shadow-2xl p-3 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm text-text">Run {selectedCommand.pluginName} / {selectedCommand.name}</div>
+                <div className="text-xs text-text-3">{selectedCommand.description || selectedCommand.sourcePath}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedCommand(null)}
+                className="text-xs text-text-3 cursor-pointer hover:text-text"
+              >
+                Cancel
+              </button>
+            </div>
+            {selectedCommand.arguments.length > 0 ? (
+              <div className="grid grid-cols-1 gap-2">
+                {selectedCommand.arguments.map(arg => (
+                  <label key={arg.name} className="block">
+                    <span className="block text-xs text-text-3 mb-1">
+                      {arg.name}{arg.required ? ' *' : ''}{arg.description ? ` · ${arg.description}` : ''}
+                    </span>
+                    <input
+                      value={commandArgs[arg.name] ?? ''}
+                      onChange={e => setCommandArgs(prev => ({ ...prev, [arg.name]: e.target.value }))}
+                      className="w-full px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
+                    />
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-text-3">这个命令没有声明参数。</div>
+            )}
+            <button
+              type="button"
+              onClick={runSelectedCommand}
+              disabled={selectedCommand.arguments.some(arg => arg.required && !commandArgs[arg.name]?.trim())}
+              className="px-3 py-1.5 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Run command
+            </button>
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={value}

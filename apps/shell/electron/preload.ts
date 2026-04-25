@@ -183,9 +183,18 @@ interface PluginCommand {
   pluginId: string
   pluginName: string
   name: string
+  description?: string
+  arguments: PluginCommandArgument[]
   sourcePath: string
   content: string
   truncated: boolean
+}
+
+interface PluginCommandArgument {
+  name: string
+  description?: string
+  required: boolean
+  defaultValue?: string
 }
 
 // ── Event subscriptions (cleanup-aware) ─────────────────────────────

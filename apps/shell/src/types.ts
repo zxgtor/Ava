@@ -34,7 +34,7 @@ export interface Message {
   /**
    * Breaking change in schema v2: was `string`, now an array of parts.
    * `role: 'tool'` messages carry exactly one text part (the stringified result).
-   */
+  */
   content: ContentPart[]
   /** Only set when role === 'tool'; ties the result back to the matching tool_call part. */
   toolCallId?: string
@@ -42,6 +42,15 @@ export interface Message {
   streaming?: boolean
   error?: string
   aborted?: boolean
+  commandInvocation?: CommandInvocation
+}
+
+export interface CommandInvocation {
+  pluginId: string
+  pluginName: string
+  commandName: string
+  sourcePath: string
+  arguments: Record<string, string>
 }
 
 export interface Conversation {
@@ -147,9 +156,18 @@ export interface PluginCommand {
   pluginId: string
   pluginName: string
   name: string
+  description?: string
+  arguments: PluginCommandArgument[]
   sourcePath: string
   content: string
   truncated: boolean
+}
+
+export interface PluginCommandArgument {
+  name: string
+  description?: string
+  required: boolean
+  defaultValue?: string
 }
 
 // ── Settings ────────────────────────────────────────────────────────

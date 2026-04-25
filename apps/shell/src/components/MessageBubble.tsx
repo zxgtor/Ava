@@ -73,6 +73,13 @@ function MessageBubbleImpl({ message, userInitial, assistantInitial, onDelete, o
                 : 'bg-surface text-text rounded-bl-sm'
           } ${isAborted ? 'border border-dashed border-border' : ''}`}
         >
+          {message.commandInvocation && (
+            <div className="mb-2 inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-text-3">
+              <span className="truncate">
+                Command: {message.commandInvocation.pluginName} / {message.commandInvocation.commandName}
+              </span>
+            </div>
+          )}
           {renderParts(message.content, { isUser, isError })}
           {message.streaming && !hasVisibleContent && <span className="text-text-3">…</span>}
           {message.streaming && hasVisibleContent && <StreamingDots />}

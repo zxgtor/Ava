@@ -1,4 +1,4 @@
-import type { ContentPart, Conversation, Message, Settings } from '../../types'
+import type { CommandInvocation, ContentPart, Conversation, Message, Settings } from '../../types'
 import { getEnabledProviders } from '../llm/providers'
 
 function partsToText(parts: ContentPart[]): string {
@@ -213,12 +213,13 @@ export function makeMessageId(): string {
   return `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function makeUserMessage(content: string): Message {
+export function makeUserMessage(content: string, commandInvocation?: CommandInvocation): Message {
   return {
     id: makeMessageId(),
     role: 'user',
     content: [{ type: 'text', text: content }],
     createdAt: Date.now(),
+    commandInvocation,
   }
 }
 
