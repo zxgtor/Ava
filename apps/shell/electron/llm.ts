@@ -11,6 +11,7 @@ import { pluginManager, type PluginSkill, type PluginState } from './services/pl
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  taskId?: string
   toolCallId?: string
   toolCalls?: ToolCallCandidate[]
 }
@@ -40,6 +41,7 @@ export type ToolCallStatus = 'pending' | 'running' | 'ok' | 'error' | 'aborted'
 
 export interface ToolCallPart {
   type: 'tool_call'
+  taskId?: string
   id: string
   name: string
   args: Record<string, unknown>
@@ -54,6 +56,7 @@ export interface StreamChatArgs {
   streamId: string
   messages: LlmMessage[]
   providers: ModelProvider[]
+  activeTaskId?: string
   temperature?: number
   toolFormatMap?: Record<string, ToolCallFormat>
   pluginStates?: Record<string, PluginState>
@@ -728,6 +731,7 @@ async function runToolLoop(
       const staleReason = validateToolAgainstCurrentTask(toolCall, currentTask)
       const toolPart: ToolCallPart = {
         type: 'tool_call',
+        taskId: args.activeTaskId,
         id: toolCall.id,
         name: toolCall.name,
         args: toolCall.args,
@@ -740,6 +744,7 @@ async function runToolLoop(
       if (!webContents.isDestroyed()) {
         webContents.send('ava:llm:part', {
           streamId: args.streamId,
+          taskId: args.activeTaskId,
           partIndex,
           part: toolPart,
         })
@@ -770,6 +775,7 @@ async function runToolLoop(
       if (!webContents.isDestroyed()) {
         webContents.send('ava:llm:partUpdate', {
           streamId: args.streamId,
+          taskId: args.activeTaskId,
           partIndex,
           partId: toolCall.id,
           patch,

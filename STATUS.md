@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P5.4 complete (formalized plugin command execution UX)_
+_Last updated: 2026-04-25 · P6.4 complete (agent task model + command retry)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -42,6 +42,10 @@ _Last updated: 2026-04-25 · P5.4 complete (formalized plugin command execution 
 - [x] **P5.2 参数表单**：选择 command 后显示参数表单，支持 `$ARGUMENTS` / `{{param}}` 渲染
 - [x] **P5.3 命令执行记录**：用户消息保存 command invocation metadata（plugin、command、source、arguments）
 - [x] **P5.4 命令历史 / 收藏**：命令菜单支持最近使用排序和收藏
+- [x] **P6.1 Task ID**：每次用户发送生成 task id，并绑定 user / assistant placeholder / tool-call part
+- [x] **P6.2 Tool-call task binding**：LLM stream 接收 active task id，renderer 只接收当前 task 的 part/update
+- [x] **P6.3 Conversation compaction**：旧任务按摘要进入上下文，当前任务原样保留，减少旧请求污染
+- [x] **P6.4 Command retry**：保存过 invocation 的用户命令消息支持一键“重跑命令”
 
 ---
 
@@ -122,6 +126,7 @@ window.ava.conversations.save(data): Promise<boolean>
 
 window.ava.llm.stream(args: {
   streamId: string,
+  activeTaskId?: string,
   messages: LlmMessage[],
   providers: ModelProvider[],  // already filtered+ordered by renderer
   temperature?: number,
@@ -136,6 +141,8 @@ window.ava.llm.probe({ baseUrl, apiKey }): Promise<
 >
 window.ava.llm.onChunk((payload: { streamId, text }) => void): () => void  // returns unsubscribe
 window.ava.llm.onAttempt((payload: { streamId, attempts }) => void): () => void
+window.ava.llm.onPart((payload: { streamId, taskId?, partIndex, part }) => void): () => void
+window.ava.llm.onPartUpdate((payload: { streamId, taskId?, partIndex, partId?, patch }) => void): () => void
 window.ava.mcp.listServers(): Promise<McpServerRuntime[]>
 window.ava.mcp.restart(serverId): Promise<boolean>
 window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
@@ -203,14 +210,14 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ## 下一步 — P6 / 后续
 
-**P5.4 已完成**：插件命令已从“插入文本”升级为可解析参数、可记录 invocation、可收藏/最近使用的命令执行 UX。
+**P6.4 已完成**：agent 已有 task id 模型；旧任务上下文会摘要化；工具事件绑定 active task；命令消息支持重跑。
 
 后续优先项：
-- P6 Agent task model：引入 task id，把 tool calls / command invocation / retry 绑定到明确任务
-- P6.1 Conversation compaction：旧上下文摘要化，减少旧请求污染
-- P6.2 Command retry：基于保存的 command invocation 一键重跑
+- P7 插件运行时安全/权限细化：更细粒度显示和限制插件 MCP 能力、cwd/env、文件访问影响
+- P7.1 Tool audit log：集中记录 tool-call 来源 task、命令、插件、结果，方便排查模型乱调工具
+- P7.2 UI 验证打磨：为 task id、命令重跑、旧请求防污染补手动验证脚本/测试清单
 
-**推荐顺序**：**P6 task model → P6.1 compaction → P6.2 command retry**
+**推荐顺序**：**P7 audit log → P7 permission detail → UI/test cleanup**
 
 ---
 

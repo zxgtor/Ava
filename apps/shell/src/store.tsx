@@ -318,6 +318,7 @@ function sanitizeContentPart(raw: unknown): ContentPart | null {
         : 'ok'
     return {
       type: 'tool_call',
+      taskId: typeof p.taskId === 'string' ? p.taskId : undefined,
       id: p.id,
       name: p.name,
       args: p.args && typeof p.args === 'object' ? p.args as Record<string, unknown> : {},
@@ -347,6 +348,7 @@ function sanitizeMessage(raw: unknown): Message | null {
 
   return {
     id: m.id,
+    taskId: typeof m.taskId === 'string' ? m.taskId : undefined,
     role: m.role,
     content,
     toolCallId: typeof m.toolCallId === 'string' ? m.toolCallId : undefined,

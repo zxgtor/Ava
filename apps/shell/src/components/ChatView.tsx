@@ -7,11 +7,19 @@ import { PromptInput } from './PromptInput'
 import {
   makeAssistantPlaceholder,
   makeStreamId,
+  makeTaskId,
   makeUserMessage,
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
-import type { CommandInvocation, Conversation, PluginCommand } from '../types'
+import type { CommandInvocation, ContentPart, Conversation, PluginCommand } from '../types'
+
+function partsToText(parts: ContentPart[]): string {
+  return parts
+    .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
+    .map(p => p.text)
+    .join('')
+}
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -70,7 +78,12 @@ export function ChatView() {
   // Shared streaming driver. `conversationSnapshot.messages` is the full history
   // that should be sent to the LLM (NOT including the placeholder).
   const driveStream = useCallback(
-    async (conversationSnapshot: Conversation, conversationId: string, placeholderId: string) => {
+    async (
+      conversationSnapshot: Conversation,
+      conversationId: string,
+      placeholderId: string,
+      activeTaskId: string,
+    ) => {
       const id = makeStreamId()
       setStreamId(id)
       setIsStreaming(true)
@@ -80,6 +93,7 @@ export function ChatView() {
           conversation: conversationSnapshot,
           settings: state.settings,
           streamId: id,
+          activeTaskId,
           onDelta: delta => {
             dispatch({
               type: 'APPEND_DELTA',
@@ -88,15 +102,17 @@ export function ChatView() {
               delta,
             })
           },
-          onPart: ({ part }) => {
+          onPart: ({ taskId, part }) => {
+            if (taskId && taskId !== activeTaskId) return
             dispatch({
               type: 'ADD_PART',
               conversationId,
               messageId: placeholderId,
-              part,
+              part: part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? activeTaskId } : part,
             })
           },
-          onPartUpdate: ({ partIndex, partId, patch }) => {
+          onPartUpdate: ({ taskId, partIndex, partId, patch }) => {
+            if (taskId && taskId !== activeTaskId) return
             dispatch({
               type: 'UPDATE_PART',
               conversationId,
@@ -170,8 +186,9 @@ export function ChatView() {
 
   const runSend = useCallback(
     async (content: string, conversation: Conversation, commandInvocation?: CommandInvocation) => {
-      const userMsg = makeUserMessage(content, commandInvocation)
-      const placeholder = makeAssistantPlaceholder()
+      const taskId = makeTaskId()
+      const userMsg = makeUserMessage(content, commandInvocation, taskId)
+      const placeholder = makeAssistantPlaceholder(taskId)
       const conversationId = conversation.id
 
       dispatch({ type: 'ADD_MESSAGE', conversationId, message: userMsg })
@@ -187,6 +204,7 @@ export function ChatView() {
         { ...conversation, messages: [...conversation.messages, userMsg] },
         conversationId,
         placeholder.id,
+        taskId,
       )
     },
     [dispatch, driveStream],
@@ -256,16 +274,36 @@ export function ChatView() {
       const conversationId = activeConversation.id
       dispatch({ type: 'DELETE_MESSAGE', conversationId, messageId: failedId })
 
-      const placeholder = makeAssistantPlaceholder()
+      const previousUser = (() => {
+        for (let i = idx - 1; i >= 0; i -= 1) {
+          if (msgs[i].role === 'user') return msgs[i]
+        }
+        return null
+      })()
+      const taskId = target.taskId ?? previousUser?.taskId ?? makeTaskId()
+      const placeholder = makeAssistantPlaceholder(taskId)
       dispatch({ type: 'ADD_MESSAGE', conversationId, message: placeholder })
 
       await driveStream(
         { ...activeConversation, messages: msgs.slice(0, idx) },
         conversationId,
         placeholder.id,
+        taskId,
       )
     },
     [activeConversation, isStreaming, dispatch, driveStream],
+  )
+
+  const handleCommandRetry = useCallback(
+    async (messageId: string) => {
+      if (!activeConversation || isStreaming) return
+      const message = activeConversation.messages.find(m => m.id === messageId)
+      if (!message || message.role !== 'user' || !message.commandInvocation) return
+      const content = partsToText(message.content)
+      if (!content.trim()) return
+      await runSend(content, activeConversation, message.commandInvocation)
+    },
+    [activeConversation, isStreaming, runSend],
   )
 
   const messages = activeConversation?.messages ?? []
@@ -306,6 +344,11 @@ export function ChatView() {
                   assistantInitial={assistantInitial}
                   onDelete={handleDeleteMessage}
                   onRetry={canRetry ? () => handleRetry(m.id) : undefined}
+                  onCommandRetry={
+                    !isStreaming && m.role === 'user' && m.commandInvocation
+                      ? () => handleCommandRetry(m.id)
+                      : undefined
+                  }
                 />
               )
             })}

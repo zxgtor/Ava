@@ -9,6 +9,8 @@ export type ToolCallStatus = 'pending' | 'running' | 'ok' | 'error' | 'aborted'
 
 export interface ToolCallPart {
   type: 'tool_call'
+  /** Current user-task id; prevents stale tool events from attaching to a newer response. */
+  taskId?: string
   /** Stable tool-call id (matches the OpenAI `tool_call_id` / Hermes id) */
   id: string
   /** Namespaced tool name, e.g. `filesystem.read_file` */
@@ -29,6 +31,8 @@ export type ContentPart = TextPart | ToolCallPart
 
 export interface Message {
   id: string
+  /** Groups a user message, its assistant response, and tool calls into one task. */
+  taskId?: string
   /** 'tool' role carries a tool execution result that is fed back to the LLM. */
   role: 'user' | 'assistant' | 'system' | 'tool'
   /**

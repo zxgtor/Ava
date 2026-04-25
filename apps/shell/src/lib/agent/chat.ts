@@ -27,14 +27,16 @@ function buildSystemPrompt(settings: Settings): string {
   ].join('\n')
 }
 
-function buildCurrentTaskPrompt(latestUserRequest: string): string {
+function buildCurrentTaskPrompt(latestUserRequest: string, taskId?: string): string {
   return [
     'Current task boundary:',
+    taskId ? `Active task id: ${taskId}` : '',
     `Latest user request: ${latestUserRequest}`,
     'Only execute tool calls needed for this latest request.',
+    'Only tool-call events for the active task id belong to the current assistant response.',
     'If an older request failed because of permissions, missing whitelist access, or unavailable tools, do not retry it unless the latest request explicitly asks for that retry.',
     'If the user changed the target path, file, or scope, use only the new target.',
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 function hasFailedToolCall(parts: ContentPart[]): boolean {
@@ -51,28 +53,33 @@ function summarizeHistoricalMessage(message: Message, includeUserHistory: boolea
   if (message.role === 'tool') return null
   const text = partsToText(message.content).trim()
   if (!text) return null
+  const taskPrefix = message.taskId ? `Historical task ${message.taskId}. ` : ''
   if (message.role === 'user' && !includeUserHistory) return null
   if (message.role === 'user') {
     return {
       role: 'system',
-      content: `Historical user request, not active unless the latest message asks to continue it: ${text.length > 500 ? `${text.slice(0, 500)}...` : text}`,
+      taskId: message.taskId,
+      content: `${taskPrefix}Historical user request, not active unless the latest message asks to continue it: ${text.length > 500 ? `${text.slice(0, 500)}...` : text}`,
     }
   }
   if (message.role === 'assistant' && (message.error || message.aborted || hasFailedToolCall(message.content))) {
     return {
       role: 'system',
-      content: 'Previous assistant attempt failed or was interrupted. Treat it as historical context only; do not retry its tool calls unless the latest user request explicitly asks to retry.',
+      taskId: message.taskId,
+      content: `${taskPrefix}Previous assistant attempt failed or was interrupted. Treat it as historical context only; do not retry its tool calls unless the latest user request explicitly asks to retry.`,
     }
   }
   return {
     role: 'system',
-    content: `Historical assistant response, not an active task: ${text.length > 800 ? `${text.slice(0, 800)}...` : text}`,
+    taskId: message.taskId,
+    content: `${taskPrefix}Historical assistant response, not an active task: ${text.length > 800 ? `${text.slice(0, 800)}...` : text}`,
   }
 }
 
 interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  taskId?: string
   toolCallId?: string
 }
 
@@ -80,30 +87,43 @@ function conversationToLlmMessages(
   conversation: Conversation,
   settings: Settings,
 ): LlmMessage[] {
-  const latestUserText = [...conversation.messages]
-    .reverse()
-    .find(m => m.role === 'user')
-    ?.content
-  const latestUserRequest = latestUserText ? partsToText(latestUserText).trim() : ''
-  const includeUserHistory = wantsHistoricalContinuation(latestUserRequest)
   const latestUserIndex = (() => {
     for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
       if (conversation.messages[i].role === 'user') return i
     }
     return -1
   })()
+  const latestUser = latestUserIndex >= 0 ? conversation.messages[latestUserIndex] : null
+  const activeTaskId = latestUser?.taskId
+  const latestUserRequest = latestUser ? partsToText(latestUser.content).trim() : ''
+  const includeUserHistory = wantsHistoricalContinuation(latestUserRequest)
 
   const messages: LlmMessage[] = [
     { role: 'system', content: buildSystemPrompt(settings) },
   ]
   if (latestUserRequest) {
-    messages.push({ role: 'system', content: buildCurrentTaskPrompt(latestUserRequest) })
+    messages.push({ role: 'system', content: buildCurrentTaskPrompt(latestUserRequest, activeTaskId) })
   }
-  const historyStart = Math.max(0, latestUserIndex - 6)
+  const historyStart = Math.max(0, latestUserIndex - 12)
+  if (historyStart > 0) {
+    const compacted = conversation.messages
+      .slice(0, historyStart)
+      .map(m => summarizeHistoricalMessage(m, includeUserHistory))
+      .filter((m): m is LlmMessage => Boolean(m))
+      .slice(-8)
+    if (compacted.length > 0) {
+      messages.push({
+        role: 'system',
+        content: 'Compacted older conversation context follows. It is historical context only and must not trigger old tool calls.',
+      })
+      messages.push(...compacted)
+    }
+  }
   for (let i = historyStart; i < conversation.messages.length; i += 1) {
     const m = conversation.messages[i]
     if (m.role === 'system') continue
-    if (i < latestUserIndex) {
+    const isActiveTask = activeTaskId ? m.taskId === activeTaskId : i >= latestUserIndex
+    if (i < latestUserIndex && !isActiveTask) {
       const summarized = summarizeHistoricalMessage(m, includeUserHistory)
       if (summarized) messages.push(summarized)
       continue
@@ -113,6 +133,7 @@ function conversationToLlmMessages(
     messages.push({
       role: m.role,
       content: text,
+      taskId: m.taskId,
       ...(m.role === 'tool' && m.toolCallId ? { toolCallId: m.toolCallId } : {}),
     })
   }
@@ -124,8 +145,9 @@ export interface SendOptions {
   settings: Settings
   onDelta: (delta: string) => void
   onAttempt?: (attempts: Array<{ providerId: string; ok: boolean; error?: string }>) => void
-  onPart?: (payload: { partIndex: number; part: ContentPart }) => void
-  onPartUpdate?: (payload: { partIndex: number; partId?: string; patch: Record<string, unknown> }) => void
+  activeTaskId?: string
+  onPart?: (payload: { taskId?: string; partIndex: number; part: ContentPart }) => void
+  onPartUpdate?: (payload: { taskId?: string; partIndex: number; partId?: string; patch: Record<string, unknown> }) => void
   streamId: string
 }
 
@@ -164,13 +186,17 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       })
     : () => { /* noop */ }
   const offPart = options.onPart
-    ? window.ava.llm.onPart(({ streamId, partIndex, part }) => {
-        if (streamId === options.streamId) options.onPart!({ partIndex, part })
+    ? window.ava.llm.onPart(({ streamId, taskId, partIndex, part }) => {
+        if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
+          options.onPart!({ taskId, partIndex, part })
+        }
       })
     : () => { /* noop */ }
   const offPartUpdate = options.onPartUpdate
-    ? window.ava.llm.onPartUpdate(({ streamId, partIndex, partId, patch }) => {
-        if (streamId === options.streamId) options.onPartUpdate!({ partIndex, partId, patch })
+    ? window.ava.llm.onPartUpdate(({ streamId, taskId, partIndex, partId, patch }) => {
+        if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
+          options.onPartUpdate!({ taskId, partIndex, partId, patch })
+        }
       })
     : () => { /* noop */ }
 
@@ -179,6 +205,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       streamId: options.streamId,
       messages,
       providers,
+      activeTaskId: options.activeTaskId,
       temperature: 0.4,
       toolFormatMap: options.settings.modelToolFormatMap,
       pluginStates: options.settings.pluginStates,
@@ -213,9 +240,14 @@ export function makeMessageId(): string {
   return `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function makeUserMessage(content: string, commandInvocation?: CommandInvocation): Message {
+export function makeTaskId(): string {
+  return `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+export function makeUserMessage(content: string, commandInvocation?: CommandInvocation, taskId = makeTaskId()): Message {
   return {
     id: makeMessageId(),
+    taskId,
     role: 'user',
     content: [{ type: 'text', text: content }],
     createdAt: Date.now(),
@@ -223,9 +255,10 @@ export function makeUserMessage(content: string, commandInvocation?: CommandInvo
   }
 }
 
-export function makeAssistantPlaceholder(): Message {
+export function makeAssistantPlaceholder(taskId?: string): Message {
   return {
     id: makeMessageId(),
+    taskId,
     role: 'assistant',
     content: [],
     createdAt: Date.now(),

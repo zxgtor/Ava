@@ -10,6 +10,7 @@ interface Props {
   assistantInitial: string
   onDelete?: (id: string) => void
   onRetry?: () => void
+  onCommandRetry?: () => void
 }
 
 function StreamingDots() {
@@ -42,7 +43,14 @@ function renderParts(parts: ContentPart[], opts: { isUser: boolean; isError: boo
 
 // ── Main bubble ──────────────────────────────────────────────────────
 
-function MessageBubbleImpl({ message, userInitial, assistantInitial, onDelete, onRetry }: Props) {
+function MessageBubbleImpl({
+  message,
+  userInitial,
+  assistantInitial,
+  onDelete,
+  onRetry,
+  onCommandRetry,
+}: Props) {
   const isUser = message.role === 'user'
   const isError = Boolean(message.error)
   const isAborted = Boolean(message.aborted)
@@ -93,8 +101,19 @@ function MessageBubbleImpl({ message, userInitial, assistantInitial, onDelete, o
             <div className="mt-1 text-xs text-text-3">（已中断）</div>
           )}
         </div>
-        {(onDelete || onRetry) && !message.streaming && (
+        {(onDelete || onRetry || onCommandRetry) && !message.streaming && (
           <div className="mt-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+            {onCommandRetry && (
+              <button
+                type="button"
+                onClick={onCommandRetry}
+                className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-text-3 rounded cursor-pointer hover:text-accent hover:bg-accent/10"
+                title="重新执行命令"
+              >
+                <RotateCw size={12} />
+                重跑命令
+              </button>
+            )}
             {onRetry && (
               <button
                 type="button"

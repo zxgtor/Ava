@@ -16,6 +16,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  taskId?: string
   toolCallId?: string
 }
 
@@ -43,6 +44,7 @@ interface StreamChatArgs {
   streamId: string
   messages: LlmMessage[]
   providers: ModelProvider[]
+  activeTaskId?: string
   temperature?: number
   toolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
   pluginStates?: Record<string, PluginState>
@@ -56,6 +58,7 @@ interface StreamChatOk {
       | { type: 'text'; text: string }
       | {
           type: 'tool_call'
+          taskId?: string
           id: string
           name: string
           args: Record<string, unknown>
@@ -95,12 +98,14 @@ interface AttemptPayload {
 
 interface PartPayload {
   streamId: string
+  taskId?: string
   partIndex: number
   part: StreamChatOk['result']['parts'][number]
 }
 
 interface PartUpdatePayload {
   streamId: string
+  taskId?: string
   partIndex: number
   partId?: string
   patch: Record<string, unknown>
