@@ -280,6 +280,13 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
       }
     }
   }
+  const pluginStates: Settings['pluginStates'] = {}
+  if (src.pluginStates && typeof src.pluginStates === 'object') {
+    for (const [id, state] of Object.entries(src.pluginStates)) {
+      if (!id.trim() || !state || typeof state !== 'object') continue
+      pluginStates[id] = { enabled: Boolean((state as { enabled?: unknown }).enabled) }
+    }
+  }
 
   return {
     version: 2,
@@ -290,6 +297,7 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
       assistantName: src.persona?.assistantName ?? merged.persona.assistantName,
     },
     mcpServers,
+    pluginStates,
     modelToolFormatMap: toolFormatMap,
   }
 }

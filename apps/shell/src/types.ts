@@ -77,15 +77,40 @@ export interface McpServerConfig {
   /** Base args; the supervisor may append extra args (e.g. allowedDirs) at spawn time. */
   args: string[]
   env?: Record<string, string>
+  cwd?: string
   enabled: boolean
   /** Filesystem-only: directories the server is allowed to read/write. Appended to args on spawn. */
   allowedDirs?: string[]
   /** Built-in servers cannot be removed from the list, only toggled/configured. */
   builtin?: boolean
+  pluginId?: string
 }
 
 /** Per-model detected tool-call format, cached so we do not re-probe every request. */
 export type ToolCallFormat = 'openai' | 'hermes' | 'none'
+
+export interface PluginState {
+  enabled: boolean
+}
+
+export interface PluginManifestView {
+  name: string
+  version: string
+  description?: string
+}
+
+export interface DiscoveredPlugin {
+  id: string
+  rootPath: string
+  manifest?: PluginManifestView
+  enabled: boolean
+  valid: boolean
+  bundled: boolean
+  mcpServerCount: number
+  skillCount: number
+  commandCount: number
+  errors: string[]
+}
 
 // ── Settings ────────────────────────────────────────────────────────
 
@@ -104,6 +129,7 @@ export interface Settings {
     assistantName: string
   }
   mcpServers: McpServerConfig[]
+  pluginStates: Record<string, PluginState>
   /** Key = `${providerId}:${modelId}` → detected format. */
   modelToolFormatMap: Record<string, ToolCallFormat>
 }

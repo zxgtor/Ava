@@ -14,6 +14,7 @@ import {
   type StreamChatArgs,
 } from './llm'
 import { mcpSupervisor, type McpServerConfig } from './services/mcpSupervisor'
+import { pluginManager, type PluginState } from './services/pluginManager'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -60,7 +61,7 @@ function registerIpc(): void {
   ipcMain.handle('ava:settings:load', async () => loadSettings())
   ipcMain.handle('ava:settings:save', async (_e, data: unknown) => {
     await saveSettings(data)
-    const mcpServers = readMcpServers(data)
+    const mcpServers = await readRuntimeMcpServers(data)
     if (mcpServers) await mcpSupervisor.applyConfigs(mcpServers)
     return true
   })
@@ -91,6 +92,11 @@ function registerIpc(): void {
     await mcpSupervisor.restart(serverId)
     return true
   })
+
+  // ── Plugins ─────────────────────────────────
+  ipcMain.handle('ava:plugins:list', async (_e, states: Record<string, PluginState> | undefined) =>
+    pluginManager.discover(states ?? {}),
+  )
 
   // ── Dialog helpers ──────────────────────────
   ipcMain.handle('ava:dialog:pickDirectory', async () => {
@@ -170,8 +176,8 @@ app.whenReady().then(() => {
   registerIpc()
   createMainWindow()
   loadSettings()
-    .then(raw => {
-      const mcpServers = readMcpServers(raw)
+    .then(async raw => {
+      const mcpServers = await readRuntimeMcpServers(raw)
       if (mcpServers) return mcpSupervisor.applyConfigs(mcpServers)
       return undefined
     })
@@ -190,10 +196,21 @@ app.on('before-quit', () => {
   mcpSupervisor.shutdown().catch(err => console.warn('[mcp] shutdown failed:', err))
 })
 
-function readMcpServers(raw: unknown): McpServerConfig[] | null {
+async function readRuntimeMcpServers(raw: unknown): Promise<McpServerConfig[] | null> {
   if (!raw || typeof raw !== 'object') return null
-  const src = raw as { version?: unknown; mcpServers?: unknown }
+  const src = raw as { version?: unknown; mcpServers?: unknown; pluginStates?: unknown }
   if (src.version !== 2 || !Array.isArray(src.mcpServers)) return null
-  return src.mcpServers
+  const baseServers = src.mcpServers
     .filter((item): item is McpServerConfig => Boolean(item && typeof item === 'object' && typeof (item as McpServerConfig).id === 'string'))
+  const pluginStates = isPluginStates(src.pluginStates) ? src.pluginStates : {}
+  const pluginServers = await pluginManager.mcpServersForStates(pluginStates)
+  return [...baseServers, ...pluginServers]
+}
+
+function isPluginStates(raw: unknown): raw is Record<string, PluginState> {
+  if (!raw || typeof raw !== 'object') return false
+  for (const value of Object.values(raw)) {
+    if (!value || typeof value !== 'object') return false
+  }
+  return true
 }

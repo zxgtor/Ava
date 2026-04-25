@@ -227,6 +227,7 @@ export function defaultSettings(): Settings {
       assistantName: 'Ava',
     },
     mcpServers: DEFAULT_MCP_SERVERS.map(s => ({ ...s, args: [...s.args], allowedDirs: [...(s.allowedDirs ?? [])] })),
+    pluginStates: {},
     modelToolFormatMap: {},
   }
 }
@@ -265,11 +266,13 @@ export function mergeMcpServers(overrides?: McpServerConfig[] | null): McpServer
         command: String(raw.command || ''),
         args: Array.isArray(raw.args) ? raw.args.map(String) : [],
         env: typeof raw.env === 'object' && raw.env ? { ...raw.env } : undefined,
+        cwd: typeof raw.cwd === 'string' && raw.cwd.trim() ? raw.cwd : undefined,
         enabled: Boolean(raw.enabled),
         allowedDirs: Array.isArray(raw.allowedDirs)
           ? raw.allowedDirs.map(d => String(d)).filter(d => d.trim().length > 0)
           : undefined,
         builtin: false,
+        pluginId: typeof raw.pluginId === 'string' && raw.pluginId.trim() ? raw.pluginId : undefined,
       })
     }
   }

@@ -118,11 +118,33 @@ interface McpServerRuntime {
   enabled: boolean
   allowedDirs?: string[]
   builtin?: boolean
+  pluginId?: string
   status: 'stopped' | 'starting' | 'running' | 'error'
   pid?: number
   tools?: McpToolDescriptor[]
   lastError?: string
   startedAt?: number
+}
+
+interface PluginState {
+  enabled: boolean
+}
+
+interface DiscoveredPlugin {
+  id: string
+  rootPath: string
+  manifest?: {
+    name: string
+    version: string
+    description?: string
+  }
+  enabled: boolean
+  valid: boolean
+  bundled: boolean
+  mcpServerCount: number
+  skillCount: number
+  commandCount: number
+  errors: string[]
 }
 
 // ── Event subscriptions (cleanup-aware) ─────────────────────────────
@@ -167,6 +189,11 @@ const ava = {
     listServers: (): Promise<McpServerRuntime[]> => ipcRenderer.invoke('ava:mcp:listServers'),
     restart: (serverId: string): Promise<boolean> => ipcRenderer.invoke('ava:mcp:restart', serverId),
     onStatus: (handler: (payload: McpServerRuntime) => void) => on<McpServerRuntime>('ava:mcp:status', handler),
+  },
+
+  plugins: {
+    list: (states: Record<string, PluginState>): Promise<DiscoveredPlugin[]> =>
+      ipcRenderer.invoke('ava:plugins:list', states),
   },
 
   dialog: {

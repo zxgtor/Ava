@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, ArrowUp, ArrowDown, X } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronRight, ArrowUp, ArrowDown, X, RefreshCw } from 'lucide-react'
 import { useStore } from '../store'
 import {
   mergeMcpServers,
   mergeModelProviders,
   normalizeProviderChain,
 } from '../lib/llm/providers'
-import type { McpServerConfig, ModelProvider, Settings } from '../types'
+import type { DiscoveredPlugin, McpServerConfig, ModelProvider, Settings } from '../types'
 
 export function SettingsView() {
   const { state, dispatch } = useStore()
@@ -18,6 +18,7 @@ export function SettingsView() {
       next.modelProviders = mergeModelProviders(next.modelProviders)
       next.primaryModelChain = normalizeProviderChain(next.primaryModelChain, next.modelProviders)
       next.mcpServers = mergeMcpServers(next.mcpServers)
+      next.pluginStates = next.pluginStates ?? {}
       dispatch({ type: 'UPDATE_SETTINGS', settings: next })
     },
     [dispatch, state.settings],
@@ -47,6 +48,7 @@ export function SettingsView() {
         <ChainSection settings={state.settings} update={update} />
         <ProvidersSection settings={state.settings} update={update} />
         <McpSection settings={state.settings} update={update} />
+        <PluginsSection settings={state.settings} update={update} />
       </div>
     </div>
   )
@@ -212,6 +214,141 @@ function McpSection({ settings, update }: { settings: Settings; update: (p: (s: 
         ))}
       </div>
     </section>
+  )
+}
+
+function PluginsSection({ settings, update }: { settings: Settings; update: (p: (s: Settings) => Settings) => void }) {
+  const [plugins, setPlugins] = useState<DiscoveredPlugin[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const list = await window.ava.plugins.list(settings.pluginStates)
+      setPlugins(list)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [settings.pluginStates])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  const setPluginEnabled = (pluginId: string, enabled: boolean) => {
+    update(s => ({
+      ...s,
+      pluginStates: {
+        ...s.pluginStates,
+        [pluginId]: { enabled },
+      },
+    }))
+  }
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide">Plugins</h2>
+          <p className="text-xs text-text-3 mt-1">扫描 plugins / user-plugins；启用后插件内的 stdio MCP server 会接入工具系统。</p>
+        </div>
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs text-text bg-surface border border-border-subtle rounded-full cursor-pointer hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+      </div>
+
+      {error && <div className="text-xs text-error mb-2">{error}</div>}
+      {plugins.length === 0 ? (
+        <div className="px-3 py-3 text-xs text-text-3 bg-surface border border-border-subtle rounded-lg">
+          未发现插件。把插件放到 user-plugins/&lt;plugin&gt;，并包含 .claude-plugin/plugin.json。
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {plugins.map(plugin => (
+            <PluginRow
+              key={plugin.id}
+              plugin={plugin}
+              onToggle={enabled => setPluginEnabled(plugin.id, enabled)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function PluginRow({
+  plugin,
+  onToggle,
+}: {
+  plugin: DiscoveredPlugin
+  onToggle: (enabled: boolean) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const title = plugin.manifest?.name ?? plugin.id
+
+  return (
+    <div className="bg-surface border border-border-subtle rounded-lg">
+      <div className="flex items-center gap-3 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setExpanded(v => !v)}
+          className="flex items-center gap-1 text-text-3 cursor-pointer hover:text-text-2"
+        >
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-text">{title}</span>
+            {plugin.manifest?.version && (
+              <span className="px-1.5 py-0.5 text-[10px] text-text-3 bg-surface-2 rounded">v{plugin.manifest.version}</span>
+            )}
+            <span className={`px-1.5 py-0.5 text-[10px] rounded ${plugin.valid ? 'text-success bg-success/10' : 'text-error bg-error/10'}`}>
+              {plugin.valid ? 'valid' : 'invalid'}
+            </span>
+            <span className="px-1.5 py-0.5 text-[10px] text-text-3 bg-surface-2 rounded">
+              {plugin.bundled ? 'bundled' : 'user'}
+            </span>
+          </div>
+          <div className="text-xs text-text-3 truncate">
+            {plugin.manifest?.description || plugin.rootPath}
+          </div>
+        </div>
+        <Toggle
+          value={plugin.enabled}
+          disabled={!plugin.valid}
+          onChange={v => onToggle(v)}
+        />
+      </div>
+
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 space-y-2 border-t border-border-subtle">
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="px-2 py-1.5 bg-surface-2 rounded text-text-2">MCP: {plugin.mcpServerCount}</div>
+            <div className="px-2 py-1.5 bg-surface-2 rounded text-text-2">Skills: {plugin.skillCount}</div>
+            <div className="px-2 py-1.5 bg-surface-2 rounded text-text-2">Commands: {plugin.commandCount}</div>
+          </div>
+          <div className="text-xs text-text-3 break-all">{plugin.rootPath}</div>
+          {plugin.errors.length > 0 && (
+            <div className="space-y-1">
+              {plugin.errors.map(err => (
+                <div key={err} className="text-xs text-error">{err}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -523,14 +660,15 @@ function LabeledInput({
   )
 }
 
-function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       onClick={() => onChange(!value)}
+      disabled={disabled}
       className={`relative inline-flex items-center h-5 w-9 rounded-full transition-colors cursor-pointer ${
         value ? 'bg-accent' : 'bg-surface-3'
-      }`}
+      } disabled:opacity-40 disabled:cursor-not-allowed`}
       aria-pressed={value}
     >
       <span

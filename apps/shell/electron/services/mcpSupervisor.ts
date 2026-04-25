@@ -25,9 +25,11 @@ export interface McpServerConfig {
   command: string
   args: string[]
   env?: Record<string, string>
+  cwd?: string
   enabled: boolean
   allowedDirs?: string[]
   builtin?: boolean
+  pluginId?: string
 }
 
 export type McpServerStatus = 'stopped' | 'starting' | 'running' | 'error'
@@ -47,6 +49,7 @@ export interface McpServerRuntime {
   enabled: boolean
   allowedDirs?: string[]
   builtin?: boolean
+  pluginId?: string
   status: McpServerStatus
   pid?: number
   tools?: McpToolDescriptor[]
@@ -262,6 +265,7 @@ export class McpSupervisor extends EventEmitter {
         command,
         args,
         env: mergedEnv,
+        cwd: config.cwd,
       })
       const client = new Client(
         { name: CLIENT_NAME, version: CLIENT_VERSION },
@@ -423,6 +427,7 @@ export class McpSupervisor extends EventEmitter {
       enabled: e.config.enabled,
       allowedDirs: e.config.allowedDirs,
       builtin: e.config.builtin,
+      pluginId: e.config.pluginId,
       status: e.status,
       pid: e.pid,
       tools: e.tools,
@@ -446,6 +451,7 @@ function sameLaunchShape(a: McpServerConfig, b: McpServerConfig): boolean {
   if (a.command !== b.command) return false
   if (JSON.stringify(a.args) !== JSON.stringify(b.args)) return false
   if (JSON.stringify(a.env ?? {}) !== JSON.stringify(b.env ?? {})) return false
+  if ((a.cwd ?? '') !== (b.cwd ?? '')) return false
   if (JSON.stringify(a.allowedDirs ?? []) !== JSON.stringify(b.allowedDirs ?? [])) return false
   return true
 }
