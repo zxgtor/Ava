@@ -45,6 +45,7 @@ interface StreamChatArgs {
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
+  activeCommandInvocation?: ToolAuditCommandInvocation
   temperature?: number
   toolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
   pluginStates?: Record<string, PluginState>
@@ -202,6 +203,36 @@ interface PluginCommandArgument {
   defaultValue?: string
 }
 
+interface ToolAuditCommandInvocation {
+  pluginId: string
+  pluginName: string
+  commandName: string
+  sourcePath: string
+  arguments: Record<string, string>
+}
+
+interface ToolAuditEntry {
+  id: string
+  createdAt: number
+  streamId: string
+  taskId?: string
+  providerId: string
+  providerName: string
+  model: string
+  toolCallId: string
+  toolName: string
+  serverId?: string
+  rawToolName?: string
+  pluginId?: string
+  commandInvocation?: ToolAuditCommandInvocation
+  args: Record<string, unknown>
+  status: 'ok' | 'error' | 'aborted'
+  durationMs: number
+  isToolError?: boolean
+  error?: string
+  resultPreview?: string
+}
+
 // ── Event subscriptions (cleanup-aware) ─────────────────────────────
 function on<T>(channel: string, handler: (payload: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, payload: T) => handler(payload)
@@ -244,6 +275,13 @@ const ava = {
     listServers: (): Promise<McpServerRuntime[]> => ipcRenderer.invoke('ava:mcp:listServers'),
     restart: (serverId: string): Promise<boolean> => ipcRenderer.invoke('ava:mcp:restart', serverId),
     onStatus: (handler: (payload: McpServerRuntime) => void) => on<McpServerRuntime>('ava:mcp:status', handler),
+  },
+
+  toolAudit: {
+    list: (limit?: number): Promise<ToolAuditEntry[]> =>
+      ipcRenderer.invoke('ava:toolAudit:list', limit),
+    clear: (): Promise<boolean> =>
+      ipcRenderer.invoke('ava:toolAudit:clear'),
   },
 
   plugins: {

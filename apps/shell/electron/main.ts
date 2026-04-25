@@ -15,6 +15,7 @@ import {
 } from './llm'
 import { mcpSupervisor, type McpServerConfig } from './services/mcpSupervisor'
 import { pluginManager, type PluginState } from './services/pluginManager'
+import { toolAuditLog } from './services/toolAuditLog'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -90,6 +91,15 @@ function registerIpc(): void {
   ipcMain.handle('ava:mcp:listServers', () => mcpSupervisor.listServers())
   ipcMain.handle('ava:mcp:restart', async (_e, serverId: string) => {
     await mcpSupervisor.restart(serverId)
+    return true
+  })
+
+  // ── Tool audit log ──────────────────────────
+  ipcMain.handle('ava:toolAudit:list', async (_e, limit?: number) =>
+    toolAuditLog.list(limit),
+  )
+  ipcMain.handle('ava:toolAudit:clear', async () => {
+    await toolAuditLog.clear()
     return true
   })
 

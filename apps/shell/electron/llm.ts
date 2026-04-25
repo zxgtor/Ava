@@ -7,6 +7,7 @@
 import { WebContents } from 'electron'
 import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
 import { pluginManager, type PluginSkill, type PluginState } from './services/pluginManager'
+import { previewValue, toolAuditLog, type ToolAuditCommandInvocation } from './services/toolAuditLog'
 
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -57,6 +58,7 @@ export interface StreamChatArgs {
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
+  activeCommandInvocation?: ToolAuditCommandInvocation
   temperature?: number
   toolFormatMap?: Record<string, ToolCallFormat>
   pluginStates?: Record<string, PluginState>
@@ -729,6 +731,9 @@ async function runToolLoop(
 
       const partIndex = parts.length
       const staleReason = validateToolAgainstCurrentTask(toolCall, currentTask)
+      const resolvedTool = mcpSupervisor.resolveTool(toolCall.name)
+      const serverRuntime = resolvedTool ? mcpSupervisor.getServer(resolvedTool.serverId) : null
+      const startedAt = Date.now()
       const toolPart: ToolCallPart = {
         type: 'tool_call',
         taskId: args.activeTaskId,
@@ -736,7 +741,7 @@ async function runToolLoop(
         name: toolCall.name,
         args: toolCall.args,
         status: staleReason ? 'error' : 'running',
-        startedAt: Date.now(),
+        startedAt,
         ...(staleReason ? { endedAt: Date.now(), error: staleReason } : {}),
       }
       parts.push(toolPart)
@@ -751,6 +756,18 @@ async function runToolLoop(
       }
 
       if (staleReason) {
+        await appendToolAudit({
+          args,
+          provider,
+          model,
+          toolCall,
+          startedAt,
+          status: 'error',
+          error: staleReason,
+          serverId: resolvedTool?.serverId,
+          rawToolName: resolvedTool?.rawName,
+          pluginId: serverRuntime?.pluginId,
+        })
         workingMessages.push({
           role: 'tool',
           toolCallId: toolCall.id,
@@ -772,6 +789,22 @@ async function runToolLoop(
       else patch.error = result.error
 
       Object.assign(toolPart, patch)
+      await appendToolAudit({
+        args,
+        provider,
+        model,
+        toolCall,
+        startedAt,
+        status: result.ok
+          ? (result.isError ? 'error' : 'ok')
+          : (result.aborted ? 'aborted' : 'error'),
+        error: result.ok ? undefined : result.error,
+        result: result.ok ? result.content : undefined,
+        isToolError: result.ok ? Boolean(result.isError) : undefined,
+        serverId: resolvedTool?.serverId,
+        rawToolName: resolvedTool?.rawName,
+        pluginId: serverRuntime?.pluginId,
+      })
       if (!webContents.isDestroyed()) {
         webContents.send('ava:llm:partUpdate', {
           streamId: args.streamId,
@@ -808,6 +841,45 @@ async function runToolLoop(
     toolCallsIssued,
     loopRounds: MAX_TOOL_LOOP,
     detectedToolFormat,
+  }
+}
+
+async function appendToolAudit(input: {
+  args: StreamChatArgs
+  provider: ModelProvider
+  model: string
+  toolCall: ToolCallCandidate
+  startedAt: number
+  status: 'ok' | 'error' | 'aborted'
+  error?: string
+  result?: unknown
+  isToolError?: boolean
+  serverId?: string
+  rawToolName?: string
+  pluginId?: string
+}): Promise<void> {
+  try {
+    await toolAuditLog.append({
+      streamId: input.args.streamId,
+      taskId: input.args.activeTaskId,
+      providerId: input.provider.id,
+      providerName: input.provider.name,
+      model: input.model,
+      toolCallId: input.toolCall.id,
+      toolName: input.toolCall.name,
+      serverId: input.serverId,
+      rawToolName: input.rawToolName,
+      pluginId: input.pluginId,
+      commandInvocation: input.args.activeCommandInvocation,
+      args: input.toolCall.args,
+      status: input.status,
+      durationMs: Math.max(0, Date.now() - input.startedAt),
+      isToolError: input.isToolError,
+      error: input.error,
+      resultPreview: previewValue(input.result),
+    })
+  } catch (err) {
+    console.warn('[tool-audit] append failed:', err)
   }
 }
 

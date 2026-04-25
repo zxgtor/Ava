@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P6.4 complete (agent task model + command retry)_
+_Last updated: 2026-04-25 · P7.1 complete (tool audit log)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -46,6 +46,7 @@ _Last updated: 2026-04-25 · P6.4 complete (agent task model + command retry)_
 - [x] **P6.2 Tool-call task binding**：LLM stream 接收 active task id，renderer 只接收当前 task 的 part/update
 - [x] **P6.3 Conversation compaction**：旧任务按摘要进入上下文，当前任务原样保留，减少旧请求污染
 - [x] **P6.4 Command retry**：保存过 invocation 的用户命令消息支持一键“重跑命令”
+- [x] **P7.1 Tool audit log**：工具调用落盘到 `%APPDATA%\Ava\tool-audit-log.json`，Settings 可查看/清空最近记录
 
 ---
 
@@ -77,6 +78,7 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `storage.ts` | `loadSettings/saveSettings/loadConversations/saveConversations`，原子写（`.tmp` → `rename`） |
 | `llm.ts` | Node 端 `streamChat`：按 providers 顺序 fetch SSE，失败降级。chunk 通过 `webContents.send('ava:llm:chunk', ...)` 推给 renderer。支持 abort |
 | `services/pluginManager.ts` | P3/P4 插件管理：扫描 dev/packaged 插件目录，安装 folder/zip/git，卸载/更新，解析 manifest、skills、commands、`.mcp.json`，输出 stdio MCP server、skill context、command 内容、warnings、permissions/source |
+| `services/toolAuditLog.ts` | P7 工具审计日志：记录 tool-call 的 task、provider、server/plugin、command invocation、参数、状态、结果预览 |
 
 ### Renderer `apps/shell/src/`
 
@@ -145,6 +147,8 @@ window.ava.llm.onPart((payload: { streamId, taskId?, partIndex, part }) => void)
 window.ava.llm.onPartUpdate((payload: { streamId, taskId?, partIndex, partId?, patch }) => void): () => void
 window.ava.mcp.listServers(): Promise<McpServerRuntime[]>
 window.ava.mcp.restart(serverId): Promise<boolean>
+window.ava.toolAudit.list(limit?: number): Promise<ToolAuditEntry[]>
+window.ava.toolAudit.clear(): Promise<boolean>
 window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 ```
 
@@ -208,16 +212,15 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ---
 
-## 下一步 — P6 / 后续
+## 下一步 — P7 / 后续
 
-**P6.4 已完成**：agent 已有 task id 模型；旧任务上下文会摘要化；工具事件绑定 active task；命令消息支持重跑。
+**P7.1 已完成**：工具调用已有审计日志，Settings 可查看最近记录并清空。
 
 后续优先项：
-- P7 插件运行时安全/权限细化：更细粒度显示和限制插件 MCP 能力、cwd/env、文件访问影响
-- P7.1 Tool audit log：集中记录 tool-call 来源 task、命令、插件、结果，方便排查模型乱调工具
-- P7.2 UI 验证打磨：为 task id、命令重跑、旧请求防污染补手动验证脚本/测试清单
+- P7.2 插件运行时安全/权限细化：更细粒度显示和限制插件 MCP 能力、cwd/env、文件访问影响
+- P7.3 UI 验证打磨：为 task id、命令重跑、旧请求防污染补手动验证脚本/测试清单
 
-**推荐顺序**：**P7 audit log → P7 permission detail → UI/test cleanup**
+**推荐顺序**：**P7 permission detail → UI/test cleanup**
 
 ---
 

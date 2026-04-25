@@ -206,6 +206,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       messages,
       providers,
       activeTaskId: options.activeTaskId,
+      activeCommandInvocation: latestCommandInvocation(options.conversation),
       temperature: 0.4,
       toolFormatMap: options.settings.modelToolFormatMap,
       pluginStates: options.settings.pluginStates,
@@ -230,6 +231,14 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     offPart()
     offPartUpdate()
   }
+}
+
+function latestCommandInvocation(conversation: Conversation): CommandInvocation | undefined {
+  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
+    const message = conversation.messages[i]
+    if (message.role === 'user') return message.commandInvocation
+  }
+  return undefined
 }
 
 export function makeStreamId(): string {
