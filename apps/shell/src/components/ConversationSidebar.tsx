@@ -38,7 +38,7 @@ export function ConversationSidebar() {
   }
 
   return (
-    <div className="flex flex-col h-full w-60 flex-shrink-0 bg-bg border-r border-border-subtle">
+    <div className="flex flex-col h-full w-60 flex-shrink-0 bg-surface/30 backdrop-blur-xl border-r border-border-subtle">
       <div className="flex items-center justify-between h-11 px-3 border-b border-border-subtle">
         <span className="text-xs text-text-3 uppercase tracking-wide">对话</span>
         <button

@@ -138,12 +138,12 @@ function MessageBubbleImpl({
       </div>
       <div className={`flex flex-col max-w-[75%] min-w-0 ${isUser ? 'items-end' : 'items-start'}`}>
         <div
-          className={`relative px-4 py-2 rounded-2xl break-words text-sm leading-relaxed ${
+          className={`relative px-4 py-2.5 rounded-2xl break-words text-sm leading-relaxed glass-bubble ${
             isUser
-              ? 'bg-accent/15 text-text rounded-br-sm'
+              ? 'glass-bubble-user text-text rounded-br-sm'
               : isError
-                ? 'bg-error/15 text-error rounded-bl-sm'
-                : 'bg-surface text-text rounded-bl-sm'
+                ? 'glass-bubble-error text-error rounded-bl-sm'
+                : 'glass-bubble-ai text-text rounded-bl-sm'
           } ${isAborted ? 'border border-dashed border-border opacity-80 animate-abort-flash' : ''}`}
         >
           {message.commandInvocation && (

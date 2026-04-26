@@ -7,36 +7,114 @@
    ───────────────────────────────────────── */
 
 @theme inline {
-  /* Core surface */
-  --color-bg: #0D0D0E;
-  --color-surface: #1A1A1C;
-  --color-surface-2: #232325;
-  --color-surface-3: #2E2E30;
-  --color-border: #3A3A3C;
-  --color-border-subtle: #2A2A2C;
-
-  /* Text */
-  --color-text: #F0F0F0;
-  --color-text-2: #A1A1A3;
-  --color-text-3: #6E6E70;
-
-  /* Accent */
-  --color-accent: #6C9FFF;
-  --color-accent-2: #A78BFA;
-
-  /* Gradient */
-  --color-gradient-1: #4285F4;
-  --color-gradient-2: #A855F7;
-  --color-gradient-3: #D96570;
-
-  /* Semantic */
+  /* Default / Base Variables (Shared) */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  
   --color-success: #81C995;
   --color-warning: #FDD663;
   --color-error: #F28B82;
 
-  /* Fonts — system only, offline-safe */
-  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --color-gradient-1: #4285F4;
+  --color-gradient-2: #A855F7;
+  --color-gradient-3: #D96570;
+}
+
+:root {
+  /* Default Theme (Dark Minimal - fallback) */
+  --bg-app: #0D0D0E;
+  --bg-surface: #1A1A1C;
+  --bg-surface-hover: #232325;
+  --bg-surface-active: #2E2E30;
+  --border-main: #2A2A2C;
+  --border-strong: #3A3A3C;
+  --text-main: #F0F0F0;
+  --text-muted: #A1A1A3;
+  --text-dim: #6E6E70;
+  --accent-color: #6C9FFF;
+  --blur-main: 0px;
+  --bubble-user: var(--bg-surface-hover);
+  --bubble-ai: var(--bg-surface);
+  --glass-border: var(--border-main);
+  --glass-shadow: none;
+}
+
+[data-theme='aura-glass'] {
+  --bg-app: transparent; /* Allow aura-container to show through */
+  --bg-surface: rgba(30, 30, 35, 0.3);
+  --bg-surface-hover: rgba(50, 50, 60, 0.4);
+  --bg-surface-active: rgba(70, 70, 85, 0.5);
+  --border-main: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --text-main: #FFFFFF;
+  --text-muted: rgba(255, 255, 255, 0.7);
+  --text-dim: rgba(255, 255, 255, 0.4);
+  --accent-color: #8EB9FF;
+  --blur-main: 24px;
+  --bubble-user: rgba(126, 171, 255, 0.2);
+  --bubble-ai: rgba(255, 255, 255, 0.07);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme='nebula-clear'] {
+  --bg-app: transparent;
+  --bg-surface: rgba(255, 255, 255, 0.03);
+  --bg-surface-hover: rgba(255, 255, 255, 0.06);
+  --bg-surface-active: rgba(255, 255, 255, 0.1);
+  --border-main: rgba(255, 255, 255, 0.05);
+  --border-strong: rgba(255, 255, 255, 0.08);
+  --text-main: #FFFFFF;
+  --text-muted: rgba(255, 255, 255, 0.8);
+  --text-dim: rgba(255, 255, 255, 0.5);
+  --accent-color: #00D1FF;
+  --blur-main: 40px;
+  --bubble-user: rgba(0, 209, 255, 0.1);
+  --bubble-ai: rgba(255, 255, 255, 0.04);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.2);
+}
+
+[data-theme='cyber-zen'] {
+  --bg-app: #000000;
+  --bg-surface: #000000;
+  --bg-surface-hover: #111111;
+  --bg-surface-active: #1A1A1A;
+  --border-main: #1A1A1A;
+  --border-strong: #333333;
+  --text-main: #FFFFFF;
+  --text-muted: #888888;
+  --text-dim: #444444;
+  --accent-color: #00D1FF;
+  --blur-main: 0px;
+}
+
+[data-theme='ai-matrix'] {
+  --bg-app: #0A0F14;
+  --bg-surface: #121A21;
+  --bg-surface-hover: #1A2530;
+  --bg-surface-active: #222D3A;
+  --border-main: #1E2A35;
+  --border-strong: #2D3D4D;
+  --text-main: #E1E8ED;
+  --text-muted: #8899A6;
+  --text-dim: #506775;
+  --accent-color: #1DA1F2;
+  --blur-main: 0px;
+}
+
+/* Map Tailwind aliases to CSS variables */
+@theme inline {
+  --color-bg: var(--bg-app);
+  --color-surface: var(--bg-surface);
+  --color-surface-2: var(--bg-surface-hover);
+  --color-surface-3: var(--bg-surface-active);
+  --color-border: var(--border-strong);
+  --color-border-subtle: var(--border-main);
+  --color-text: var(--text-main);
+  --color-text-2: var(--text-muted);
+  --color-text-3: var(--text-dim);
+  --color-accent: var(--accent-color);
 }
 
 /* ── Base ── */
@@ -117,4 +195,78 @@ html, body, #root {
   -webkit-text-fill-color: transparent;
   background-clip: text;
   animation: gradient-shift 4s ease infinite;
+}
+
+.backdrop-blur-main {
+  backdrop-filter: blur(var(--blur-main));
+}
+
+.aura-container {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background: #0D0D0E;
+}
+
+.aura-sphere {
+  position: absolute;
+  filter: blur(120px);
+  opacity: 0.6;
+  border-radius: 50%;
+  animation: aura-move 25s infinite alternate ease-in-out;
+}
+
+.aura-sphere-1 {
+  width: 100vw;
+  height: 100vw;
+  top: -30%;
+  left: -30%;
+  background: radial-gradient(circle, #3B82F6 0%, transparent 80%);
+}
+
+.aura-sphere-2 {
+  width: 90vw;
+  height: 90vw;
+  bottom: -20%;
+  right: -20%;
+  background: radial-gradient(circle, #8B5CF6 0%, transparent 80%);
+  animation-delay: -7s;
+}
+
+.aura-sphere-3 {
+  width: 80vw;
+  height: 80vw;
+  top: 30%;
+  left: 20%;
+  background: radial-gradient(circle, #EC4899 0%, transparent 80%);
+  animation-delay: -12s;
+  animation-duration: 30s;
+}
+
+@keyframes aura-move {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(10%, 10%) scale(1.1); }
+  66% { transform: translate(-5%, 15%) scale(0.9); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+.glass-bubble {
+  background-color: var(--bubble-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(var(--blur-main));
+}
+
+.glass-bubble-user {
+  --bubble-bg: var(--bubble-user);
+}
+
+.glass-bubble-ai {
+  --bubble-bg: var(--bubble-ai);
+}
+
+.glass-bubble-error {
+  --bubble-bg: rgba(242, 139, 130, 0.15);
 }

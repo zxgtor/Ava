@@ -245,6 +245,7 @@ export function defaultSettings(): Settings {
       voiceId: '中文女',
       autoRead: true,
     },
+    theme: 'aura-glass',
   }
 }
 

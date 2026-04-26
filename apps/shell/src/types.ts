@@ -214,6 +214,7 @@ export interface Settings {
   /** Key = `${providerId}:${modelId}` → detected format. */
   modelToolFormatMap: Record<string, ToolCallFormat>
   voice: VoiceConfig
+  theme: 'aura-glass' | 'cyber-zen' | 'ai-matrix' | 'nebula-clear'
 }
 
 // ── View mode ───────────────────────────────────────────────────────

@@ -21,8 +21,11 @@ export function ChatHeader({
   const title = activeConversation?.title ?? 'Ava'
 
   return (
-    <div className="flex items-center justify-between h-11 px-2 border-b border-border-subtle bg-bg/60 backdrop-blur">
-      <div className="flex items-center gap-1 min-w-0">
+    <div 
+      className="flex items-center justify-between h-11 px-2 border-b border-border-subtle bg-surface/30 backdrop-blur-xl pr-32"
+      style={{ webkitAppRegion: 'drag' } as any}
+    >
+      <div className="flex items-center gap-1 min-w-0" style={{ webkitAppRegion: 'no-drag' } as any}>
         <button
           type="button"
           onClick={onToggleSidebar}
@@ -33,7 +36,7 @@ export function ChatHeader({
         </button>
         <div className="text-sm text-text-2 truncate px-2">{title}</div>
       </div>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1" style={{ webkitAppRegion: 'no-drag' } as any}>
         {activeConversation && onDeleteConversation && (
           <button
             type="button"

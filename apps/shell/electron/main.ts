@@ -31,7 +31,15 @@ function createMainWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'Ava',
-    backgroundColor: '#0D0D0E',
+    transparent: true,
+    frame: false,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#00000000',
+      symbolColor: '#ffffff',
+      height: 44
+    },
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

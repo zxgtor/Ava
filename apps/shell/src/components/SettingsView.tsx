@@ -9,6 +9,7 @@ import {
 import type { Settings } from '../types'
 
 import { PersonaSection } from './settings/PersonaSection'
+import { AppearanceSection } from './settings/AppearanceSection'
 import { ChainSection } from './settings/ChainSection'
 import { ProvidersSection } from './settings/ProvidersSection'
 import { McpSection } from './settings/McpSection'
@@ -69,6 +70,7 @@ export function SettingsView() {
 
       <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-8">
         <PersonaSection settings={state.settings} update={update} />
+        <AppearanceSection settings={state.settings} update={update} />
         <ChainSection settings={state.settings} update={update} />
         <ProvidersSection settings={state.settings} update={update} />
         <McpSection settings={state.settings} update={update} />
