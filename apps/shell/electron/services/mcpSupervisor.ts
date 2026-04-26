@@ -100,8 +100,13 @@ const CONNECT_TIMEOUT_MS = 30_000
 function resolveCommand(cmd: string): string {
   if (!IS_WIN) return cmd
   if (cmd.endsWith('.exe') || cmd.endsWith('.cmd') || cmd.endsWith('.bat')) return cmd
-  // npx / npm / yarn / pnpm etc. ship as .cmd on Windows
-  return `${cmd}.cmd`
+  // cross-spawn is used internally by StdioClientTransport, which usually handles .exe/.cmd.
+  // But for tools like npx/npm/yarn/pnpm on Windows, explicitly passing .cmd is sometimes safer.
+  // Do NOT append .cmd for 'node' because node is node.exe, not node.cmd.
+  if (['npx', 'npm', 'yarn', 'pnpm', 'corepack'].includes(cmd)) {
+    return `${cmd}.cmd`
+  }
+  return cmd
 }
 
 /** Sanitize + check allowedDirs; drops missing / non-absolute-resolvable entries. */
