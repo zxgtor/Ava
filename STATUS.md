@@ -89,6 +89,10 @@ _Last updated: 2026-04-25 · P8.4 complete (Voice Integration)_
   - 集成了 `@playwright/test` 作为 Electron 自动化测试框架
   - 编写 `e2e/tests/app.spec.ts` 验证核心 UI 的加载与渲染
   - 使用隔离的测试数据目录，避免污染本地用户配置
+- [x] **P11 Plugin Marketplace (插件市场)**：
+  - 支持从远端静态 Catalog 读取可用插件（包含 Windows MCP 和 SQLite MCP 等演示）。
+  - 支持直接在客户端一键 `git clone` 安装插件到 `user-plugins` 并自动热更新。
+  - 新增 `MarketplaceSection` UI，显示安装进度与卸载功能。
 
 ---
 

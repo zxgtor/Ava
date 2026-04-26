@@ -301,6 +301,8 @@ const ava = {
       ipcRenderer.invoke('ava:plugins:uninstall', pluginId),
     update: (pluginId: string): Promise<DiscoveredPlugin> =>
       ipcRenderer.invoke('ava:plugins:update', pluginId),
+    getMarketplaceCatalog: (): Promise<any[]> =>
+      ipcRenderer.invoke('ava:plugins:getMarketplaceCatalog'),
   },
 
   dialog: {

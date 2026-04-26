@@ -633,6 +633,28 @@ export class PluginManager {
     return view
   }
 
+  async getMarketplaceCatalog(): Promise<any[]> {
+    // For now, return a static list of catalog items.
+    return [
+      {
+        id: 'windows-mcp',
+        name: 'Windows MCP',
+        description: 'Control Windows system settings and applications via Model Context Protocol.',
+        author: 'CyanVoxel',
+        repoUrl: 'https://github.com/CyanVoxel/Windows-MCP',
+        icon: 'Monitor',
+      },
+      {
+        id: 'sqlite-mcp',
+        name: 'SQLite MCP',
+        description: 'Official Model Context Protocol server for SQLite databases.',
+        author: 'Anthropic',
+        repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite',
+        icon: 'Database',
+      }
+    ]
+  }
+
   private async load(states: Record<string, PluginState>): Promise<LoadedPlugin[]> {
     const plugins: LoadedPlugin[] = []
     for (const root of this.roots()) {

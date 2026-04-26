@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState, useEffect } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { useStore } from '../store'
 import {
@@ -14,10 +14,25 @@ import { ProvidersSection } from './settings/ProvidersSection'
 import { McpSection } from './settings/McpSection'
 import { ToolAuditSection } from './settings/ToolAuditSection'
 import { PluginsSection } from './settings/PluginsSection'
+import { MarketplaceSection } from './settings/MarketplaceSection'
 import { VoiceSection } from './settings/VoiceSection'
 
 export function SettingsView() {
   const { state, dispatch } = useStore()
+  const [localPlugins, setLocalPlugins] = useState<any[]>([])
+
+  const refreshPlugins = useCallback(async () => {
+    try {
+      const list = await window.ava.plugins.list(state.settings.pluginStates)
+      setLocalPlugins(list)
+    } catch (e) {
+      // noop
+    }
+  }, [state.settings.pluginStates])
+
+  useEffect(() => {
+    refreshPlugins()
+  }, [refreshPlugins])
 
   const update = useCallback(
     (producer: (draft: Settings) => Settings) => {
@@ -57,6 +72,12 @@ export function SettingsView() {
         <ProvidersSection settings={state.settings} update={update} />
         <McpSection settings={state.settings} update={update} />
         <ToolAuditSection />
+        <MarketplaceSection 
+          settings={state.settings} 
+          localPlugins={localPlugins} 
+          onInstall={refreshPlugins}
+          onUninstall={refreshPlugins}
+        />
         <PluginsSection settings={state.settings} update={update} />
         <VoiceSection settings={state.settings} update={update} />
       </div>
