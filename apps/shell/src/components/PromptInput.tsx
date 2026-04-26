@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react'
-import { ListPlus, Send, Star, StopCircle, Mic, Image as ImageIcon, X } from 'lucide-react'
+import { ListPlus, Send, Star, StopCircle, Mic, Image as ImageIcon, X, FileText, FileCode, File as FileIcon } from 'lucide-react'
 import type { CommandInvocation, PluginCommand } from '../types'
 
 interface Props {
@@ -15,6 +15,17 @@ interface Props {
   isRecording?: boolean
   onSttToggle?: () => void
   sttText?: string
+  externalDroppedFiles?: File[]
+}
+
+interface Attachment {
+  id: string
+  name: string
+  path: string
+  size: number
+  type: string
+  url?: string
+  content?: string
 }
 
 export function PromptInput({
@@ -30,9 +41,18 @@ export function PromptInput({
   isRecording,
   onSttToggle,
   sttText,
+  externalDroppedFiles,
 }: Props) {
   const [value, setValue] = useState('')
-  const [attachments, setAttachments] = useState<{ url: string; file: File }[]>([])
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+
+  useEffect(() => {
+    if (externalDroppedFiles && externalDroppedFiles.length > 0) {
+      for (const file of externalDroppedFiles) {
+        addAttachment(file)
+      }
+    }
+  }, [externalDroppedFiles])
 
   useEffect(() => {
     if (sttText) {
@@ -98,9 +118,23 @@ export function PromptInput({
   }, [commandQuery, commands, favoriteCommandKeys, recentCommandKeys])
 
   const submit = () => {
-    const content = value.trim()
+    let content = value.trim()
     if ((!content && attachments.length === 0) || isStreaming || disabled) return
-    onSend(content, attachments.map(a => a.url))
+
+    const images = attachments.filter(a => a.url).map(a => a.url!)
+    const files = attachments.filter(a => !a.url)
+
+    if (files.length > 0) {
+      const fileBlocks = files.map(f => {
+        if (f.content) {
+          return `\n\n--- Attached File: ${f.name} ---\n${f.content}\n--- End of File ---`
+        }
+        return `\n\n[Attached File Reference: ${f.name} (${f.path})]`
+      }).join('\n')
+      content += fileBlocks
+    }
+
+    onSend(content, images)
     setValue('')
     setAttachments([])
   }
@@ -126,18 +160,39 @@ export function PromptInput({
   }
 
   const addAttachment = (file: File) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const url = e.target?.result as string
-      if (url) {
-        setAttachments(prev => [...prev, { url, file }])
+    const id = Math.random().toString(36).slice(2, 9)
+    const { name, size, type } = file
+    const path = (file as any).path || name
+
+    if (type.startsWith('image/')) {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const url = e.target?.result as string
+        if (url) {
+          setAttachments(prev => [...prev, { id, name, size, type, path, url }])
+        }
+      }
+      reader.readAsDataURL(file)
+    } else {
+      // For text files, try to read content
+      const isText = type.startsWith('text/') || 
+                     /\.(txt|md|js|ts|tsx|json|css|py|go|rs|c|cpp|h|sh|yml|yaml|xml)$/i.test(name)
+      
+      if (isText && size < 1024 * 1024) { // Limit to 1MB
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          const content = e.target?.result as string
+          setAttachments(prev => [...prev, { id, name, size, type, path, content }])
+        }
+        reader.readAsText(file)
+      } else {
+        setAttachments(prev => [...prev, { id, name, size, type, path }])
       }
     }
-    reader.readAsDataURL(file)
   }
 
-  const removeAttachment = (index: number) => {
-    setAttachments(prev => prev.filter((_, i) => i !== index))
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id))
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -306,12 +361,24 @@ export function PromptInput({
       
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
-          {attachments.map((attachment, index) => (
-            <div key={index} className="relative group">
-              <img src={attachment.url} alt="attachment" className="w-16 h-16 object-cover rounded-md border border-border-subtle" />
+          {attachments.map((attachment) => (
+            <div key={attachment.id} className="relative group max-w-[200px]">
+              {attachment.url ? (
+                <img src={attachment.url} alt="attachment" className="w-16 h-16 object-cover rounded-md border border-border-subtle" />
+              ) : (
+                <div className="flex items-center gap-2 p-2 bg-surface-2 border border-border-subtle rounded-md pr-6">
+                  <div className="p-1.5 bg-bg rounded text-text-3">
+                    {attachment.name.match(/\.(js|ts|tsx|jsx|py|go|rs|c|cpp)$/i) ? <FileCode size={16} /> : <FileText size={16} />}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-text font-medium truncate">{attachment.name}</div>
+                    <div className="text-[9px] text-text-3">{(attachment.size / 1024).toFixed(1)} KB</div>
+                  </div>
+                </div>
+              )}
               <button
                 type="button"
-                onClick={() => removeAttachment(index)}
+                onClick={() => removeAttachment(attachment.id)}
                 className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-surface-2 border border-border-subtle rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-error/10 hover:text-error hover:border-error/20"
               >
                 <X size={12} />

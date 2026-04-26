@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { Upload } from 'lucide-react'
 import { useStore } from '../store'
 import { ChatHeader } from './ChatHeader'
 import { EmptyState } from './EmptyState'
@@ -46,6 +47,8 @@ export function ChatView() {
   const [sttClient, setSttClient] = useState<STTClient | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [sttText, setSttText] = useState<string | undefined>(undefined)
+  const [isDragging, setIsDragging] = useState(false)
+  const [droppedFiles, setDroppedFiles] = useState<File[]>([])
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const hasProvider = useMemo(
@@ -301,6 +304,30 @@ export function ChatView() {
     dispatch({ type: 'SET_SIDEBAR', open: !state.sidebarOpen })
   }, [dispatch, state.sidebarOpen])
 
+  const handleDragOver = (e: DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: DragEvent) => {
+    e.preventDefault()
+    // Only set dragging false if we actually leave the container (not entering a child)
+    if (e.currentTarget === e.target) {
+      setIsDragging(false)
+    }
+  }
+
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length > 0) {
+      setDroppedFiles(files)
+      // Reset after a tick to allow PromptInput to see the change
+      setTimeout(() => setDroppedFiles([]), 100)
+    }
+  }
+
   const handleRetry = useCallback(
     async (failedId: string) => {
       if (!activeConversation || isStreaming) return
@@ -364,7 +391,21 @@ export function ChatView() {
   const showEmpty = !activeConversation || messages.length === 0
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div 
+      className="flex flex-col flex-1 min-h-0 relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-bg/80 backdrop-blur-sm border-2 border-dashed border-accent m-4 rounded-3xl pointer-events-none transition-all animate-in fade-in zoom-in duration-200">
+          <div className="w-20 h-20 bg-accent/10 rounded-full flex items-center justify-center text-accent mb-4">
+            <Upload size={32} className="animate-bounce" />
+          </div>
+          <div className="text-xl font-medium text-text">释放以添加文件</div>
+          <div className="text-sm text-text-3 mt-1">支持图片、文档、代码等</div>
+        </div>
+      )}
       <ChatHeader
         activeConversation={activeConversation}
         sidebarOpen={state.sidebarOpen}
@@ -423,6 +464,7 @@ export function ChatView() {
         isRecording={isRecording}
         onSttToggle={toggleStt}
         sttText={sttText}
+        externalDroppedFiles={droppedFiles}
       />
     </div>
   )
