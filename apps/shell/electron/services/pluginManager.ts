@@ -52,7 +52,9 @@ export interface PluginMcpServerView {
   status: 'loaded' | 'unsupported' | 'invalid'
   command?: string
   args?: string[]
+  envKeys?: string[]
   cwd?: string
+  cwdInsidePlugin?: boolean
   error?: string
 }
 
@@ -438,23 +440,42 @@ function parseMcpServers(pluginId: string, rootPath: string, manifestName: strin
     }
     const serverId = `${pluginId}-${sanitizeId(name) || 'server'}`
     const cwd = typeof spec.cwd === 'string' && spec.cwd.trim() ? resolve(rootPath, spec.cwd) : rootPath
+    const cwdInsidePlugin = isInside(rootPath, cwd)
+    if (!cwdInsidePlugin) {
+      const error = `cwd resolves outside plugin root: ${cwd}`
+      warnings.push(`MCP server "${name}" ${error}`)
+      views.push({
+        name,
+        type: 'stdio',
+        status: 'invalid',
+        command: spec.command,
+        args: Array.isArray(spec.args) ? spec.args.map(String) : [],
+        envKeys: isRecord(spec.env) ? Object.keys(spec.env) : [],
+        cwd,
+        cwdInsidePlugin,
+        error,
+      })
+      continue
+    }
     const args = Array.isArray(spec.args) ? spec.args.map(String) : []
+    const env = isRecord(spec.env) ? Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, String(v)])) : undefined
+    const envKeys = env ? Object.keys(env) : []
     servers.push({
       id: serverId,
       name: `${manifestName}: ${name}`,
       command: spec.command,
       args,
-      env: isRecord(spec.env) ? Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, String(v)])) : undefined,
+      env,
       cwd,
       enabled: true,
       builtin: false,
       pluginId,
     })
-    views.push({ id: serverId, name, type: 'stdio', status: 'loaded', command: spec.command, args, cwd })
+    views.push({ id: serverId, name, type: 'stdio', status: 'loaded', command: spec.command, args, envKeys, cwd, cwdInsidePlugin })
     permissions.push(`Starts MCP process: ${spec.command}${args.length ? ` ${args.join(' ')}` : ''}`)
     permissions.push(`MCP working directory: ${cwd}`)
-    if (isRecord(spec.env) && Object.keys(spec.env).length > 0) {
-      permissions.push(`Sets environment variables: ${Object.keys(spec.env).join(', ')}`)
+    if (envKeys.length > 0) {
+      permissions.push(`Sets environment variables: ${envKeys.join(', ')}`)
     }
   }
 

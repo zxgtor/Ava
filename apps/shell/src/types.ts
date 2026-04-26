@@ -145,7 +145,9 @@ export interface PluginMcpServerView {
   status: 'loaded' | 'unsupported' | 'invalid'
   command?: string
   args?: string[]
+  envKeys?: string[]
   cwd?: string
+  cwdInsidePlugin?: boolean
   error?: string
 }
 

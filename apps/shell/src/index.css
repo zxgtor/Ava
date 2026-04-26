@@ -89,6 +89,26 @@ html, body, #root {
   animation: fade-in 0.35s ease-out forwards;
 }
 
+/* ── Abort flash (plays once on interrupt) ── */
+@keyframes abort-flash {
+  0% { border-color: var(--color-error); box-shadow: 0 0 8px rgba(242, 139, 130, 0.3); }
+  100% { border-color: var(--color-border); box-shadow: none; }
+}
+
+.animate-abort-flash {
+  animation: abort-flash 0.6s ease-out forwards;
+}
+
+/* ── Tool running pulse ── */
+@keyframes tool-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-tool-pulse {
+  animation: tool-pulse 1.5s ease-in-out infinite;
+}
+
 /* ── Gradient Text ── */
 .gradient-text {
   background: linear-gradient(135deg, var(--color-gradient-1), var(--color-gradient-2), var(--color-gradient-3));

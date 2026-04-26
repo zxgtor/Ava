@@ -1,7 +1,7 @@
 # Ava Architecture
 
-_Last updated: 2026-04-23_
-_Current phase: end of P1 (chat + LLM + persistence)_
+_Last updated: 2026-04-25_
+_Current phase: P7.3 complete (UI polish + SettingsView refactor)_
 
 > For current progress, pending work, and handoff info see **STATUS.md**.
 > This file holds the long-term plan. Update it only when the plan changes.
@@ -29,17 +29,27 @@ D:\Apps\Ava\
 │       └── src/
 │           ├── App.tsx                 Store + view 切换
 │           ├── main.tsx                React 入口
-│           ├── index.css               Tailwind 4 + @theme tokens
+│           ├── index.css               Tailwind 4 + @theme tokens + animations
 │           ├── env.d.ts                window.ava 类型声明
-│           ├── types.ts                Message / Conversation / Settings
+│           ├── types.ts                Message / Conversation / Settings / Plugin
 │           ├── store.tsx               reducer + Context + 自动持久化
 │           ├── components/
 │           │   ├── ChatView.tsx
 │           │   ├── ChatHeader.tsx
 │           │   ├── MessageBubble.tsx
+│           │   ├── ToolCallBubble.tsx
 │           │   ├── PromptInput.tsx
 │           │   ├── EmptyState.tsx
-│           │   └── SettingsView.tsx
+│           │   ├── ConversationSidebar.tsx
+│           │   ├── SettingsView.tsx        Layout shell (delegates to settings/*)
+│           │   └── settings/
+│           │       ├── shared.tsx          Toggle / LabeledInput / ModelChips
+│           │       ├── PersonaSection.tsx
+│           │       ├── ChainSection.tsx
+│           │       ├── ProvidersSection.tsx
+│           │       ├── McpSection.tsx
+│           │       ├── ToolAuditSection.tsx
+│           │       └── PluginsSection.tsx
 │           └── lib/
 │               ├── llm/providers.ts    10 家 provider 默认 + chain 规范化
 │               └── agent/chat.ts       对话发送粘合层
@@ -89,12 +99,14 @@ apps/shell/src/
 |---|---|---|---|
 | **P0** | 脚手架：Electron 窗口、npm workspaces、Git 新库 | ✅ | 完成 2026-04-22 |
 | **P1** | 聊天 + LLM：多 provider + fallback + 流式 + 持久化 | ✅ | 完成 2026-04-23 |
-| P1.5 | 打磨：会话列表、Markdown、中断、重试、Anthropic adapter | ⏸ 待定 | 见 STATUS.md |
-| P2 | MCP 客户端：主进程 spawn MCP 子进程、Agent 拿到 tools | ⏳ 下一步候选 | 3-5 天 |
-| P3 | 插件运行时：发现 `user-plugins/*`、解析 plugin.json、启用/禁用真杀进程 | | 5-7 天 |
-| P4 | 插件管理 UI + 市场：本地装 + Git URL 装 + marketplace.json 浏览 | | 5-7 天 |
-| P5 | Command + Hook：slash 命令分发 | | 2-3 天 |
-| P6+ | 生态实战：跑 anthropics/knowledge-work-plugins；写 Voice MCP、Knowledge MCP | | 持续 |
+| **P1.5** | 打磨：会话列表、Markdown、中断反馈、重试、Anthropic adapter | ✅ | 完成 |
+| **P2** | MCP 客户端 + Filesystem Server + Agent tool-use loop | ✅ | 完成 |
+| **P3** | 插件发现 / 启用 / MCP 接入 / skills 注入 / commands | ✅ | 完成 |
+| **P4** | 插件安装 / 更新 / 卸载（本地 + zip + git） | ✅ | 完成 |
+| **P5** | Command frontmatter / schema / 参数表单 / 历史收藏 | ✅ | 完成 |
+| **P6** | Task ID / Tool-call binding / Compaction / Command retry | ✅ | 完成 |
+| **P7** | Tool audit log / 插件运行时安全 / 权限细化 / UI 打磨 | ✅ | 完成 |
+| P8+ | 生态实战：Voice MCP、Knowledge MCP、marketplace | | 持续 |
 
 ## 核心决策记录
 

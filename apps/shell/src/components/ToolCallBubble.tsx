@@ -71,9 +71,9 @@ export function ToolCallBubble({ part }: { part: ToolCallPart }) {
         className="w-full flex items-start gap-2 px-3 py-2 text-left cursor-pointer"
       >
         {open ? <ChevronDown size={14} className="mt-0.5" /> : <ChevronRight size={14} className="mt-0.5" />}
-        <Wrench size={14} className="mt-0.5 flex-shrink-0" />
+        <Wrench size={14} className={`mt-0.5 flex-shrink-0 ${part.status === 'running' ? 'animate-tool-pulse' : ''}`} />
         <div className="min-w-0 flex-1">
-          <div className="font-mono text-xs break-all">{part.name}</div>
+          <div className={`font-mono text-xs break-all ${part.status === 'aborted' ? 'line-through' : ''}`}>{part.name}</div>
           {!open && (
             <div className="mt-0.5 text-[11px] text-text-3 break-all">
               {errorKind ? `${errorKind}: ${part.error}` : shortArgs}

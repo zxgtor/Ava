@@ -79,7 +79,7 @@ function MessageBubbleImpl({
               : isError
                 ? 'bg-error/15 text-error rounded-bl-sm'
                 : 'bg-surface text-text rounded-bl-sm'
-          } ${isAborted ? 'border border-dashed border-border' : ''}`}
+          } ${isAborted ? 'border border-dashed border-border opacity-80 animate-abort-flash' : ''}`}
         >
           {message.commandInvocation && (
             <div className="mb-2 inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-text-3">
@@ -107,7 +107,7 @@ function MessageBubbleImpl({
               <button
                 type="button"
                 onClick={onCommandRetry}
-                className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-text-3 rounded cursor-pointer hover:text-accent hover:bg-accent/10"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 transition-colors"
                 title="重新执行命令"
               >
                 <RotateCw size={12} />
@@ -118,7 +118,7 @@ function MessageBubbleImpl({
               <button
                 type="button"
                 onClick={onRetry}
-                className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-text-3 rounded cursor-pointer hover:text-accent hover:bg-accent/10"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 transition-colors"
                 title="重新生成"
               >
                 <RotateCw size={12} />

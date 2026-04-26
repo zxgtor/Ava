@@ -306,7 +306,17 @@ export function ChatView() {
     [activeConversation, isStreaming, runSend],
   )
 
-  const messages = activeConversation?.messages ?? []
+  const messages = (activeConversation?.messages ?? []).filter(m => {
+    // Skip ghost assistant messages: empty content, not streaming, no error/abort
+    if (
+      m.role === 'assistant' &&
+      !m.streaming &&
+      !m.error &&
+      !m.aborted &&
+      m.content.length === 0
+    ) return false
+    return true
+  })
   const showEmpty = !activeConversation || messages.length === 0
 
   return (

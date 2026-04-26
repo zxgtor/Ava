@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P7.1 complete (tool audit log)_
+_Last updated: 2026-04-25 · P7.3 complete (UI polish + SettingsView refactor)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -47,6 +47,14 @@ _Last updated: 2026-04-25 · P7.1 complete (tool audit log)_
 - [x] **P6.3 Conversation compaction**：旧任务按摘要进入上下文，当前任务原样保留，减少旧请求污染
 - [x] **P6.4 Command retry**：保存过 invocation 的用户命令消息支持一键“重跑命令”
 - [x] **P7.1 Tool audit log**：工具调用落盘到 `%APPDATA%\Ava\tool-audit-log.json`，Settings 可查看/清空最近记录
+- [x] **P7.2 插件运行时安全/权限细化**：插件 MCP `cwd` 不允许逃出插件目录；Settings 展示 command/args/cwd/env keys/runtime tools
+- [x] **P7.3 UI 打磨 + SettingsView 拆分**：
+  - aborted 消息 flash 动画 + 半透明减权
+  - 重试/重跑命令按钮升级为 pill 样式（accent 背景圆角按钮）
+  - ToolCallBubble running 状态脉冲动画 + aborted 删除线
+  - 空 assistant 消息过滤（防止空气泡）
+  - 侧边栏 active 对话左侧 accent 色条
+  - SettingsView 从 1069 行拆为 7 个 settings/ 子模块
 
 ---
 
@@ -67,7 +75,7 @@ npm run dev --workspace=@ava/shell       # 开发模式
 
 ---
 
-## 文件地图（P1 写入的全部代码）
+## 文件地图（P0–P7 写入的全部代码）
 
 ### 主进程 `apps/shell/electron/`
 
@@ -86,20 +94,28 @@ npm run dev --workspace=@ava/shell       # 开发模式
 |---|---|
 | `App.tsx` | `StoreProvider` + 根据 `viewMode` 切 ChatView / SettingsView |
 | `main.tsx` | React 入口 |
-| `index.css` | Tailwind 4 `@theme inline` tokens + 滚动条 + `gradient-text` + `streaming-dot` 动画 |
+| `index.css` | Tailwind 4 `@theme inline` tokens + 滚动条 + `gradient-text` + `streaming-dot` + `abort-flash` + `tool-pulse` 动画 |
 | `env.d.ts` | `window.ava: AvaApi`（从 preload 类型推导） |
-| `types.ts` | `Message` / `Conversation` / `ModelProvider` / `Settings` / `ViewMode` |
+| `types.ts` | `Message` / `Conversation` / `ModelProvider` / `Settings` / `ViewMode` / `DiscoveredPlugin` / `PluginCommand` |
 | `store.tsx` | `useReducer` + Context。Actions：HYDRATE / SET_VIEW / CREATE/SELECT/DELETE/RENAME_CONVERSATION / ADD/UPDATE/APPEND_DELTA/DELETE_MESSAGE / UPDATE_SETTINGS。Mount 时 hydrate，state 变更 debounce 300-400ms 后 save |
 | `lib/llm/providers.ts` | 10 家 provider 默认配置；`mergeModelProviders` / `normalizeProviderChain` / `getEnabledProviders` / `chatCompletionsEndpoint` / `modelsEndpoint` / `defaultSettings` |
-| `lib/agent/chat.ts` | `sendChat`：拼 system prompt + 消息 → 调 `window.ava.llm.stream` → onDelta 回调。提供 `makeStreamId` / `makeMessageId` / `makeUserMessage` / `makeAssistantPlaceholder` |
-| `components/ChatView.tsx` | 消息列表 + 自动滚动 + 调度 sendChat（发送、流式、停止、删除消息、删除对话、新对话、进设置） |
+| `lib/agent/chat.ts` | `sendChat`：拼 system prompt + 消息 → 调 `window.ava.llm.stream` → onDelta 回调。提供 `makeStreamId` / `makeMessageId` / `makeTaskId` / `makeUserMessage` / `makeAssistantPlaceholder` |
+| `components/ChatView.tsx` | 消息列表 + 自动滚动 + 调度 sendChat（发送、流式、停止、删除消息、删除对话、新对话、进设置）+ 空消息过滤 |
 | `components/ChatHeader.tsx` | 顶部 bar：标题 / 删对话 / 新对话 / 进设置。高度 `h-11`，无自绘窗控（系统边框） |
-| `components/MessageBubble.tsx` | 单条消息渲染。streaming 时右侧三个点动画。支持 delete（hover 出现）。assistant 走 `MarkdownContent` |
-| `components/MarkdownContent.tsx` | react-markdown + remark-gfm + rehype-highlight（P1.5 补） |
-| `components/ConversationSidebar.tsx` | 会话列表，按 updatedAt 倒序，支持选中/重命名/删除（P1.5 补） |
-| `components/PromptInput.tsx` | textarea 自增高（max 220px）+ Enter 发送 / Shift+Enter 换行 + streaming 时切 StopCircle。禁用态显示 reason |
+| `components/MessageBubble.tsx` | 单条消息渲染。streaming 三点动画、aborted flash 动画 + 半透明、retry pill 按钮。assistant 走 `MarkdownContent` |
+| `components/ToolCallBubble.tsx` | 工具调用卡片：running 脉冲、aborted 删除线、error 分类、参数/结果折叠 |
+| `components/MarkdownContent.tsx` | react-markdown + remark-gfm + rehype-highlight |
+| `components/ConversationSidebar.tsx` | 会话列表，按 updatedAt 倒序，active accent 色条，支持选中/重命名/删除 |
+| `components/PromptInput.tsx` | textarea 自增高（max 220px）+ Enter 发送 / Shift+Enter 换行 + streaming 时切 StopCircle + `/` 命令面板。禁用态显示 reason |
 | `components/EmptyState.tsx` | 首次进入：gradient "你好 {userName}" + 4 个快速 prompt chips |
-| `components/SettingsView.tsx` | 设置页：Persona / Chain / Providers / MCP Servers / Plugins |
+| `components/SettingsView.tsx` | Layout shell（~70 行），import settings/* 各 section |
+| `components/settings/shared.tsx` | Toggle / LabeledInput / ModelChips 共用组件 |
+| `components/settings/PersonaSection.tsx` | 用户 / 助手名字 |
+| `components/settings/ChainSection.tsx` | 主回退链排序管理 |
+| `components/settings/ProvidersSection.tsx` | Provider 配置 + 探测 |
+| `components/settings/McpSection.tsx` | MCP Server 白名单 / 重启 |
+| `components/settings/ToolAuditSection.tsx` | Tool audit log 查看 / 清空 |
+| `components/settings/PluginsSection.tsx` | 插件列表 / 安装 / 卸载 / 更新 / 权限 |
 
 ### 工作空间根
 
@@ -214,13 +230,12 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ## 下一步 — P7 / 后续
 
-**P7.1 已完成**：工具调用已有审计日志，Settings 可查看最近记录并清空。
+**P7.2 已完成**：插件 MCP 运行时权限信息更透明，且阻止插件把 MCP `cwd` 指到插件目录之外。
 
 后续优先项：
-- P7.2 插件运行时安全/权限细化：更细粒度显示和限制插件 MCP 能力、cwd/env、文件访问影响
 - P7.3 UI 验证打磨：为 task id、命令重跑、旧请求防污染补手动验证脚本/测试清单
 
-**推荐顺序**：**P7 permission detail → UI/test cleanup**
+**推荐顺序**：**P7 UI/test cleanup**
 
 ---
 

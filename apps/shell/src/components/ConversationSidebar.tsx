@@ -127,8 +127,8 @@ function ConversationRow({ conversation, active, onSelect, onDelete, onRename }:
         editing
           ? 'bg-surface-2 cursor-default'
           : active
-            ? 'bg-surface-2 cursor-pointer'
-            : 'cursor-pointer hover:bg-surface'
+            ? 'bg-surface-2 cursor-pointer border-l-2 border-accent'
+            : 'cursor-pointer hover:bg-surface border-l-2 border-transparent'
       }`}
     >
       {editing ? (
