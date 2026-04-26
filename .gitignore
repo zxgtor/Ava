@@ -6,6 +6,9 @@ out/
 .eslintcache
 *.log
 
+# Electron-builder
+*.blockmap
+
 # OS / IDE
 .DS_Store
 Thumbs.db
@@ -27,7 +30,6 @@ _reference/
 
 # Logs
 logs/
-*.log
 
 # Architecture scratchpad
 .tmp-*

@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P8.1 complete (ava-core built-in plugin)_
+_Last updated: 2026-04-25 · P8.2 complete (production build)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -59,6 +59,13 @@ _Last updated: 2026-04-25 · P8.1 complete (ava-core built-in plugin)_
   - 6 个实用命令：code-explain / summarize / translate / rewrite / review / debug
   - 1 个 skill：response-style（回复风格指引）
   - bundled 插件默认启用（新安装开箱即用）
+- [x] **P8.2 Production Build**：
+  - electron-builder 集成（NSIS installer + portable）
+  - `npm run pack` 打包到 `dist/win-unpacked/`
+  - `npm run dist` 生成安装包
+  - App icon 生成 + 放入 build/
+  - plugins/ 作为 extraResources 打入安装包
+  - electron 版本钉定为 41.3.0
 
 ---
 

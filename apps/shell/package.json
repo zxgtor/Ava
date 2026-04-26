@@ -3,36 +3,76 @@
   "version": "0.0.1",
   "private": true,
   "description": "Ava desktop shell — chat UI + plugin host.",
+  "author": "Ava Team",
+  "productName": "Ava",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "start": "electron .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder"
   },
   "dependencies": {
-    "@ava/plugin-sdk": "*",
     "@ava/mcp": "*",
+    "@ava/plugin-sdk": "*",
     "@electron-toolkit/utils": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
+    "highlight.js": "^11.11.1",
     "lucide-react": "^0.460.0",
     "react-markdown": "^9.0.1",
-    "remark-gfm": "^4.0.0",
     "rehype-highlight": "^7.0.1",
-    "highlight.js": "^11.11.1"
+    "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.0.0",
-    "electron": "^41.2.0",
+    "electron": "41.3.0",
+    "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0"
+  },
+  "build": {
+    "appId": "com.ava.desktop",
+    "productName": "Ava",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../plugins",
+        "to": "plugins",
+        "filter": ["**/*", "!**/.gitkeep"]
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
   }
 }
