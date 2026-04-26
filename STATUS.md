@@ -80,6 +80,11 @@ _Last updated: 2026-04-25 · P8.4 complete (Voice Integration)_
   - `voiceClient.ts`：管理 WebSocket STT 与 HTTP TTS (Blob 播放)
   - ChatInput 新增 Mic 图标，录音时显示脉冲动画并实时填入文本
   - MessageBubble 增加喇叭图标可重新播放 TTS，流式结束后支持 Auto-Read
+- [x] **P9 Vision Integration (多模态视觉)**：
+  - `ContentPart` 支持 `image_url`
+  - OpenAI / Anthropic 协议完美兼容图片 Base64 传递
+  - UI `PromptInput.tsx` 支持直接拖拽或粘贴本地图片
+  - 图片预览/删除，并在 `MessageBubble` 渲染图片
 
 ---
 

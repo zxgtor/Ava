@@ -15,7 +15,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 // ── Type mirror (kept minimal — renderer has its own types.ts) ──────
 interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
   taskId?: string
   toolCallId?: string
 }

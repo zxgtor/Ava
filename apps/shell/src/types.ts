@@ -25,7 +25,14 @@ export interface ToolCallPart {
   endedAt?: number
 }
 
-export type ContentPart = TextPart | ToolCallPart
+export interface ImagePart {
+  type: 'image_url'
+  image_url: {
+    url: string
+  }
+}
+
+export type ContentPart = TextPart | ToolCallPart | ImagePart
 
 // ── Message / Conversation ──────────────────────────────────────────
 

@@ -38,6 +38,13 @@ function renderParts(parts: ContentPart[], opts: { isUser: boolean; isError: boo
       if (!part.text) return <span key={idx} />
       return <MarkdownContent key={idx} content={part.text} />
     }
+    if (part.type === 'image_url') {
+      return (
+        <div key={idx} className="my-2">
+          <img src={part.image_url.url} alt="attachment" className="max-w-full max-h-64 object-contain rounded-lg border border-border-subtle" />
+        </div>
+      )
+    }
     // tool_call
     return <ToolCallBubble key={idx} part={part} />
   })

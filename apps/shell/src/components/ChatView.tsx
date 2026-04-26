@@ -229,9 +229,9 @@ export function ChatView() {
   )
 
   const runSend = useCallback(
-    async (content: string, conversation: Conversation, commandInvocation?: CommandInvocation) => {
+    async (content: string, attachments: string[] = [], conversation: Conversation, commandInvocation?: CommandInvocation) => {
       const taskId = makeTaskId()
-      const userMsg = makeUserMessage(content, commandInvocation, taskId)
+      const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments)
       const placeholder = makeAssistantPlaceholder(taskId)
       const conversationId = conversation.id
 
@@ -255,9 +255,9 @@ export function ChatView() {
   )
 
   const handleSend = useCallback(
-    (content: string, commandInvocation?: CommandInvocation) => {
+    (content: string, attachments?: string[], commandInvocation?: CommandInvocation) => {
       const conversation = activeConversation ?? createConversation()
-      runSend(content, conversation, commandInvocation)
+      runSend(content, attachments ?? [], conversation, commandInvocation)
     },
     [activeConversation, createConversation, runSend],
   )
@@ -345,7 +345,7 @@ export function ChatView() {
       if (!message || message.role !== 'user' || !message.commandInvocation) return
       const content = partsToText(message.content)
       if (!content.trim()) return
-      await runSend(content, activeConversation, message.commandInvocation)
+      await runSend(content, [], activeConversation, message.commandInvocation)
     },
     [activeConversation, isStreaming, runSend],
   )

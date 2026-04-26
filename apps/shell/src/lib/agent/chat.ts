@@ -78,7 +78,7 @@ function summarizeHistoricalMessage(message: Message, includeUserHistory: boolea
 
 interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
   taskId?: string
   toolCallId?: string
 }
@@ -129,10 +129,20 @@ function conversationToLlmMessages(
       continue
     }
     const text = partsToText(m.content)
-    if (!text.trim() && !m.streaming) continue
+    const imageParts = m.content.filter((p): p is Extract<ContentPart, { type: 'image_url' }> => p.type === 'image_url')
+    if (!text.trim() && !m.streaming && imageParts.length === 0) continue
+    
+    let content: LlmMessage['content'] = text
+    if (isActiveTask && m.role === 'user' && imageParts.length > 0) {
+      content = [
+        { type: 'text', text },
+        ...imageParts.map(p => ({ type: 'image_url' as const, image_url: { url: p.image_url.url } }))
+      ]
+    }
+
     messages.push({
       role: m.role,
-      content: text,
+      content,
       taskId: m.taskId,
       ...(m.role === 'tool' && m.toolCallId ? { toolCallId: m.toolCallId } : {}),
     })
@@ -253,12 +263,21 @@ export function makeTaskId(): string {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function makeUserMessage(content: string, commandInvocation?: CommandInvocation, taskId = makeTaskId()): Message {
+export function makeUserMessage(
+  content: string,
+  commandInvocation?: CommandInvocation,
+  taskId = makeTaskId(),
+  attachments: string[] = []
+): Message {
+  const parts: ContentPart[] = [{ type: 'text', text: content }]
+  for (const url of attachments) {
+    parts.push({ type: 'image_url', image_url: { url } })
+  }
   return {
     id: makeMessageId(),
     taskId,
     role: 'user',
-    content: [{ type: 'text', text: content }],
+    content: parts,
     createdAt: Date.now(),
     commandInvocation,
   }

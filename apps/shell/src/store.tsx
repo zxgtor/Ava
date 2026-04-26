@@ -336,6 +336,12 @@ function sanitizeContentPart(raw: unknown): ContentPart | null {
       endedAt: typeof p.endedAt === 'number' ? p.endedAt : undefined,
     }
   }
+  if (p.type === 'image_url') {
+    const inner = p.image_url as Record<string, unknown>
+    if (inner && typeof inner.url === 'string') {
+      return { type: 'image_url', image_url: { url: inner.url } }
+    }
+  }
   return null
 }
 

@@ -9,9 +9,11 @@ import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
 import { pluginManager, type PluginSkill, type PluginState } from './services/pluginManager'
 import { previewValue, toolAuditLog, type ToolAuditCommandInvocation } from './services/toolAuditLog'
 
+export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
+
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  content: string | LlmMessagePart[]
   taskId?: string
   toolCallId?: string
   toolCalls?: ToolCallCandidate[]
@@ -149,7 +151,11 @@ function toolKey(providerId: string, model: string): string {
 
 function latestUserRequest(messages: LlmMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === 'user') return messages[i].content
+    if (messages[i].role === 'user') {
+      const c = messages[i].content
+      if (typeof c === 'string') return c
+      return c.filter(p => p.type === 'text').map(p => (p as { text: string }).text).join('')
+    }
   }
   return ''
 }
@@ -551,14 +557,29 @@ async function streamAnthropic(
   const endpoint = anthropicMessagesEndpoint(provider.baseUrl)
 
   const systemParts: string[] = []
-  const chat: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  const chat: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
   for (const m of args.messages) {
     if (m.role === 'system') {
-      if (m.content) systemParts.push(m.content)
+      if (typeof m.content === 'string' && m.content) systemParts.push(m.content)
     } else if (m.role === 'tool') {
-      chat.push({ role: 'user', content: `Tool result for ${m.toolCallId ?? 'tool'}:\n${m.content}` })
+      chat.push({ role: 'user', content: `Tool result for ${m.toolCallId ?? 'tool'}:\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}` })
     } else {
-      chat.push({ role: m.role, content: m.content })
+      if (typeof m.content === 'string') {
+        chat.push({ role: m.role, content: m.content })
+      } else {
+        const parts = m.content.map(p => {
+          if (p.type === 'text') return { type: 'text', text: p.text }
+          if (p.type === 'image_url') {
+            const match = p.image_url.url.match(/^data:(image\/[a-zA-Z+]+);base64,(.*)$/)
+            if (match) {
+              return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } }
+            }
+            return { type: 'text', text: `[Image at ${p.image_url.url}]` }
+          }
+          return null
+        }).filter(Boolean)
+        chat.push({ role: m.role, content: parts })
+      }
     }
   }
 

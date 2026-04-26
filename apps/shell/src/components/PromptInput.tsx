@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { ListPlus, Send, Star, StopCircle, Mic } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react'
+import { ListPlus, Send, Star, StopCircle, Mic, Image as ImageIcon, X } from 'lucide-react'
 import type { CommandInvocation, PluginCommand } from '../types'
 
 interface Props {
-  onSend: (content: string, commandInvocation?: CommandInvocation) => void
+  onSend: (content: string, attachments?: string[], commandInvocation?: CommandInvocation) => void
   onStop?: () => void
   isStreaming: boolean
   disabled?: boolean
@@ -32,6 +32,7 @@ export function PromptInput({
   sttText,
 }: Props) {
   const [value, setValue] = useState('')
+  const [attachments, setAttachments] = useState<{ url: string; file: File }[]>([])
 
   useEffect(() => {
     if (sttText) {
@@ -98,9 +99,45 @@ export function PromptInput({
 
   const submit = () => {
     const content = value.trim()
-    if (!content || isStreaming || disabled) return
-    onSend(content)
+    if ((!content && attachments.length === 0) || isStreaming || disabled) return
+    onSend(content, attachments.map(a => a.url))
     setValue('')
+    setAttachments([])
+  }
+
+  const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) addAttachment(file)
+      }
+    }
+  }
+
+  const handleDrop = (e: DragEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const files = e.dataTransfer.files
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      if (file.type.startsWith('image/')) addAttachment(file)
+    }
+  }
+
+  const addAttachment = (file: File) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const url = e.target?.result as string
+      if (url) {
+        setAttachments(prev => [...prev, { url, file }])
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const removeAttachment = (index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index))
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -156,12 +193,15 @@ export function PromptInput({
       '',
     ].filter(Boolean).join('\n')
     const content = value.trim() ? `${value.trim()}\n\n${block}` : block
+    
     setRecentCommandKeys(current => {
       const next = [key, ...current.filter(item => item !== key)].slice(0, 8)
       window.localStorage.setItem('ava.recentPluginCommands', JSON.stringify(next))
       return next
     })
-    onSend(content, {
+    setSelectedCommand(null)
+    setCommandArgs({})
+    onSend(content, undefined, {
       pluginId: command.pluginId,
       pluginName: command.pluginName,
       commandName: command.name,
@@ -169,8 +209,7 @@ export function PromptInput({
       arguments: commandArgs,
     })
     setValue('')
-    setSelectedCommand(null)
-    setCommandArgs({})
+    setAttachments([])
     setCommandQuery('')
   }
 
@@ -189,6 +228,8 @@ export function PromptInput({
     <form
       onSubmit={handleFormSubmit}
       className="px-6 pt-2 pb-4 relative"
+      onDrop={handleDrop}
+      onDragOver={e => e.preventDefault()}
     >
       {commandsOpen && (
         <div className="absolute left-6 right-6 bottom-[5.25rem] z-10 max-h-72 overflow-y-auto rounded-xl border border-border-subtle bg-surface shadow-2xl">
@@ -262,6 +303,24 @@ export function PromptInput({
           )}
         </div>
       )}
+      
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {attachments.map((attachment, index) => (
+            <div key={index} className="relative group">
+              <img src={attachment.url} alt="attachment" className="w-16 h-16 object-cover rounded-md border border-border-subtle" />
+              <button
+                type="button"
+                onClick={() => removeAttachment(index)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-surface-2 border border-border-subtle rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-error/10 hover:text-error hover:border-error/20"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
         className={`flex items-end gap-2 px-3 py-2 bg-surface border border-border-subtle rounded-2xl transition-colors focus-within:border-accent/60 ${
           disabled ? 'opacity-60' : ''
@@ -327,7 +386,8 @@ export function PromptInput({
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? (disabledReason ?? '请先在设置中启用 LLM 供应商') : '输入消息…  (Enter 发送 / Shift+Enter 换行)'}
+          onPaste={handlePaste}
+          placeholder={disabled ? (disabledReason ?? '请先在设置中启用 LLM 供应商') : '输入消息…  (Enter 发送 / Shift+Enter 换行，支持拖拽粘贴图片)'}
           disabled={disabled}
           rows={1}
           className="flex-1 bg-transparent resize-none outline-none text-sm text-text placeholder-text-3 py-2 px-1 max-h-[220px]"
