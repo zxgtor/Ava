@@ -1,4 +1,5 @@
-import { MessageSquarePlus, PanelLeftClose, PanelLeftOpen, Settings, Trash2 } from 'lucide-react'
+import { MessageSquarePlus, Settings, Trash2 } from 'lucide-react'
+import { Logo } from './Logo'
 import type { Conversation } from '../types'
 
 interface Props {
@@ -22,20 +23,22 @@ export function ChatHeader({
 
   return (
     <div 
-      className="flex items-center justify-between h-11 px-2 border-b border-border-subtle bg-surface/30 backdrop-blur-xl pr-32"
+      className="flex items-center justify-between h-12 px-3 border-b border-border-subtle bg-surface/20 backdrop-blur-xl pr-32 select-none"
       style={{ webkitAppRegion: 'drag' } as any}
     >
-      <div className="flex items-center gap-1 min-w-0" style={{ webkitAppRegion: 'no-drag' } as any}>
+      <div className="flex items-center gap-3 min-w-0" style={{ webkitAppRegion: 'no-drag' } as any}>
         <button
-          type="button"
           onClick={onToggleSidebar}
-          className="p-1.5 text-text-3 rounded-lg cursor-pointer hover:text-text hover:bg-surface-2 transition-colors"
+          className="flex items-center gap-2 px-2 py-1 -ml-1 rounded-lg transition-all hover:bg-white/5 active:scale-95 group cursor-pointer"
           title={sidebarOpen ? '隐藏对话列表' : '显示对话列表'}
         >
-          {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+          <Logo size={20} className="transition-transform group-hover:scale-110" />
+          <span className="text-sm font-bold text-text tracking-widest uppercase opacity-80 group-hover:opacity-100">Ava</span>
         </button>
-        <div className="text-sm text-text-2 truncate px-2">{title}</div>
       </div>
+
+      <div className="flex-1" style={{ webkitAppRegion: 'drag' } as any} />
+
       <div className="flex items-center gap-1" style={{ webkitAppRegion: 'no-drag' } as any}>
         {activeConversation && onDeleteConversation && (
           <button
@@ -47,22 +50,6 @@ export function ChatHeader({
             <Trash2 size={16} />
           </button>
         )}
-        <button
-          type="button"
-          onClick={onNewConversation}
-          className="p-1.5 text-text-2 rounded-lg cursor-pointer hover:text-text hover:bg-surface-2 transition-colors"
-          title="新对话"
-        >
-          <MessageSquarePlus size={16} />
-        </button>
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="p-1.5 text-text-2 rounded-lg cursor-pointer hover:text-text hover:bg-surface-2 transition-colors"
-          title="设置"
-        >
-          <Settings size={16} />
-        </button>
       </div>
     </div>
   )

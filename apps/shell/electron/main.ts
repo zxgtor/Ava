@@ -269,11 +269,9 @@ function createTray(): void {
   const contextMenu = Menu.buildFromTemplate([
     { label: '显示 Ava', click: () => mainWindow?.show() },
     { label: '重启后端服务', click: () => {
-        mcpSupervisor.listServers().then(servers => {
-          for (const s of servers) {
-            if (s.status === 'running') mcpSupervisor.restart(s.id)
-          }
-        })
+        for (const s of mcpSupervisor.listServers()) {
+          if (s.status === 'running') void mcpSupervisor.restart(s.id)
+        }
       }
     },
     { type: 'separator' },

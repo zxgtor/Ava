@@ -39,6 +39,7 @@ type Action =
   | { type: 'HYDRATE'; conversations: Conversation[]; settings: Settings; activeId: string | null }
   | { type: 'SET_VIEW'; view: ViewMode }
   | { type: 'SET_SIDEBAR'; open: boolean }
+  | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'CREATE_CONVERSATION'; conversation: Conversation }
   | { type: 'SELECT_CONVERSATION'; id: string }
   | { type: 'DELETE_CONVERSATION'; id: string }
@@ -68,6 +69,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_SIDEBAR':
       return { ...state, sidebarOpen: action.open }
+
+    case 'TOGGLE_SIDEBAR':
+      return { ...state, sidebarOpen: !state.sidebarOpen }
 
     case 'CREATE_CONVERSATION':
       return {
@@ -307,6 +311,11 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
       voiceId: typeof src.voice?.voiceId === 'string' ? src.voice.voiceId : merged.voice.voiceId,
       autoRead: typeof src.voice?.autoRead === 'boolean' ? src.voice.autoRead : merged.voice.autoRead,
     },
+    theme:
+      src.theme === 'aura-glass' || src.theme === 'cyber-zen' ||
+      src.theme === 'ai-matrix' || src.theme === 'nebula-clear'
+        ? src.theme
+        : merged.theme,
   }
 }
 

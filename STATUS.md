@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P8.4 complete (Voice Integration)_
+_Last updated: 2026-04-26 · P15 complete + multi-theme UI overhaul_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -93,6 +93,32 @@ _Last updated: 2026-04-25 · P8.4 complete (Voice Integration)_
   - 支持从远端静态 Catalog 读取可用插件（包含 Windows MCP 和 SQLite MCP 等演示）。
   - 支持直接在客户端一键 `git clone` 安装插件到 `user-plugins` 并自动热更新。
   - 新增 `MarketplaceSection` UI，显示安装进度与卸载功能。
+- [x] **P12 HTTP/SSE MCP**（commit 跟 P13 打包，message 未单列）：
+  - `mcpSupervisor` 接入 `@modelcontextprotocol/sdk/client/sse.js`，`config.transport === 'sse' || (!command && url)` 自动走 `SSEClientTransport`
+  - 类型 `McpServerConfig` 加 `transport?: 'stdio'|'sse'` + `url?: string`
+  - 复用原有生命周期：`onclose` / `onerror` / `connect` / 崩溃自动重启 全部继承 stdio 通路
+  - Settings → MCP Servers 区新增「添加远程 SSE Server」表单（name + URL，例 `http://127.0.0.1:8000/sse`）
+  - 非 builtin 条目（即用户自定义 SSE）显示 Delete 按钮；builtin 条目仍只能 toggle / 改 allowedDirs
+  - 列表展示对 SSE 友好：`SSE Endpoint: <url>` 替代命令行
+- [x] **P13 System Tray + Global Hotkey + Window Management**：
+  - 系统托盘（显示 / 重启后端 / 退出）；关闭窗口默认最小化到托盘
+  - 全局热键 `Alt+Space` 唤起 / 收起窗口
+  - 透明窗口 + 自绘标题栏（titleBarOverlay），`webkitAppRegion: drag` 支持鼠标拖动
+  - mcpSupervisor 增加重启稳定性修复（node.cmd ENOENT 等 Windows 路径问题）
+- [x] **P14 Auto-Update Infrastructure**：
+  - `electron-updater` 集成；启动后自动检查更新，可配置渠道（stable / beta）
+  - Settings 新增 `AboutSection`：显示版本号 / 检查更新 / 下载进度 / 立即重启
+  - GitHub Releases 作为分发源（`apps/shell/package.json` 配置 `publish.provider`）
+- [x] **P15 Global File Drag-and-Drop**：
+  - 整窗范围支持拖拽文件 → 进入 PromptInput 作为附件
+  - 通用 attachment 抽象（图片走 `image_url`，其他文件 base64 + filename + mimeType 注入消息）
+  - ChatView 显示拖拽 overlay；PromptInput 缩略附件 chip + 移除按钮
+- [x] **多主题系统 UI Overhaul (Aura Glass / Nebula Clear)**：
+  - 4 套主题：`aura-glass` / `cyber-zen` / `ai-matrix` / `nebula-clear`，存到 `settings.theme`
+  - 通过 `<html data-theme>` 切换 CSS 变量；Aura Glass 主题带浮动光球动画
+  - Settings 新增 `AppearanceSection` 选择主题
+  - Logo 组件抽出 + assets/ 资源目录；ChatHeader / ConversationSidebar / MessageBubble 全部按 token 重构
+  - 透明背景 + backdrop-blur 玻璃感
 
 ---
 
@@ -154,6 +180,12 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `components/settings/McpSection.tsx` | MCP Server 白名单 / 重启 |
 | `components/settings/ToolAuditSection.tsx` | Tool audit log 查看 / 清空 |
 | `components/settings/PluginsSection.tsx` | 插件列表 / 安装 / 卸载 / 更新 / 权限 |
+| `components/settings/MarketplaceSection.tsx` | P11 插件市场：远端 catalog 浏览 / 一键安装 |
+| `components/settings/VoiceSection.tsx` | P8.4 语音设置：STT/TTS server URL / 默认发音人 / Auto-Read |
+| `components/settings/AboutSection.tsx` | P14：版本号 / 检查更新 / 下载进度 / 立即重启 |
+| `components/settings/AppearanceSection.tsx` | P16 多主题选择 |
+| `components/Logo.tsx` | UI overhaul：抽出 Logo 组件，被 ChatHeader 复用 |
+| `assets/` | UI overhaul 静态资源（图标 / SVG） |
 
 ### 工作空间根
 
@@ -266,14 +298,15 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ---
 
-## 下一步 — P7 / 后续
+## 下一步 — 后续候选
 
-**P7.2 已完成**：插件 MCP 运行时权限信息更透明，且阻止插件把 MCP `cwd` 指到插件目录之外。
+主线 P1–P15 已落地（P12 跳号）。后续候选：
 
-后续优先项：
-- P7.3 UI 验证打磨：为 task id、命令重跑、旧请求防污染补手动验证脚本/测试清单
-
-**推荐顺序**：**P7 UI/test cleanup**
+- **P16 Plugin Marketplace 远端 Catalog 完善**：现在的 catalog 是静态 JSON，缺签名 / 版本兼容性 / 评分。
+- **MCP HTTP/SSE server 支持**：当前只支持 stdio；P3 已知问题里登记的 `http` / `sse` 还是 unsupported。
+- **Theme 主题完工**：当前 commit 是 UI overhaul 第一波，`cyber-zen` / `ai-matrix` 两套主题视觉是否定稿待确认。
+- **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call 流程缺自动化覆盖。
+- **Auto-update GitHub Release 流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
 
 ---
 

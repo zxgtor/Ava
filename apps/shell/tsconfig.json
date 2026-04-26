@@ -13,7 +13,8 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@ava/plugin-sdk": ["../../packages/ava-plugin-sdk/src/index.ts"]
     }
   },
   "include": ["src/**/*", "electron/**/*", "electron.vite.config.ts"],

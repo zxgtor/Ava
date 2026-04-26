@@ -4,8 +4,10 @@ import { ChatView } from './components/ChatView'
 import { SettingsView } from './components/SettingsView'
 import { ConversationSidebar } from './components/ConversationSidebar'
 
+import { ChatHeader } from './components/ChatHeader'
+
 function Shell() {
-  const { state } = useStore()
+  const { state, dispatch, activeConversation, createConversation } = useStore()
 
   useEffect(() => {
     if (state.settings.theme) {
@@ -22,7 +24,7 @@ function Shell() {
   }
 
   return (
-    <div className="flex flex-row flex-1 min-h-0 relative">
+    <div className="flex flex-col flex-1 h-screen overflow-hidden rounded-xl border border-border-subtle shadow-2xl relative bg-bg/20">
       {state.settings.theme === 'aura-glass' && (
         <div className="aura-container">
           <div className="aura-sphere aura-sphere-1" />
@@ -30,9 +32,22 @@ function Shell() {
           <div className="aura-sphere aura-sphere-3" />
         </div>
       )}
-      {state.sidebarOpen && <ConversationSidebar />}
-      <div className="flex flex-col flex-1 min-w-0 backdrop-blur-main">
-        {state.viewMode === 'settings' ? <SettingsView /> : <ChatView />}
+      
+      {/* 全局统一标题栏 */}
+      <ChatHeader
+        activeConversation={activeConversation}
+        sidebarOpen={state.sidebarOpen}
+        onToggleSidebar={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+        onNewConversation={createConversation}
+        onOpenSettings={() => dispatch({ type: 'SET_VIEW', view: 'settings' })}
+        onDeleteConversation={activeConversation ? () => dispatch({ type: 'DELETE_CONVERSATION', id: activeConversation.id }) : undefined}
+      />
+
+      <div className="flex flex-row flex-1 min-h-0 relative">
+        {state.sidebarOpen && <ConversationSidebar />}
+        <div className="flex flex-col flex-1 min-w-0 backdrop-blur-main">
+          {state.viewMode === 'settings' ? <SettingsView /> : <ChatView />}
+        </div>
       </div>
     </div>
   )

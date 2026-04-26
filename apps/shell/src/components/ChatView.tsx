@@ -406,14 +406,7 @@ export function ChatView() {
           <div className="text-sm text-text-3 mt-1">支持图片、文档、代码等</div>
         </div>
       )}
-      <ChatHeader
-        activeConversation={activeConversation}
-        sidebarOpen={state.sidebarOpen}
-        onToggleSidebar={handleToggleSidebar}
-        onNewConversation={handleNewConversation}
-        onOpenSettings={handleOpenSettings}
-        onDeleteConversation={activeConversation ? handleDeleteConversation : undefined}
-      />
+
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
         {showEmpty ? (
