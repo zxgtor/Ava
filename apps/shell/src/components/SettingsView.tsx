@@ -16,6 +16,7 @@ import { ToolAuditSection } from './settings/ToolAuditSection'
 import { PluginsSection } from './settings/PluginsSection'
 import { MarketplaceSection } from './settings/MarketplaceSection'
 import { VoiceSection } from './settings/VoiceSection'
+import { AboutSection } from './settings/AboutSection'
 
 export function SettingsView() {
   const { state, dispatch } = useStore()
@@ -80,6 +81,7 @@ export function SettingsView() {
         />
         <PluginsSection settings={state.settings} update={update} />
         <VoiceSection settings={state.settings} update={update} />
+        <AboutSection />
       </div>
     </div>
   )

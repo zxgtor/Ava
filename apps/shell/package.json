@@ -22,6 +22,7 @@
     "@electron-toolkit/utils": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
+    "electron-updater": "^6.8.3",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.460.0",
     "react-markdown": "^9.0.1",
@@ -56,13 +57,26 @@
       {
         "from": "../../plugins",
         "to": "plugins",
-        "filter": ["**/*", "!**/.gitkeep"]
+        "filter": [
+          "**/*",
+          "!**/.gitkeep"
+        ]
       }
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build/icon.png"
     },
@@ -74,6 +88,13 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zxgtor",
+        "repo": "Ava"
+      }
+    ]
   }
 }

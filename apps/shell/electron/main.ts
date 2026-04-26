@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Tray, Menu, nativeImage, globalShortcut } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 import { join } from 'node:path'
 import {
@@ -40,7 +41,10 @@ function createMainWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    if (mainWindow) mcpSupervisor.wire(mainWindow.webContents)
+    if (mainWindow) {
+      mcpSupervisor.wire(mainWindow.webContents)
+      initAutoUpdater(mainWindow)
+    }
     mainWindow?.show()
   })
 
@@ -235,6 +239,18 @@ function registerIpc(): void {
       return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
     }
   })
+  ipcMain.handle('ava:app:version', () => app.getVersion())
+  ipcMain.handle('ava:app:checkUpdates', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      return { ok: true as const, result }
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle('ava:app:installUpdate', () => {
+    autoUpdater.quitAndInstall()
+  })
 }
 
 function createTray(): void {
@@ -270,6 +286,31 @@ function createTray(): void {
       mainWindow?.show()
       mainWindow?.focus()
     }
+  })
+}
+
+function initAutoUpdater(win: BrowserWindow): void {
+  autoUpdater.autoDownload = false
+  autoUpdater.logger = console
+
+  autoUpdater.on('update-available', (info) => {
+    win.webContents.send('ava:app:updateAvailable', info)
+  })
+
+  autoUpdater.on('update-not-available', (info) => {
+    win.webContents.send('ava:app:updateNotAvailable', info)
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    win.webContents.send('ava:app:updateProgress', progress)
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    win.webContents.send('ava:app:updateDownloaded', info)
+  })
+
+  autoUpdater.on('error', (err) => {
+    win.webContents.send('ava:app:updateError', err.message)
   })
 }
 

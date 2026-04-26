@@ -245,6 +245,18 @@ function on<T>(channel: string, handler: (payload: T) => void): () => void {
 const ava = {
   ping: (): Promise<string> => ipcRenderer.invoke('ava:ping'),
 
+  app: {
+    version: (): Promise<string> => ipcRenderer.invoke('ava:app:version'),
+    checkUpdates: (): Promise<{ ok: true; result: any } | { ok: false; error: string }> =>
+      ipcRenderer.invoke('ava:app:checkUpdates'),
+    installUpdate: (): Promise<void> => ipcRenderer.invoke('ava:app:installUpdate'),
+    onUpdateAvailable: (handler: (info: any) => void) => on('ava:app:updateAvailable', handler),
+    onUpdateNotAvailable: (handler: (info: any) => void) => on('ava:app:updateNotAvailable', handler),
+    onUpdateProgress: (handler: (progress: any) => void) => on('ava:app:updateProgress', handler),
+    onUpdateDownloaded: (handler: (info: any) => void) => on('ava:app:updateDownloaded', handler),
+    onUpdateError: (handler: (err: string) => void) => on('ava:app:updateError', handler),
+  },
+
   paths: {
     userData: (): Promise<string> => ipcRenderer.invoke('ava:paths:userData'),
   },
