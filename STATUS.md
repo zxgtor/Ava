@@ -85,6 +85,10 @@ _Last updated: 2026-04-25 · P8.4 complete (Voice Integration)_
   - OpenAI / Anthropic 协议完美兼容图片 Base64 传递
   - UI `PromptInput.tsx` 支持直接拖拽或粘贴本地图片
   - 图片预览/删除，并在 `MessageBubble` 渲染图片
+- [x] **P10 E2E Testing (Playwright)**：
+  - 集成了 `@playwright/test` 作为 Electron 自动化测试框架
+  - 编写 `e2e/tests/app.spec.ts` 验证核心 UI 的加载与渲染
+  - 使用隔离的测试数据目录，避免污染本地用户配置
 
 ---
 

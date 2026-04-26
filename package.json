@@ -14,9 +14,13 @@
     "start": "npm run start --workspace=@ava/shell",
     "typecheck": "npm run typecheck --workspace=@ava/shell",
     "pack": "npm run pack --workspace=@ava/shell",
-    "dist": "npm run dist --workspace=@ava/shell"
+    "dist": "npm run dist --workspace=@ava/shell",
+    "test:e2e": "playwright test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
   }
 }
