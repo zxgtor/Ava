@@ -1,0 +1,19 @@
+{
+  "name": "@ava/knowledge-mcp",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Local knowledge base MCP server — TF-IDF search over user files.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=../../plugins/ava-knowledge/server/index.cjs --external:node:*"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

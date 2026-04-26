@@ -12,8 +12,9 @@
     "preview": "electron-vite preview",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
-    "pack": "electron-vite build && electron-builder --dir",
-    "dist": "electron-vite build && electron-builder"
+    "bundle:knowledge": "npm run bundle --workspace=@ava/knowledge-mcp",
+    "pack": "npm run bundle:knowledge && electron-vite build && electron-builder --dir",
+    "dist": "npm run bundle:knowledge && electron-vite build && electron-builder"
   },
   "dependencies": {
     "@ava/mcp": "*",

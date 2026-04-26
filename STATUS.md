@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P8.2 complete (production build)_
+_Last updated: 2026-04-25 · P8.3 complete (Knowledge MCP)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -66,6 +66,13 @@ _Last updated: 2026-04-25 · P8.2 complete (production build)_
   - App icon 生成 + 放入 build/
   - plugins/ 作为 extraResources 打入安装包
   - electron 版本钉定为 41.3.0
+- [x] **P8.3 Knowledge MCP**：
+  - `packages/knowledge-mcp/` — TypeScript MCP server（TF-IDF 搜索引擎，CJK 分词）
+  - `plugins/ava-knowledge/` — bundled 插件（stdio MCP server + `/search` 命令）
+  - 4 个工具：`knowledge_search` / `knowledge_ingest` / `knowledge_list` / `knowledge_remove`
+  - esbuild 打包为单文件 `server/index.cjs`，dev 和 prod 路径一致
+  - 索引持久化到 `%APPDATA%/Ava/knowledge-index.json`
+  - 支持 25+ 文件格式，自动跳过 node_modules/.git 等
 
 ---
 

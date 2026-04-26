@@ -1,0 +1,5 @@
+{
+  "name": "Ava Knowledge",
+  "version": "1.0.0",
+  "description": "Local knowledge base — index files and directories, search with TF-IDF. No cloud API needed."
+}
