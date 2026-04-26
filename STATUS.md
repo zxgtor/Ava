@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P7.3 complete (UI polish + SettingsView refactor)_
+_Last updated: 2026-04-25 · P8.1 complete (ava-core built-in plugin)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -55,6 +55,10 @@ _Last updated: 2026-04-25 · P7.3 complete (UI polish + SettingsView refactor)_
   - 空 assistant 消息过滤（防止空气泡）
   - 侧边栏 active 对话左侧 accent 色条
   - SettingsView 从 1069 行拆为 7 个 settings/ 子模块
+- [x] **P8.1 ava-core 内置插件**：
+  - 6 个实用命令：code-explain / summarize / translate / rewrite / review / debug
+  - 1 个 skill：response-style（回复风格指引）
+  - bundled 插件默认启用（新安装开箱即用）
 
 ---
 

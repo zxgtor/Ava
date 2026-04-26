@@ -665,7 +665,7 @@ export class PluginManager {
     }
 
     const id = `${bundled ? 'bundled' : 'user'}-${sanitizeId(basename(rootPath)) || 'plugin'}`
-    const enabled = Boolean(states[id]?.enabled)
+    const enabled = states[id] !== undefined ? Boolean(states[id].enabled) : bundled
     const skillPaths = await discoverSkillPaths(rootPath, manifestRaw).catch(err => {
       warnings.push(`failed to inspect skills: ${err instanceof Error ? err.message : String(err)}`)
       return []
