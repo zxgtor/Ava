@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { ListPlus, Send, Star, StopCircle } from 'lucide-react'
+import { ListPlus, Send, Star, StopCircle, Mic } from 'lucide-react'
 import type { CommandInvocation, PluginCommand } from '../types'
 
 interface Props {
@@ -11,6 +11,10 @@ interface Props {
   commands?: PluginCommand[]
   commandsLoading?: boolean
   onRefreshCommands?: () => void
+  voiceEnabled?: boolean
+  isRecording?: boolean
+  onSttToggle?: () => void
+  sttText?: string
 }
 
 export function PromptInput({
@@ -22,8 +26,21 @@ export function PromptInput({
   commands = [],
   commandsLoading,
   onRefreshCommands,
+  voiceEnabled,
+  isRecording,
+  onSttToggle,
+  sttText,
 }: Props) {
   const [value, setValue] = useState('')
+
+  useEffect(() => {
+    if (sttText) {
+      setValue(v => {
+        const trimmed = v.trim()
+        return trimmed ? `${trimmed}\n${sttText}` : sttText
+      })
+    }
+  }, [sttText])
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [commandQuery, setCommandQuery] = useState('')
   const [selectedCommand, setSelectedCommand] = useState<PluginCommand | null>(null)
@@ -325,14 +342,27 @@ export function PromptInput({
             <StopCircle size={18} />
           </button>
         ) : (
-          <button
-            type="submit"
-            disabled={!value.trim() || disabled}
-            className="flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent text-accent hover:bg-accent/10"
-            title="发送"
-          >
-            <Send size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onSttToggle}
+              disabled={disabled || !voiceEnabled}
+              className={`flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                isRecording ? 'text-error bg-error/10 animate-pulse' : 'text-text-3 hover:text-text hover:bg-surface-2'
+              } ${!voiceEnabled ? 'hidden' : ''}`}
+              title={isRecording ? '停止录音' : '语音输入'}
+            >
+              <Mic size={18} />
+            </button>
+            <button
+              type="submit"
+              disabled={!value.trim() || disabled}
+              className="flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent text-accent hover:bg-accent/10"
+              title="发送"
+            >
+              <Send size={18} />
+            </button>
+          </div>
         )}
       </div>
     </form>

@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-25 · P8.3 complete (Knowledge MCP)_
+_Last updated: 2026-04-25 · P8.4 complete (Voice Integration)_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -73,6 +73,13 @@ _Last updated: 2026-04-25 · P8.3 complete (Knowledge MCP)_
   - esbuild 打包为单文件 `server/index.cjs`，dev 和 prod 路径一致
   - 索引持久化到 `%APPDATA%/Ava/knowledge-index.json`
   - 支持 25+ 文件格式，自动跳过 node_modules/.git 等
+- [x] **P8.4 Voice Integration (XiaoMo TTS/STT)**：
+  - 独立 Python 服务器对接：WebSocket (STT, port 8000) 和 HTTP (TTS, port 8002)
+  - Settings 新增 VoiceSection（配置 Server URLs，默认发音人，Auto-Read）
+  - `audioRecorder.ts`：16kHz Web Audio API 下采样，发送 `Int16Array` 裸流
+  - `voiceClient.ts`：管理 WebSocket STT 与 HTTP TTS (Blob 播放)
+  - ChatInput 新增 Mic 图标，录音时显示脉冲动画并实时填入文本
+  - MessageBubble 增加喇叭图标可重新播放 TTS，流式结束后支持 Auto-Read
 
 ---
 

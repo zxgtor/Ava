@@ -229,6 +229,13 @@ export function defaultSettings(): Settings {
     mcpServers: DEFAULT_MCP_SERVERS.map(s => ({ ...s, args: [...s.args], allowedDirs: [...(s.allowedDirs ?? [])] })),
     pluginStates: {},
     modelToolFormatMap: {},
+    voice: {
+      enabled: true,
+      sttServerUrl: 'ws://127.0.0.1:8000/ws',
+      ttsServerUrl: 'http://127.0.0.1:8002/tts',
+      voiceId: '中文女',
+      autoRead: true,
+    },
   }
 }
 

@@ -300,6 +300,13 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
     mcpServers,
     pluginStates,
     modelToolFormatMap: toolFormatMap,
+    voice: {
+      enabled: typeof src.voice?.enabled === 'boolean' ? src.voice.enabled : merged.voice.enabled,
+      sttServerUrl: typeof src.voice?.sttServerUrl === 'string' ? src.voice.sttServerUrl : merged.voice.sttServerUrl,
+      ttsServerUrl: typeof src.voice?.ttsServerUrl === 'string' ? src.voice.ttsServerUrl : merged.voice.ttsServerUrl,
+      voiceId: typeof src.voice?.voiceId === 'string' ? src.voice.voiceId : merged.voice.voiceId,
+      autoRead: typeof src.voice?.autoRead === 'boolean' ? src.voice.autoRead : merged.voice.autoRead,
+    },
   }
 }
 

@@ -176,6 +176,14 @@ export interface PluginCommandArgument {
   defaultValue?: string
 }
 
+export interface VoiceConfig {
+  enabled: boolean
+  sttServerUrl: string
+  ttsServerUrl: string
+  voiceId: string
+  autoRead: boolean
+}
+
 // ── Settings ────────────────────────────────────────────────────────
 
 /**
@@ -196,6 +204,7 @@ export interface Settings {
   pluginStates: Record<string, PluginState>
   /** Key = `${providerId}:${modelId}` → detected format. */
   modelToolFormatMap: Record<string, ToolCallFormat>
+  voice: VoiceConfig
 }
 
 // ── View mode ───────────────────────────────────────────────────────

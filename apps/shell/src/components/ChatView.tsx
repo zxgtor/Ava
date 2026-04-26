@@ -12,6 +12,7 @@ import {
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
+import { STTClient } from '../lib/voiceClient'
 import type { CommandInvocation, ContentPart, Conversation, PluginCommand } from '../types'
 
 function partsToText(parts: ContentPart[]): string {
@@ -42,6 +43,9 @@ export function ChatView() {
   const [streamId, setStreamId] = useState<string | null>(null)
   const [commands, setCommands] = useState<PluginCommand[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
+  const [sttClient, setSttClient] = useState<STTClient | null>(null)
+  const [isRecording, setIsRecording] = useState(false)
+  const [sttText, setSttText] = useState<string | undefined>(undefined)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const hasProvider = useMemo(
@@ -74,6 +78,46 @@ export function ChatView() {
     if (!el) return
     el.scrollTop = el.scrollHeight
   }, [activeConversation?.messages, isStreaming])
+
+  const toggleStt = useCallback(async () => {
+    if (!state.settings.voice?.enabled) return
+
+    if (isRecording) {
+      sttClient?.stop()
+      setIsRecording(false)
+      setSttClient(null)
+      return
+    }
+
+    try {
+      const client = new STTClient(state.settings.voice.sttServerUrl)
+      client.onFinalTranscript = (text) => {
+        setSttText(text)
+        // Reset after a short delay so the effect triggers again if the same text is spoken
+        setTimeout(() => setSttText(undefined), 100)
+      }
+      client.onEndpoint = () => {
+        client.stop()
+        setIsRecording(false)
+        setSttClient(null)
+      }
+      await client.start()
+      setSttClient(client)
+      setIsRecording(true)
+    } catch (err) {
+      console.warn('Failed to start STT:', err)
+      setIsRecording(false)
+    }
+  }, [isRecording, sttClient, state.settings.voice])
+
+  // Tell STT server when bot is speaking for echo cancellation
+  useEffect(() => {
+    if (sttClient && isStreaming) {
+      sttClient.sendBotState(true)
+    } else if (sttClient && !isStreaming) {
+      sttClient.sendBotState(false)
+    }
+  }, [isStreaming, sttClient])
 
   // Shared streaming driver. `conversationSnapshot.messages` is the full history
   // that should be sent to the LLM (NOT including the placeholder).
@@ -371,10 +415,14 @@ export function ChatView() {
         onStop={handleStop}
         isStreaming={isStreaming}
         disabled={!hasProvider}
-        disabledReason="请先在设置中启用至少一个 LLM 供应商"
+        disabledReason={!hasProvider ? '请在设置中配置并启用 LLM' : undefined}
         commands={commands}
         commandsLoading={commandsLoading}
         onRefreshCommands={refreshCommands}
+        voiceEnabled={state.settings.voice?.enabled}
+        isRecording={isRecording}
+        onSttToggle={toggleStt}
+        sttText={sttText}
       />
     </div>
   )

@@ -1,8 +1,10 @@
-import { memo, type ReactNode } from 'react'
-import { RotateCw, Trash2 } from 'lucide-react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
+import { RotateCw, Trash2, Volume2, VolumeX } from 'lucide-react'
 import type { ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
 import { ToolCallBubble } from './ToolCallBubble'
+import { useStore } from '../store'
+import { playTTS } from '../lib/voiceClient'
 
 interface Props {
   message: Message
@@ -51,16 +53,72 @@ function MessageBubbleImpl({
   onRetry,
   onCommandRetry,
 }: Props) {
+  const { state } = useStore()
   const isUser = message.role === 'user'
   const isError = Boolean(message.error)
   const isAborted = Boolean(message.aborted)
 
-  const textLen = message.content.reduce(
-    (acc, p) => acc + (p.type === 'text' ? p.text.length : 0),
-    0,
-  )
+  const [isPlaying, setIsPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const hasAutoPlayed = useRef(false)
+  const prevStreaming = useRef(message.streaming)
+
+  const textContent = message.content
+    .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
+    .map(p => p.text)
+    .join('')
+
+  const textLen = textContent.length
   const hasAnyPart = message.content.length > 0
   const hasVisibleContent = textLen > 0 || hasAnyPart
+
+  const handlePlayTTS = async () => {
+    if (!state.settings.voice?.enabled || !textContent.trim()) return
+    
+    if (isPlaying && audioRef.current) {
+      audioRef.current.pause()
+      setIsPlaying(false)
+      return
+    }
+
+    setIsPlaying(true)
+    const audio = await playTTS(
+      textContent,
+      state.settings.voice.ttsServerUrl,
+      state.settings.voice.voiceId
+    )
+    
+    if (audio) {
+      audioRef.current = audio
+      audio.onended = () => setIsPlaying(false)
+      audio.onerror = () => setIsPlaying(false)
+      audio.play().catch(() => setIsPlaying(false))
+    } else {
+      setIsPlaying(false)
+    }
+  }
+
+  // Auto-read logic when streaming finishes
+  useEffect(() => {
+    if (!isUser && !message.error && !message.aborted && state.settings.voice?.enabled && state.settings.voice?.autoRead) {
+      const justFinished = prevStreaming.current && !message.streaming
+      if (justFinished && !hasAutoPlayed.current && textContent.trim()) {
+        hasAutoPlayed.current = true
+        handlePlayTTS()
+      }
+    }
+    prevStreaming.current = message.streaming
+  }, [message.streaming, isUser, message.error, message.aborted, textContent, state.settings.voice])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
+    }
+  }, [])
 
   return (
     <div className={`group flex gap-3 px-6 py-3 animate-fade-in ${isUser ? 'flex-row-reverse' : ''}`}>
@@ -101,8 +159,18 @@ function MessageBubbleImpl({
             <div className="mt-1 text-xs text-text-3">（已中断）</div>
           )}
         </div>
-        {(onDelete || onRetry || onCommandRetry) && !message.streaming && (
+        {(onDelete || onRetry || onCommandRetry || (!isUser && textLen > 0 && state.settings.voice?.enabled)) && !message.streaming && (
           <div className="mt-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+            {!isUser && textLen > 0 && state.settings.voice?.enabled && (
+              <button
+                type="button"
+                onClick={handlePlayTTS}
+                className="p-1 text-text-3 rounded cursor-pointer hover:text-accent hover:bg-accent/10"
+                title={isPlaying ? "停止朗读" : "朗读回复"}
+              >
+                {isPlaying ? <VolumeX size={12} className="text-accent animate-pulse" /> : <Volume2 size={12} />}
+              </button>
+            )}
             {onCommandRetry && (
               <button
                 type="button"
