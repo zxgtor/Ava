@@ -16,6 +16,7 @@ import type { WebContents } from 'electron'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -30,6 +31,8 @@ export interface McpServerConfig {
   allowedDirs?: string[]
   builtin?: boolean
   pluginId?: string
+  transport?: 'stdio' | 'sse'
+  url?: string
 }
 
 export type McpServerStatus = 'stopped' | 'starting' | 'running' | 'error'
@@ -258,20 +261,27 @@ export class McpSupervisor extends EventEmitter {
     entry.lastError = undefined
     this.broadcast(serverId)
 
-    const command = resolveCommand(config.command)
-    // Merge process.env so npx can resolve PATH etc. User env overrides.
-    const mergedEnv = {
-      ...(process.env as Record<string, string>),
-      ...(config.env ?? {}),
-    }
-
     try {
-      const transport = new StdioClientTransport({
-        command,
-        args,
-        env: mergedEnv,
-        cwd: config.cwd,
-      })
+      const isSse = config.transport === 'sse' || (!config.command && config.url)
+      
+      let transport: any
+      if (isSse) {
+        if (!config.url) throw new Error('SSE url is missing')
+        transport = new SSEClientTransport(new URL(config.url))
+      } else {
+        const command = resolveCommand(config.command)
+        // Merge process.env so npx can resolve PATH etc. User env overrides.
+        const mergedEnv = {
+          ...(process.env as Record<string, string>),
+          ...(config.env ?? {}),
+        }
+        transport = new StdioClientTransport({
+          command,
+          args,
+          env: mergedEnv,
+          cwd: config.cwd,
+        })
+      }
       const client = new Client(
         { name: CLIENT_NAME, version: CLIENT_VERSION },
         { capabilities: {} },
@@ -294,7 +304,7 @@ export class McpSupervisor extends EventEmitter {
           }
         }
       }
-      transport.onerror = err => {
+      transport.onerror = (err: unknown) => {
         console.warn(`[mcp] ${serverId} transport error:`, err)
       }
 

@@ -215,6 +215,15 @@ export const DEFAULT_MCP_SERVERS: McpServerConfig[] = [
     allowedDirs: [],
     builtin: true,
   },
+  {
+    id: 'windows-mcp',
+    name: 'Windows MCP Control',
+    command: 'node',
+    args: ['C:\\Users\\Jason\\AppData\\Roaming\\npm\\node_modules\\mcp-control\\build\\index.js'],
+    enabled: true,
+    allowedDirs: [],
+    builtin: true,
+  },
 ]
 
 export function defaultSettings(): Settings {
@@ -275,6 +284,8 @@ export function mergeMcpServers(overrides?: McpServerConfig[] | null): McpServer
         env: typeof raw.env === 'object' && raw.env ? { ...raw.env } : undefined,
         cwd: typeof raw.cwd === 'string' && raw.cwd.trim() ? raw.cwd : undefined,
         enabled: Boolean(raw.enabled),
+        transport: raw.transport === 'sse' ? 'sse' : undefined,
+        url: typeof raw.url === 'string' ? raw.url : undefined,
         allowedDirs: Array.isArray(raw.allowedDirs)
           ? raw.allowedDirs.map(d => String(d)).filter(d => d.trim().length > 0)
           : undefined,

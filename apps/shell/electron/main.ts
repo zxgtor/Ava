@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Tray, Menu, nativeImage, globalShortcut } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { join } from 'node:path'
 import {
@@ -18,6 +18,8 @@ import { pluginManager, type PluginState } from './services/pluginManager'
 import { toolAuditLog } from './services/toolAuditLog'
 
 let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -40,6 +42,13 @@ function createMainWindow(): void {
   mainWindow.on('ready-to-show', () => {
     if (mainWindow) mcpSupervisor.wire(mainWindow.webContents)
     mainWindow?.show()
+  })
+
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault()
+      mainWindow?.hide()
+    }
   })
 
   mainWindow.on('closed', () => {
@@ -228,9 +237,69 @@ function registerIpc(): void {
   })
 }
 
+function createTray(): void {
+  const iconPath = join(__dirname, '../../build/icon.png')
+  const icon = nativeImage.createFromPath(iconPath)
+  tray = new Tray(icon.resize({ width: 16, height: 16 }))
+  
+  const contextMenu = Menu.buildFromTemplate([
+    { label: '显示 Ava', click: () => mainWindow?.show() },
+    { label: '重启后端服务', click: () => {
+        mcpSupervisor.listServers().then(servers => {
+          for (const s of servers) {
+            if (s.status === 'running') mcpSupervisor.restart(s.id)
+          }
+        })
+      }
+    },
+    { type: 'separator' },
+    { label: '退出 (Quit)', click: () => {
+        isQuitting = true
+        app.quit()
+      }
+    }
+  ])
+  
+  tray.setToolTip('Ava')
+  tray.setContextMenu(contextMenu)
+  
+  tray.on('click', () => {
+    if (mainWindow?.isVisible()) {
+      mainWindow.hide()
+    } else {
+      mainWindow?.show()
+      mainWindow?.focus()
+    }
+  })
+}
+
 app.whenReady().then(() => {
+  if (!app.requestSingleInstanceLock()) {
+    app.quit()
+    return
+  }
+
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+
   registerIpc()
   createMainWindow()
+  createTray()
+  
+  globalShortcut.register('Alt+Space', () => {
+    if (mainWindow?.isVisible() && mainWindow.isFocused()) {
+      mainWindow.hide()
+    } else {
+      mainWindow?.show()
+      mainWindow?.focus()
+    }
+  })
+
   loadSettings()
     .then(async raw => {
       const mcpServers = await readRuntimeMcpServers(raw)
@@ -240,15 +309,21 @@ app.whenReady().then(() => {
     .catch(err => console.warn('[mcp] initial apply failed:', err))
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createMainWindow()
+    } else {
+      mainWindow?.show()
+    }
   })
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // Do not quit, stay in tray
 })
 
 app.on('before-quit', () => {
+  isQuitting = true
+  globalShortcut.unregisterAll()
   mcpSupervisor.shutdown().catch(err => console.warn('[mcp] shutdown failed:', err))
 })
 

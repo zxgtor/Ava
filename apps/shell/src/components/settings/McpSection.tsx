@@ -16,9 +16,60 @@ export function McpSection({ settings, update }: { settings: Settings; update: (
     return off
   }, [])
 
+  const [newSseName, setNewSseName] = useState('')
+  const [newSseUrl, setNewSseUrl] = useState('')
+
+  const handleAddSse = () => {
+    if (!newSseName.trim() || !newSseUrl.trim()) return
+    const id = `sse-${Date.now()}`
+    update(s => ({
+      ...s,
+      mcpServers: [
+        ...s.mcpServers,
+        {
+          id,
+          name: newSseName.trim(),
+          command: '',
+          args: [],
+          enabled: true,
+          builtin: false,
+          transport: 'sse',
+          url: newSseUrl.trim()
+        }
+      ]
+    }))
+    setNewSseName('')
+    setNewSseUrl('')
+  }
+
   return (
     <section>
       <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">MCP Servers</h2>
+      <div className="mb-3 p-3 bg-surface border border-border-subtle rounded-lg space-y-2">
+        <div className="text-xs text-text-2">添加远程 SSE Server</div>
+        <div className="flex gap-2">
+          <input
+            value={newSseName}
+            onChange={e => setNewSseName(e.target.value)}
+            placeholder="名称 (e.g. Remote DB)"
+            className="w-1/3 px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
+          />
+          <input
+            value={newSseUrl}
+            onChange={e => setNewSseUrl(e.target.value)}
+            placeholder="SSE URL (e.g. http://127.0.0.1:8000/sse)"
+            className="flex-1 px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
+          />
+          <button
+            type="button"
+            onClick={handleAddSse}
+            disabled={!newSseName.trim() || !newSseUrl.trim()}
+            className="px-3 py-1.5 text-xs text-accent bg-accent/10 rounded-md cursor-pointer hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            添加
+          </button>
+        </div>
+      </div>
       <div className="space-y-2">
         {settings.mcpServers.map(server => (
           <McpServerRow
@@ -28,6 +79,10 @@ export function McpSection({ settings, update }: { settings: Settings; update: (
             onChange={next => update(s => ({
               ...s,
               mcpServers: s.mcpServers.map(item => (item.id === server.id ? next : item)),
+            }))}
+            onDelete={server.builtin ? undefined : () => update(s => ({
+              ...s,
+              mcpServers: s.mcpServers.filter(item => item.id !== server.id),
             }))}
           />
         ))}
@@ -40,10 +95,12 @@ function McpServerRow({
   server,
   runtime,
   onChange,
+  onDelete,
 }: {
   server: McpServerConfig
   runtime?: Awaited<ReturnType<typeof window.ava.mcp.listServers>>[number]
   onChange: (next: McpServerConfig) => void
+  onDelete?: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [restarting, setRestarting] = useState(false)
@@ -91,7 +148,11 @@ function McpServerRow({
               </span>
             )}
           </div>
-          <div className="text-xs text-text-3 truncate">{server.command} {(server.args ?? []).join(' ')}</div>
+          <div className="text-xs text-text-3 truncate">
+            {server.transport === 'sse' || server.url
+              ? `SSE Endpoint: ${server.url}`
+              : `${server.command} ${(server.args ?? []).join(' ')}`}
+          </div>
         </div>
         <Toggle
           value={server.enabled}
@@ -138,6 +199,15 @@ function McpServerRow({
             >
               {restarting ? '重启中…' : 'Restart'}
             </button>
+            {onDelete && (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="px-2.5 py-1 text-xs text-error bg-error/10 rounded-full cursor-pointer hover:bg-error/20"
+              >
+                Delete
+              </button>
+            )}
             <span className="text-xs text-text-3">
               {runtime?.status === 'running'
                 ? `运行中 · ${(runtime.tools ?? []).length} 个工具`

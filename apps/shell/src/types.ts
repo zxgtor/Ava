@@ -104,6 +104,8 @@ export interface McpServerConfig {
   /** Built-in servers cannot be removed from the list, only toggled/configured. */
   builtin?: boolean
   pluginId?: string
+  transport?: 'stdio' | 'sse'
+  url?: string
 }
 
 /** Per-model detected tool-call format, cached so we do not re-probe every request. */
