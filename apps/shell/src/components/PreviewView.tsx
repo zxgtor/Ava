@@ -33,7 +33,7 @@ export function PreviewView() {
 
   if (!content) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-[#1a1b1e] text-white/50">
+      <div className="flex flex-col items-center justify-center h-screen text-white/50">
         <div className="w-8 h-8 rounded-full border-2 border-white/10 border-t-accent animate-spin mb-4" />
         <p className="text-[10px] font-medium tracking-[0.3em] uppercase opacity-50">Ava Design Engine</p>
       </div>
@@ -41,10 +41,10 @@ export function PreviewView() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#1a1b1e] relative overflow-hidden text-white border border-white/5">
+    <div className="flex flex-col h-screen relative overflow-hidden text-white">
       {/* 沉浸式标题栏：强化拖拽逻辑 */}
       <div 
-        className="h-11 shrink-0 flex items-center justify-between px-4 pr-[140px] border-b border-white/5 bg-black/60 relative z-50" 
+        className="h-11 shrink-0 flex items-center justify-between px-4 pr-[140px] border-b border-white/5 bg-surface/40 backdrop-blur-xl relative z-50" 
         style={{ webkitAppRegion: 'drag' } as any}
       >
         <div className="flex items-center gap-3 relative z-[60]" style={{ webkitAppRegion: 'no-drag' } as any}>
@@ -65,7 +65,7 @@ export function PreviewView() {
       </div>
       
       {/* 渲染区域 */}
-      <div className="flex-1 overflow-auto bg-[#0a0a0a] flex items-center justify-center p-8">
+      <div className="flex-1 overflow-auto flex items-center justify-center p-8">
         <div 
           className="max-w-full max-h-full"
           dangerouslySetInnerHTML={{ __html: content }} 

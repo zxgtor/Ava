@@ -332,12 +332,18 @@ const ava = {
       ipcRenderer.invoke('ava:fs:listDir', path),
   },
   window: {
-    openPreview: (): Promise<void> => ipcRenderer.invoke('ava:window:openPreview'),
+    openPreview: (theme?: string): Promise<void> => ipcRenderer.invoke('ava:window:openPreview', theme),
     updatePreview: (content: string): Promise<void> => ipcRenderer.invoke('ava:window:updatePreview', content),
+    updateTheme: (theme: string): Promise<void> => ipcRenderer.invoke('ava:window:updateTheme', theme),
     onUpdate: (callback: (content: string) => void) => {
       const listener = (_e: any, content: string) => callback(content)
       ipcRenderer.on('ava:preview:update', listener)
       return () => ipcRenderer.removeListener('ava:preview:update', listener)
+    },
+    onThemeUpdate: (callback: (theme: string) => void) => {
+      const listener = (_e: any, theme: string) => callback(theme)
+      ipcRenderer.on('ava:theme:update', listener)
+      return () => ipcRenderer.removeListener('ava:theme:update', listener)
     },
   },
 }

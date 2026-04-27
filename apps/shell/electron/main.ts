@@ -32,7 +32,7 @@ let previewWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 
-function createPreviewWindow(): void {
+function createPreviewWindow(theme?: string): void {
   if (previewWindow) {
     previewWindow.focus()
     return
@@ -71,10 +71,16 @@ function createPreviewWindow(): void {
     previewWindow = null
   })
 
+  const query = { view: 'preview' }
+  if (theme) (query as any).theme = theme
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    previewWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?view=preview`)
+    const url = new URL(process.env['ELECTRON_RENDERER_URL'])
+    url.searchParams.set('view', 'preview')
+    if (theme) url.searchParams.set('theme', theme)
+    previewWindow.loadURL(url.toString())
   } else {
-    previewWindow.loadFile(join(__dirname, '../renderer/index.html'), { query: { view: 'preview' } })
+    previewWindow.loadFile(join(__dirname, '../renderer/index.html'), { query })
   }
 }
 
@@ -286,13 +292,19 @@ function registerIpc(): void {
   })
 
   // ── Window Management ──────────────────────
-  ipcMain.handle('ava:window:openPreview', () => {
-    createPreviewWindow()
+  ipcMain.handle('ava:window:openPreview', (_e, theme?: string) => {
+    createPreviewWindow(theme)
   })
 
   ipcMain.handle('ava:window:updatePreview', (_e, content: string) => {
     BrowserWindow.getAllWindows().forEach(w => {
       w.webContents.send('ava:preview:update', content)
+    })
+  })
+
+  ipcMain.handle('ava:window:updateTheme', (_e, theme: string) => {
+    BrowserWindow.getAllWindows().forEach(w => {
+      w.webContents.send('ava:theme:update', theme)
     })
   })
 

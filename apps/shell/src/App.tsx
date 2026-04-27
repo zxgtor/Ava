@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { StoreProvider, useStore } from './store'
 import { ChatView } from './components/ChatView'
 import { SettingsView } from './components/SettingsView'
@@ -20,7 +20,7 @@ function Shell() {
 
   const handleOpenPreview = useCallback(async () => {
     // 1. 开启/聚焦窗口
-    await window.ava.window.openPreview()
+    await window.ava.window.openPreview(state.settings.theme)
 
     // 2. 立即尝试同步当前内容
     if (!activeConversation) return
@@ -45,6 +45,7 @@ function Shell() {
   useEffect(() => {
     if (state.settings.theme) {
       document.documentElement.setAttribute('data-theme', state.settings.theme)
+      window.ava.window.updateTheme(state.settings.theme)
     }
   }, [state.settings.theme])
 
@@ -89,9 +90,34 @@ function Shell() {
 export default function App() {
   // 识别预览模式：这种模式下不需要 Store，不需要 Sidebar，只需要渲染器
   const isPreview = window.location.search.includes('view=preview')
+  const theme = new URLSearchParams(window.location.search).get('theme')
 
   if (isPreview) {
-    return <PreviewView />
+    const [localTheme, setLocalTheme] = useState(theme)
+
+    useEffect(() => {
+      if (localTheme) document.documentElement.setAttribute('data-theme', localTheme)
+    }, [localTheme])
+
+    useEffect(() => {
+      const cleanup = window.ava.window.onThemeUpdate((newTheme) => {
+        setLocalTheme(newTheme)
+      })
+      return cleanup
+    }, [])
+
+    return (
+      <div className="flex flex-col flex-1 h-screen overflow-hidden rounded-lg border border-border-subtle shadow-2xl relative bg-bg/20 backdrop-blur-main">
+        {localTheme === 'aura-glass' && (
+          <div className="aura-container">
+            <div className="aura-sphere aura-sphere-1" />
+            <div className="aura-sphere aura-sphere-2" />
+            <div className="aura-sphere aura-sphere-3" />
+          </div>
+        )}
+        <PreviewView />
+      </div>
+    )
   }
 
   return (
