@@ -320,6 +320,12 @@ const ava = {
   dialog: {
     pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('ava:dialog:pickDirectory'),
   },
+  shell: {
+    openPath: (path: string): Promise<string> => ipcRenderer.invoke('ava:shell:openPath', path),
+  },
+  fs: {
+    writeFile: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('ava:fs:writeFile', path, content),
+  },
 }
 
 contextBridge.exposeInMainWorld('ava', ava)

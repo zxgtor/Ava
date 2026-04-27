@@ -114,7 +114,7 @@ _Last updated: 2026-04-26 · P15 complete + multi-theme UI overhaul_
   - 通用 attachment 抽象（图片走 `image_url`，其他文件 base64 + filename + mimeType 注入消息）
   - ChatView 显示拖拽 overlay；PromptInput 缩略附件 chip + 移除按钮
 - [x] **多主题系统 UI Overhaul (Aura Glass / Nebula Clear)**：
-  - 4 套主题：`aura-glass` / `cyber-zen` / `ai-matrix` / `nebula-clear`，存到 `settings.theme`
+  - 3 套主题：`aura-glass` / `cyber-zen` / `nebula-clear`，存到 `settings.theme`
   - 通过 `<html data-theme>` 切换 CSS 变量；Aura Glass 主题带浮动光球动画
   - Settings 新增 `AppearanceSection` 选择主题
   - Logo 组件抽出 + assets/ 资源目录；ChatHeader / ConversationSidebar / MessageBubble 全部按 token 重构
@@ -304,7 +304,7 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 - **P16 Plugin Marketplace 远端 Catalog 完善**：现在的 catalog 是静态 JSON，缺签名 / 版本兼容性 / 评分。
 - **MCP HTTP/SSE server 支持**：当前只支持 stdio；P3 已知问题里登记的 `http` / `sse` 还是 unsupported。
-- **Theme 主题完工**：当前 commit 是 UI overhaul 第一波，`cyber-zen` / `ai-matrix` 两套主题视觉是否定稿待确认。
+- **Theme 主题完工**：当前 commit 是 UI overhaul 第一波，`cyber-zen` 主题视觉是否定稿待确认。
 - **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call 流程缺自动化覆盖。
 - **Auto-update GitHub Release 流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
 

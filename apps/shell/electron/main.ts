@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Tray, Menu, nativeImage, globalShortcut } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Tray, Menu, nativeImage, globalShortcut, shell } from 'electron'
+import { promises as fs } from 'node:fs'
 import { autoUpdater } from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 import { join } from 'node:path'
@@ -17,6 +18,7 @@ import {
 import { mcpSupervisor, type McpServerConfig } from './services/mcpSupervisor'
 import { pluginManager, type PluginState } from './services/pluginManager'
 import { toolAuditLog } from './services/toolAuditLog'
+import { applyWin11RoundedCorners } from './services/dwmCorners'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -31,15 +33,20 @@ function createMainWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'Ava',
+    // Transparent + frameless window. CSS `backdrop-filter: blur()` on the
+    // root container blurs whatever the OS composites behind us (the
+    // desktop) — that gives us the Win11 acrylic look without depending
+    // on the fragile `backgroundMaterial` API. DWM rounded corners are
+    // applied on `ready-to-show` to eliminate the transparent corner gap.
     transparent: true,
     frame: false,
+    backgroundColor: '#00000000',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: '#ffffff',
       height: 44
     },
-    backgroundColor: '#00000000',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -50,6 +57,8 @@ function createMainWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     if (mainWindow) {
+      // Apply Win11 system-level rounded corners (no-op on non-Windows / Win10)
+      applyWin11RoundedCorners(mainWindow, 'round')
       mcpSupervisor.wire(mainWindow.webContents)
       initAutoUpdater(mainWindow)
     }
@@ -189,6 +198,15 @@ function registerIpc(): void {
         })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
+  })
+
+  ipcMain.handle('ava:shell:openPath', async (_e, path: string) => {
+    return shell.openPath(path)
+  })
+
+  ipcMain.handle('ava:fs:writeFile', async (_e, path: string, content: string) => {
+    await fs.writeFile(path, content, 'utf8')
+    return true
   })
 
   // ── Provider connectivity probe ─────────────

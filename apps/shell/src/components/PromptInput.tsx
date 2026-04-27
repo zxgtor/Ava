@@ -469,26 +469,29 @@ export function PromptInput({
             <StopCircle size={18} />
           </button>
         ) : (
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={onSttToggle}
-              disabled={disabled || !voiceEnabled}
-              className={`flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                isRecording ? 'text-error bg-error/10 animate-pulse' : 'text-text-3 hover:text-text hover:bg-surface-2'
-              } ${!voiceEnabled ? 'hidden' : ''}`}
-              title={isRecording ? '停止录音' : '语音输入'}
-            >
-              <Mic size={18} />
-            </button>
-            <button
-              type="submit"
-              disabled={!value.trim() || disabled}
-              className="flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent text-accent hover:bg-accent/10"
-              title="发送"
-            >
-              <Send size={18} />
-            </button>
+          <div className="flex items-center">
+            {value.trim() ? (
+              <button
+                type="submit"
+                disabled={disabled}
+                className="flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer text-accent hover:bg-accent/10"
+                title="发送"
+              >
+                <Send size={18} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSttToggle}
+                disabled={disabled || !voiceEnabled}
+                className={`flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isRecording ? 'text-error bg-error/10 animate-pulse' : 'text-text-3 hover:text-text hover:bg-surface-2'
+                } ${!voiceEnabled ? 'hidden' : ''}`}
+                title={isRecording ? '停止录音' : '语音输入'}
+              >
+                <Mic size={18} />
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -24,7 +24,7 @@ function Shell() {
   }
 
   return (
-    <div className="flex flex-col flex-1 h-screen overflow-hidden rounded-xl border border-border-subtle shadow-2xl relative bg-bg/20">
+    <div className="flex flex-col flex-1 h-screen overflow-hidden rounded-lg border border-border-subtle shadow-2xl relative bg-bg/20 backdrop-blur-main">
       {state.settings.theme === 'aura-glass' && (
         <div className="aura-container">
           <div className="aura-sphere aura-sphere-1" />

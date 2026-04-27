@@ -44,6 +44,10 @@ type Action =
   | { type: 'SELECT_CONVERSATION'; id: string }
   | { type: 'DELETE_CONVERSATION'; id: string }
   | { type: 'RENAME_CONVERSATION'; id: string; title: string }
+  | { type: 'SET_TRAITS'; id: string; traits: InitiativeTrait[] }
+  | { type: 'TOGGLE_PIN_CONVERSATION'; id: string }
+  | { type: 'ARCHIVE_CONVERSATION'; id: string; archived?: boolean }
+  | { type: 'SET_CONVERSATION_FOLDER'; id: string; path: string }
   | { type: 'ADD_MESSAGE'; conversationId: string; message: Message }
   | { type: 'UPDATE_MESSAGE'; conversationId: string; messageId: string; patch: Partial<Message> }
   | { type: 'ADD_PART'; conversationId: string; messageId: string; part: ContentPart }
@@ -97,6 +101,38 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         conversations: state.conversations.map(c =>
           c.id === action.id ? { ...c, title: action.title, updatedAt: Date.now() } : c,
+        ),
+      }
+
+    case 'SET_TRAITS':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id === action.id ? { ...c, traits: action.traits, updatedAt: Date.now() } : c,
+        ),
+      }
+
+    case 'TOGGLE_PIN_CONVERSATION':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id === action.id ? { ...c, pinned: !c.pinned, updatedAt: Date.now() } : c,
+        ),
+      }
+
+    case 'ARCHIVE_CONVERSATION':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id === action.id ? { ...c, archived: action.archived ?? true, updatedAt: Date.now() } : c,
+        ),
+      }
+
+    case 'SET_CONVERSATION_FOLDER':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id === action.id ? { ...c, folderPath: action.path, updatedAt: Date.now() } : c,
         ),
       }
 
@@ -313,7 +349,7 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
     },
     theme:
       src.theme === 'aura-glass' || src.theme === 'cyber-zen' ||
-      src.theme === 'ai-matrix' || src.theme === 'nebula-clear'
+      src.theme === 'nebula-clear'
         ? src.theme
         : merged.theme,
   }
@@ -417,10 +453,27 @@ function sanitizeConversation(raw: unknown): Conversation | null {
     if (!sanitized) return null // strict: drop whole conversation on any bad msg
     messages.push(sanitized)
   }
+
+  // Sanitize traits
+  const traits: InitiativeTrait[] = []
+  if (Array.isArray(c.traits)) {
+    const valid: InitiativeTrait[] = [
+      'chat', 'video', 'code', 'business', 'mastery', 
+      'intelligence', 'profile', 'laboratory', 'forge', 'idea'
+    ]
+    for (const t of c.traits) {
+      if (valid.includes(t)) traits.push(t as InitiativeTrait)
+    }
+  }
+
   return {
     id: c.id,
     title: c.title,
     messages,
+    traits: traits.length > 0 ? traits : ['chat'],
+    pinned: Boolean(c.pinned),
+    archived: Boolean(c.archived),
+    folderPath: typeof c.folderPath === 'string' ? c.folderPath : undefined,
     createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
     updatedAt: typeof c.updatedAt === 'number' ? c.updatedAt : Date.now(),
   }
@@ -538,8 +591,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const now = Date.now()
     const convo: Conversation = {
       id: `c_${now}_${Math.random().toString(36).slice(2, 8)}`,
-      title: '新对话',
+      title: '新纪元',
       messages: [],
+      traits: ['chat'],
       createdAt: now,
       updatedAt: now,
     }

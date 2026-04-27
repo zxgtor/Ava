@@ -1,5 +1,5 @@
-@import 'tailwindcss';
-@import 'highlight.js/styles/github-dark.css';
+@import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
 
 /* ─────────────────────────────────────────
    Ava Design System · Dark Minimal
@@ -41,9 +41,9 @@
 
 [data-theme='aura-glass'] {
   --bg-app: transparent; /* Allow aura-container to show through */
-  --bg-surface: rgba(30, 30, 35, 0.3);
-  --bg-surface-hover: rgba(50, 50, 60, 0.4);
-  --bg-surface-active: rgba(70, 70, 85, 0.5);
+  --bg-surface: rgba(30, 30, 35, 0.4);
+  --bg-surface-hover: rgba(50, 50, 60, 0.5);
+  --bg-surface-active: rgba(70, 70, 85, 0.6);
   --border-main: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.15);
   --text-main: #FFFFFF;
@@ -73,34 +73,6 @@
   --bubble-ai: rgba(255, 255, 255, 0.04);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.2);
-}
-
-[data-theme='cyber-zen'] {
-  --bg-app: #000000;
-  --bg-surface: #000000;
-  --bg-surface-hover: #111111;
-  --bg-surface-active: #1A1A1A;
-  --border-main: #1A1A1A;
-  --border-strong: #333333;
-  --text-main: #FFFFFF;
-  --text-muted: #888888;
-  --text-dim: #444444;
-  --accent-color: #00D1FF;
-  --blur-main: 0px;
-}
-
-[data-theme='ai-matrix'] {
-  --bg-app: #0A0F14;
-  --bg-surface: #121A21;
-  --bg-surface-hover: #1A2530;
-  --bg-surface-active: #222D3A;
-  --border-main: #1E2A35;
-  --border-strong: #2D3D4D;
-  --text-main: #E1E8ED;
-  --text-muted: #8899A6;
-  --text-dim: #506775;
-  --accent-color: #1DA1F2;
-  --blur-main: 0px;
 }
 
 /* Map Tailwind aliases to CSS variables */
@@ -138,11 +110,26 @@ body,
   flex-direction: column;
 }
 
-/* ── Scrollbar ── */
+/* ── Custom Scrollbar for Sidebar ── */
+.custom-sidebar-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+.custom-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+}
+.custom-sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Global Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-surface-3); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-text-3); }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
 
 /* ── Selection ── */
 ::selection {
@@ -162,33 +149,8 @@ body,
   100% { background-position: 0% 50%; }
 }
 
-@keyframes streaming-dot {
-  0%, 80%, 100% { opacity: 0.3; }
-  40% { opacity: 1; }
-}
-
 .animate-fade-in {
   animation: fade-in 0.35s ease-out forwards;
-}
-
-/* ── Abort flash (plays once on interrupt) ── */
-@keyframes abort-flash {
-  0% { border-color: var(--color-error); box-shadow: 0 0 8px rgba(242, 139, 130, 0.3); }
-  100% { border-color: var(--color-border); box-shadow: none; }
-}
-
-.animate-abort-flash {
-  animation: abort-flash 0.6s ease-out forwards;
-}
-
-/* ── Tool running pulse ── */
-@keyframes tool-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.animate-tool-pulse {
-  animation: tool-pulse 1.5s ease-in-out infinite;
 }
 
 /* ── Gradient Text ── */

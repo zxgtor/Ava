@@ -64,10 +64,27 @@ export interface CommandInvocation {
   arguments: Record<string, string>
 }
 
+export type InitiativeTrait = 
+  | 'chat' 
+  | 'video' 
+  | 'code' 
+  | 'business' 
+  | 'mastery' 
+  | 'intelligence' 
+  | 'profile' 
+  | 'laboratory' 
+  | 'forge' 
+  | 'idea'
+  | (string & {}) // 允许任意字符串扩展，同时保持 IDE 的补全提示
+
 export interface Conversation {
   id: string
   title: string
   messages: Message[]
+  traits?: InitiativeTrait[]
+  pinned?: boolean
+  archived?: boolean
+  folderPath?: string
   createdAt: number
   updatedAt: number
 }
@@ -214,7 +231,7 @@ export interface Settings {
   /** Key = `${providerId}:${modelId}` → detected format. */
   modelToolFormatMap: Record<string, ToolCallFormat>
   voice: VoiceConfig
-  theme: 'aura-glass' | 'cyber-zen' | 'ai-matrix' | 'nebula-clear'
+  theme: 'aura-glass' | 'cyber-zen' | 'nebula-clear'
 }
 
 // ── View mode ───────────────────────────────────────────────────────

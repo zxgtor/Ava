@@ -14,6 +14,7 @@ import {
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
+import { detectTraitsFromText } from '../lib/agent/traits'
 import type { CommandInvocation, ContentPart, Conversation, PluginCommand } from '../types'
 
 function partsToText(parts: ContentPart[]): string {
@@ -206,6 +207,18 @@ export function ChatView() {
             patch: { streaming: false, error: result.error },
           })
         }
+
+        // 🟢 流结束后，如果当前还是通用聊天状态，则尝试根据最新内容升级特性
+        const currentTraits = activeConversation?.traits || ['chat']
+        if (currentTraits.length === 0 || currentTraits[0] === 'chat') {
+          const lastMsg = conversationSnapshot.messages[conversationSnapshot.messages.length - 1]
+          const combinedText = partsToText(lastMsg.content)
+          const newTraits = detectTraitsFromText(combinedText)
+          if (newTraits.length > 0 && newTraits[0] !== 'chat') {
+            dispatch({ type: 'SET_TRAITS', id: conversationId, traits: newTraits })
+          }
+        }
+
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg === 'aborted') {
@@ -245,6 +258,15 @@ export function ChatView() {
       if (conversation.messages.length === 0) {
         const title = content.length > 30 ? `${content.slice(0, 30)}…` : content
         dispatch({ type: 'RENAME_CONVERSATION', id: conversationId, title })
+        
+        // 🟢 首次发送或当前为通用状态时，立即识别特性
+        const currentTraits = conversation.traits || ['chat']
+        if (currentTraits.length === 0 || currentTraits[0] === 'chat') {
+          const initialTraits = detectTraitsFromText(content)
+          if (initialTraits.length > 0 && initialTraits[0] !== 'chat') {
+            dispatch({ type: 'SET_TRAITS', id: conversationId, traits: initialTraits })
+          }
+        }
       }
 
       await driveStream(

@@ -1,5 +1,5 @@
 import { Settings } from '../../types'
-import { Sparkles, Zap, Box } from 'lucide-react'
+import { Sparkles, Zap } from 'lucide-react'
 
 interface Props {
   settings: Settings
@@ -21,13 +21,6 @@ export function AppearanceSection({ settings, update }: Props) {
       desc: '沉浸式的纯黑 OLED 体验',
       icon: Zap,
       color: 'from-cyan-400 to-blue-600',
-    },
-    {
-      id: 'ai-matrix',
-      name: '智能矩阵',
-      desc: '富有结构感的科技感面板',
-      icon: Box,
-      color: 'from-slate-400 to-slate-600',
     },
     {
       id: 'nebula-clear',
