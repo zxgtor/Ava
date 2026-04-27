@@ -8,6 +8,9 @@ import { WebContents } from 'electron'
 import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
 import { pluginManager, type PluginSkill, type PluginState } from './services/pluginManager'
 import { previewValue, toolAuditLog, type ToolAuditCommandInvocation } from './services/toolAuditLog'
+import { OpenAiAdapter } from './adapters/openai'
+import { AnthropicAdapter } from './adapters/anthropic'
+import { LlmAdapter } from './adapters/base'
 
 export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
@@ -66,6 +69,12 @@ export interface StreamChatArgs {
   pluginStates?: Record<string, PluginState>
 }
 
+export interface StreamStepArgs extends StreamChatArgs {
+  messages: LlmMessage[]
+  tools: McpToolDescriptor[]
+  toolFormatHint?: ToolCallFormat
+}
+
 export interface StreamChatResult {
   fullContent: string
   parts: Array<{ type: 'text'; text: string } | ToolCallPart>
@@ -78,13 +87,13 @@ export interface StreamChatResult {
   detectedToolFormat: ToolCallFormat
 }
 
-interface ToolCallCandidate {
+export interface ToolCallCandidate {
   id: string
   name: string
   args: Record<string, unknown>
 }
 
-interface ToolCallAccumulator {
+export interface ToolCallAccumulator {
   id?: string
   name?: string
   argsText: string
@@ -110,21 +119,29 @@ const MAX_TOOL_LOOP = 10
 const WINDOWS_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：、]+/g
 const WINDOWS_DRIVE_SCOPE_RE = /\b[A-Za-z]:\\?(?![^\s"'`<>|?*])/g
 
-function chatCompletionsEndpoint(baseUrl: string): string {
+export function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
   if (/\/chat\/completions$/i.test(trimmed)) return trimmed
   if (/\/v1$/i.test(trimmed)) return `${trimmed}/chat/completions`
   return `${trimmed}/v1/chat/completions`
 }
 
-function anthropicMessagesEndpoint(baseUrl: string): string {
+export function anthropicMessagesEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
   if (/\/messages$/i.test(trimmed)) return trimmed
   if (/\/v1$/i.test(trimmed)) return `${trimmed}/messages`
   return `${trimmed}/v1/messages`
 }
 
-function makeDeltaPusher(onChunk: (text: string) => void) {
+function getAdapter(providerId: string): LlmAdapter {
+  if (providerId === 'anthropic') {
+    return new AnthropicAdapter()
+  }
+  // Default to OpenAI-compatible for everything else (local models, groq, deepseek, etc)
+  return new OpenAiAdapter()
+}
+
+export function makeDeltaPusher(onChunk: (text: string) => void) {
   let fullContent = ''
   let seenFirstVisible = false
 
@@ -202,7 +219,7 @@ function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask
   return `Blocked stale filesystem tool call. The requested path "${path}" is outside the latest user request scope: ${scopes.join(', ')}.`
 }
 
-function buildToolPrompt(tools: McpToolDescriptor[]): string {
+export function buildToolPrompt(tools: McpToolDescriptor[]): string {
   const toolLines = tools.map(tool => {
     const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema) : '{}'
     return `- ${tool.name}: ${tool.description ?? 'No description'} | args schema: ${schema}`
@@ -216,7 +233,7 @@ function buildToolPrompt(tools: McpToolDescriptor[]): string {
   ].join('\n')
 }
 
-function toOpenAiMessages(messages: LlmMessage[]) {
+export function toOpenAiMessages(messages: LlmMessage[]) {
   return messages.map(message => {
     if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
       return {
@@ -287,7 +304,7 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
   }
 }
 
-function parseHermesToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
+export function parseHermesToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
   const toolCalls: ToolCallCandidate[] = []
   const toolCallBlockRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
   const visibleText = text.replace(toolCallBlockRe, (_match, body) => {
@@ -322,21 +339,21 @@ function parseHermesToolCalls(text: string): { visibleText: string; toolCalls: T
   return { visibleText, toolCalls }
 }
 
-function stripResidualToolMarkup(text: string): string {
+export function stripResidualToolMarkup(text: string): string {
   return text
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
     .replace(/<function=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/function>)?/g, '')
     .trim()
 }
 
-function extractOpenAiPayload(line: string): Record<string, unknown> | null {
+export function extractOpenAiPayload(line: string): Record<string, unknown> | null {
   if (!line.startsWith('data:')) return null
   const payload = line.slice(5).trim()
   if (!payload || payload === '[DONE]') return null
   return parseJsonObject(payload)
 }
 
-function normalizeToolCallCandidates(accs: ToolCallAccumulator[]): ToolCallCandidate[] {
+export function normalizeToolCallCandidates(accs: ToolCallAccumulator[]): ToolCallCandidate[] {
   const out: ToolCallCandidate[] = []
   for (let i = 0; i < accs.length; i += 1) {
     const acc = accs[i]
@@ -350,7 +367,7 @@ function normalizeToolCallCandidates(accs: ToolCallAccumulator[]): ToolCallCandi
   return out
 }
 
-function applyToolCallDelta(accs: ToolCallAccumulator[], payload: Record<string, unknown>): boolean {
+export function applyToolCallDelta(accs: ToolCallAccumulator[], payload: Record<string, unknown>): boolean {
   const deltaObj = payload.choices && Array.isArray(payload.choices)
     ? payload.choices[0] as Record<string, unknown> | undefined
     : undefined
@@ -375,7 +392,7 @@ function applyToolCallDelta(accs: ToolCallAccumulator[], payload: Record<string,
   return true
 }
 
-function extractMessageToolCalls(payload: Record<string, unknown>): ToolCallCandidate[] {
+export function extractMessageToolCalls(payload: Record<string, unknown>): ToolCallCandidate[] {
   const choice = Array.isArray(payload.choices) ? payload.choices[0] as Record<string, unknown> | undefined : undefined
   const message = choice?.message
   if (!message || typeof message !== 'object') return []
@@ -402,276 +419,19 @@ function extractMessageToolCalls(payload: Record<string, unknown>): ToolCallCand
   })
 }
 
-async function streamOpenAiCompat(
-  provider: ModelProvider,
-  args: StreamChatArgs & {
-    messages: LlmMessage[]
-    tools: McpToolDescriptor[]
-    toolFormatHint?: ToolCallFormat
-  },
-  controller: AbortController,
-  onChunk: (text: string) => void,
-): Promise<StreamStepResult> {
-  const model = provider.defaultModel
-  const endpoint = chatCompletionsEndpoint(provider.baseUrl)
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`
-
-  const requestBody: Record<string, unknown> = {
-    model,
-    messages: toOpenAiMessages(args.messages),
-    temperature: args.temperature ?? 0.4,
-    stream: true,
-  }
-  if (args.tools.length > 0 && args.toolFormatHint !== 'hermes' && args.toolFormatHint !== 'none') {
-    requestBody.tools = args.tools.map(tool => ({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description ?? '',
-        parameters: tool.inputSchema ?? { type: 'object', properties: {} },
-      },
-    }))
-    requestBody.tool_choice = 'auto'
-  }
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(requestBody),
-    signal: controller.signal,
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '')
-    throw new Error(`HTTP ${response.status}${errorText ? ` — ${errorText.slice(0, 300)}` : ''}`)
-  }
-  if (!response.body) {
-    throw new Error('No response body from provider')
-  }
-
-  const streamChunks = args.toolFormatHint !== 'hermes'
-  const pusher = makeDeltaPusher(streamChunks ? onChunk : () => { /* buffer Hermes text until tool tags are stripped */ })
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-  const toolAccs: ToolCallAccumulator[] = []
-  let finalPayload: Record<string, unknown> | null = null
-
-  const processPayload = (payload: Record<string, unknown>) => {
-    finalPayload = payload
-    const deltaObj = Array.isArray(payload.choices) ? payload.choices[0] as Record<string, unknown> | undefined : undefined
-    const delta = deltaObj?.delta
-    if (delta && typeof delta === 'object') {
-      const content = (delta as Record<string, unknown>).content
-      if (typeof content === 'string') pusher.push(content)
-    }
-    applyToolCallDelta(toolAccs, payload)
-    const messageContent = deltaObj?.message && typeof deltaObj.message === 'object'
-      ? (deltaObj.message as Record<string, unknown>).content
-      : undefined
-    if (typeof messageContent === 'string' && !toolAccs.length && !pusher.fullContent) {
-      pusher.push(messageContent)
-    }
-  }
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) {
-        buffer += decoder.decode()
-        break
-      }
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const raw of lines) {
-        const line = raw.trim()
-        if (!line) continue
-        const payload = extractOpenAiPayload(line)
-        if (payload) processPayload(payload)
-      }
-    }
-    if (buffer.trim()) {
-      const payload = extractOpenAiPayload(buffer.trim())
-      if (payload) processPayload(payload)
-    }
-  } finally {
-    try { reader.releaseLock() } catch { /* noop */ }
-  }
-
-  let toolCalls = normalizeToolCallCandidates(toolAccs)
-  if (toolCalls.length === 0 && finalPayload) {
-    toolCalls = extractMessageToolCalls(finalPayload)
-  }
-
-  let visibleText = pusher.fullContent
-  let detected: ToolCallFormat = toolCalls.length > 0 ? 'openai' : 'none'
-  if (toolCalls.length === 0 && args.tools.length > 0) {
-    const hermes = parseHermesToolCalls(visibleText)
-    if (hermes.toolCalls.length > 0) {
-      toolCalls = hermes.toolCalls
-      visibleText = hermes.visibleText
-      detected = 'hermes'
-    }
-  }
-  visibleText = stripResidualToolMarkup(visibleText)
-  if (!streamChunks && visibleText) {
-    onChunk(visibleText)
-  }
-
-  return { visibleText, toolCalls, model, detectedToolFormat: detected }
-}
-
-interface AnthropicSseEvent {
-  type: string
-  [k: string]: unknown
-}
-
-function extractAnthropicDelta(jsonLine: string): { delta?: string; error?: string } {
-  try {
-    const event = JSON.parse(jsonLine) as AnthropicSseEvent
-    if (event.type === 'content_block_delta') {
-      const delta = event.delta as { type?: string; text?: string } | undefined
-      if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-        return { delta: delta.text }
-      }
-    }
-    if (event.type === 'error') {
-      const err = event.error as { message?: string; type?: string } | undefined
-      return { error: err?.message || err?.type || 'anthropic stream error' }
-    }
-    return {}
-  } catch {
-    return {}
-  }
-}
-
-async function streamAnthropic(
-  provider: ModelProvider,
-  args: StreamChatArgs & { messages: LlmMessage[]; tools: McpToolDescriptor[] },
-  controller: AbortController,
-  onChunk: (text: string) => void,
-): Promise<StreamStepResult> {
-  const model = provider.defaultModel
-  const endpoint = anthropicMessagesEndpoint(provider.baseUrl)
-
-  const systemParts: string[] = []
-  const chat: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
-  for (const m of args.messages) {
-    if (m.role === 'system') {
-      if (typeof m.content === 'string' && m.content) systemParts.push(m.content)
-    } else if (m.role === 'tool') {
-      chat.push({ role: 'user', content: `Tool result for ${m.toolCallId ?? 'tool'}:\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}` })
-    } else {
-      if (typeof m.content === 'string') {
-        chat.push({ role: m.role, content: m.content })
-      } else {
-        const parts = m.content.map(p => {
-          if (p.type === 'text') return { type: 'text', text: p.text }
-          if (p.type === 'image_url') {
-            const match = p.image_url.url.match(/^data:(image\/[a-zA-Z+]+);base64,(.*)$/)
-            if (match) {
-              return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } }
-            }
-            return { type: 'text', text: `[Image at ${p.image_url.url}]` }
-          }
-          return null
-        }).filter(Boolean)
-        chat.push({ role: m.role, content: parts })
-      }
-    }
-  }
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'anthropic-version': ANTHROPIC_API_VERSION,
-  }
-  if (provider.apiKey) headers['x-api-key'] = provider.apiKey
-
-  const body: Record<string, unknown> = {
-    model,
-    max_tokens: ANTHROPIC_MAX_TOKENS,
-    temperature: args.temperature ?? 0.4,
-    messages: chat,
-    stream: true,
-  }
-  if (systemParts.length > 0) body.system = systemParts.join('\n\n')
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '')
-    throw new Error(`HTTP ${response.status}${errorText ? ` — ${errorText.slice(0, 300)}` : ''}`)
-  }
-  if (!response.body) {
-    throw new Error('No response body from Anthropic')
-  }
-
-  const pusher = makeDeltaPusher(onChunk)
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-  let streamError: string | null = null
-
-  const processDataLine = (line: string) => {
-    if (!line.startsWith('data:')) return
-    const payload = line.slice(5).trim()
-    if (!payload) return
-    const { delta, error } = extractAnthropicDelta(payload)
-    if (error) streamError = error
-    else if (delta) pusher.push(delta)
-  }
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) {
-        buffer += decoder.decode()
-        break
-      }
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const raw of lines) {
-        const line = raw.trim()
-        if (!line) continue
-        processDataLine(line)
-      }
-    }
-    if (buffer.trim()) processDataLine(buffer.trim())
-  } finally {
-    try { reader.releaseLock() } catch { /* noop */ }
-  }
-
-  if (streamError) throw new Error(streamError)
-  return {
-    visibleText: pusher.fullContent,
-    toolCalls: [],
-    model,
-    detectedToolFormat: 'none',
-  }
-}
-
 function streamFromProvider(
   provider: ModelProvider,
-  args: StreamChatArgs & {
-    messages: LlmMessage[]
-    tools: McpToolDescriptor[]
-    toolFormatHint?: ToolCallFormat
-  },
+  args: StreamStepArgs,
   controller: AbortController,
   onChunk: (text: string) => void,
 ): Promise<StreamStepResult> {
-  if (provider.id === 'anthropic') {
-    return streamAnthropic(provider, args, controller, onChunk)
-  }
-  return streamOpenAiCompat(provider, args, controller, onChunk)
+  const adapter = getAdapter(provider.id)
+  return adapter.streamChat({
+    provider,
+    args,
+    controller,
+    onChunk,
+  })
 }
 
 async function runToolLoop(
