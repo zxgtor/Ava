@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
-import { Upload } from 'lucide-react'
+import { Upload, FolderOpen, Plus } from 'lucide-react'
 import { useStore } from '../store'
 import { ChatHeader } from './ChatHeader'
 import { EmptyState } from './EmptyState'
@@ -82,6 +82,72 @@ export function ChatView() {
     if (!el) return
     el.scrollTop = el.scrollHeight
   }, [activeConversation?.messages, isStreaming])
+
+  // Project Status & Context (Level 2 & 3)
+  const [projectBrief, setProjectBrief] = useState<{ tasksDone: number; tasksTotal: number; files: string[] } | null>(null)
+
+  const syncProjectContext = useCallback(async () => {
+    if (!activeConversation?.folderPath) {
+      setProjectBrief(null)
+      return
+    }
+    try {
+      const folder = activeConversation.folderPath
+      const fileList = await window.ava.fs.listDir(folder)
+      const files = fileList.map(f => f.name)
+      
+      let tasksDone = 0
+      let tasksTotal = 0
+      try {
+        const tasksMd = await window.ava.fs.readFile(`${folder}/TASKS.md`)
+        const lines = tasksMd.split('\n')
+        lines.forEach(line => {
+          if (line.includes('[ ]') || line.includes('[x]')) {
+            tasksTotal++
+            if (line.includes('[x]')) tasksDone++
+          }
+        })
+      } catch { /* TASKS.md might not exist yet */ }
+
+      setProjectBrief({ tasksDone, tasksTotal, files })
+    } catch (err) {
+      console.warn('Project sync failed:', err)
+    }
+  }, [activeConversation?.folderPath])
+
+  useEffect(() => {
+    syncProjectContext()
+  }, [syncProjectContext])
+
+  // Real-time Preview Sync (Level 4: Design Awareness)
+  useEffect(() => {
+    if (!activeConversation) return
+    const messages = activeConversation.messages
+    if (messages.length === 0) return
+
+    const lastAssistantMessage = [...messages].reverse().find(m => m.role === 'assistant')
+    if (!lastAssistantMessage) return
+
+    const text = partsToText(lastAssistantMessage.content)
+    
+    // 优先匹配 ``` 块内的内容，如果没有，则匹配标签本身
+    let htmlContent = ''
+    const blockMatch = text.match(/```(?:html|svg)\s*([\s\S]*?)\s*```/i)
+    if (blockMatch) {
+      htmlContent = blockMatch[1]
+    } else {
+      const tagMatch = text.match(/<(html|svg)[\s\S]*?<\/\1>/i) || text.match(/<svg[\s\S]*?>[\s\S]*/i)
+      if (tagMatch) htmlContent = tagMatch[0]
+    }
+    
+    if (htmlContent) {
+      // 延迟一小会儿确保预览窗口已经 Ready
+      setTimeout(() => {
+        window.ava.window.updatePreview(htmlContent)
+      }, 500)
+    }
+  }, [activeConversation?.messages, activeConversation?.id])
+
 
   const toggleStt = useCallback(async () => {
     if (!state.settings.voice?.enabled) return
@@ -247,7 +313,16 @@ export function ChatView() {
   const runSend = useCallback(
     async (content: string, attachments: string[] = [], conversation: Conversation, commandInvocation?: CommandInvocation) => {
       const taskId = makeTaskId()
-      const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments)
+      
+      // Level 3: RAG Injection
+      let enrichedContent = content
+      if (projectBrief) {
+        const fileList = projectBrief.files.join(', ')
+        const progress = projectBrief.tasksTotal > 0 ? `Progress: ${projectBrief.tasksDone}/${projectBrief.tasksTotal}` : ''
+        enrichedContent = `[System Context: Active Folder "${conversation.folderPath}". Files: ${fileList}. ${progress}]\n\n${content}`
+      }
+
+      const userMsg = makeUserMessage(enrichedContent, commandInvocation, taskId, attachments)
       const placeholder = makeAssistantPlaceholder(taskId)
       const conversationId = conversation.id
 
@@ -312,6 +387,7 @@ export function ChatView() {
   const handleNewConversation = useCallback(() => {
     createConversation()
   }, [createConversation])
+
 
   const handleDeleteConversation = useCallback(() => {
     if (!activeConversation) return
@@ -429,6 +505,44 @@ export function ChatView() {
         </div>
       )}
 
+      {/* Level 2: Project Status Bar */}
+      {projectBrief && activeConversation?.folderPath && (
+        <div className="mx-6 mt-4 p-2 bg-accent/5 border border-accent/10 rounded-xl flex items-center justify-between animate-in slide-in-from-top-4 duration-500">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent">
+              <FolderOpen size={16} />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[11px] font-medium text-text-1">Project Active: {activeConversation.folderPath.split(/[\\/]/).pop()}</span>
+              <span className="text-[9px] text-text-3">{projectBrief.files.length} files detected</span>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            {projectBrief.tasksTotal > 0 && (
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex items-center gap-2 text-[9px] font-mono text-accent">
+                  <span>TASKS</span>
+                  <span>{projectBrief.tasksDone}/{projectBrief.tasksTotal}</span>
+                </div>
+                <div className="w-24 h-1 bg-white/5 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-accent transition-all duration-1000" 
+                    style={{ width: `${(projectBrief.tasksDone / projectBrief.tasksTotal) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            <button 
+              onClick={() => syncProjectContext()}
+              className="p-1.5 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors"
+              title="Sync Project Context"
+            >
+              <Plus size={14} className="rotate-45" /> {/* Use as sync/refresh icon */}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
         {showEmpty ? (

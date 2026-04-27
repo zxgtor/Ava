@@ -1,7 +1,7 @@
 import { InitiativeTrait } from '../../types'
 import { 
   MessageSquare, Film, Terminal, Briefcase, GraduationCap, 
-  Globe, UserSearch, Beaker, Flame, Lightbulb, Tag
+  Globe, UserSearch, Beaker, Flame, Lightbulb, Tag, Palette
 } from 'lucide-react'
 
 interface TraitDefinition {
@@ -21,6 +21,7 @@ export const TRAIT_REGISTRY: Record<string, TraitDefinition> = {
   video: { id: 'video', label: '视频', keywords: ['video', 'mp4', 'mov', 'clip', 'movie', 'script', 'storyboard', '视频', '剪辑', '剧本'], icon: Film, color: 'text-purple-400' },
   code: { id: 'code', label: '代码', keywords: ['code', 'bug', 'debug', 'function', 'react', 'python', 'javascript', '代码', '调试', '架构'], icon: Terminal, color: 'text-blue-400' },
   business: { id: 'business', label: '商业', keywords: ['business', 'revenue', 'market', 'profit', 'startup', '商业', '市场', '创业', '营销'], icon: Briefcase, color: 'text-amber-400' },
+  design: { id: 'design', label: '设计', keywords: ['design', 'ui', 'ux', 'logo', 'mockup', 'poster', 'sketch', 'figma', 'icon', 'color', 'font', '设计', '画图', '图标'], icon: Palette, color: 'text-pink-400' },
   mastery: { id: 'mastery', label: '技能', keywords: ['learn', 'skill', 'study', 'course', 'teach', '学习', '技能', '教程'], icon: GraduationCap, color: 'text-emerald-400' },
   intelligence: { id: 'intelligence', label: '情报', keywords: ['news', 'current', 'event', 'world', '资讯', '新闻', '时事', '情报'], icon: Globe, color: 'text-sky-400' },
   profile: { id: 'profile', label: '肖像', keywords: ['persona', 'analyze person', 'character', '肖像', '画像', '性格', '侧写'], icon: UserSearch, color: 'text-rose-400' },

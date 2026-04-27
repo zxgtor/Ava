@@ -3,11 +3,44 @@ import { StoreProvider, useStore } from './store'
 import { ChatView } from './components/ChatView'
 import { SettingsView } from './components/SettingsView'
 import { ConversationSidebar } from './components/ConversationSidebar'
-
+import { PreviewView } from './components/PreviewView'
 import { ChatHeader } from './components/ChatHeader'
+import { useCallback } from 'react'
+import type { ContentPart } from './types'
+
+function partsToText(parts: ContentPart[]): string {
+  return parts
+    .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
+    .map(p => p.text)
+    .join('')
+}
 
 function Shell() {
   const { state, dispatch, activeConversation, createConversation } = useStore()
+
+  const handleOpenPreview = useCallback(async () => {
+    // 1. 开启/聚焦窗口
+    await window.ava.window.openPreview()
+
+    // 2. 立即尝试同步当前内容
+    if (!activeConversation) return
+    const messages = activeConversation.messages
+    const lastAssistantMessage = [...messages].reverse().find(m => m.role === 'assistant')
+    if (!lastAssistantMessage) return
+
+    const text = partsToText(lastAssistantMessage.content)
+    const htmlMatch = text.match(/```(?:html|svg)\s*([\s\S]*?)\s*```/i) || 
+                      text.match(/<(html|svg)[\s\S]*?<\/\1>/i) ||
+                      text.match(/<svg[\s\S]*?>[\s\S]*/i)
+    
+    if (htmlMatch) {
+      const htmlContent = htmlMatch[1] || htmlMatch[0]
+      // 给窗口一点初始化时间
+      setTimeout(() => {
+        window.ava.window.updatePreview(htmlContent)
+      }, 800)
+    }
+  }, [activeConversation])
 
   useEffect(() => {
     if (state.settings.theme) {
@@ -33,7 +66,6 @@ function Shell() {
         </div>
       )}
       
-      {/* 全局统一标题栏 */}
       <ChatHeader
         activeConversation={activeConversation}
         sidebarOpen={state.sidebarOpen}
@@ -41,6 +73,7 @@ function Shell() {
         onNewConversation={createConversation}
         onOpenSettings={() => dispatch({ type: 'SET_VIEW', view: 'settings' })}
         onDeleteConversation={activeConversation ? () => dispatch({ type: 'DELETE_CONVERSATION', id: activeConversation.id }) : undefined}
+        onOpenPreview={handleOpenPreview}
       />
 
       <div className="flex flex-row flex-1 min-h-0 relative">
@@ -54,6 +87,13 @@ function Shell() {
 }
 
 export default function App() {
+  // 识别预览模式：这种模式下不需要 Store，不需要 Sidebar，只需要渲染器
+  const isPreview = window.location.search.includes('view=preview')
+
+  if (isPreview) {
+    return <PreviewView />
+  }
+
   return (
     <StoreProvider>
       <Shell />

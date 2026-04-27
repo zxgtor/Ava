@@ -94,6 +94,11 @@ export function ConversationSidebar() {
         } else if (trait === 'video') {
           specFile = 'SCRIPT.md'
           specContent = `# Script/Storyboard: ${conv.title}\n\n## Scene 1\n- \n`
+        } else if (trait === 'design') {
+          specFile = 'DESIGN_SPEC.md'
+          specContent = `# Design Spec: ${conv.title}\n\n## Brand/Mood\n- \n\n## Color Palette\n- \n\n## Typography\n- \n`
+          // 额外生成一个资产清单
+          await window.ava.fs.writeFile(`${path}/ASSETS.md`, `# Design Assets: ${conv.title}\n\n- [ ] Logo\n- [ ] Icons\n- [ ] Mockups\n`)
         }
 
         await window.ava.fs.writeFile(`${path}/${specFile}`, specContent)
@@ -244,7 +249,7 @@ export function ConversationSidebar() {
                   {isMenuOpen && (
                     <div 
                       ref={menuRef}
-                      className="absolute right-2 top-8 z-50 w-48 bg-[#1a1b1e] border border-white/10 rounded-lg shadow-[0_10px_40px_rgba(0,0,0,0.7)] py-1.5 animate-in fade-in zoom-in duration-150 ring-1 ring-black/5"
+                      className="absolute right-2 top-8 z-50 w-48 bg-[#1a1b1e]/98 border border-white/10 rounded-lg shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl py-1.5 animate-in fade-in zoom-in duration-150 ring-1 ring-black/5"
                       onClick={e => e.stopPropagation()}
                     >
                       <button onClick={() => startEditing(conv)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-white">

@@ -287,7 +287,7 @@ export function PromptInput({
       onDragOver={e => e.preventDefault()}
     >
       {commandsOpen && (
-        <div className="absolute left-6 right-6 bottom-[5.25rem] z-10 max-h-72 overflow-y-auto rounded-xl border border-border-subtle bg-surface shadow-2xl">
+        <div className="absolute left-6 right-6 bottom-[5.25rem] z-50 max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-[#1a1b1e]/98 shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
             <div>
               <div className="text-xs font-medium text-text">Plugin Commands</div>
@@ -406,7 +406,7 @@ export function PromptInput({
           <ListPlus size={18} />
         </button>
         {selectedCommand && (
-          <div className="absolute left-6 right-6 bottom-[5.25rem] z-10 rounded-xl border border-border-subtle bg-surface shadow-2xl p-3 space-y-3">
+          <div className="absolute left-6 right-6 bottom-[5.25rem] z-50 rounded-xl border border-white/10 bg-[#1a1b1e]/98 shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl p-3 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm text-text">Run {selectedCommand.pluginName} / {selectedCommand.name}</div>

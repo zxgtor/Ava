@@ -1,8 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Tray, Menu, nativeImage, globalShortcut, shell } from 'electron'
 import { promises as fs } from 'node:fs'
+import { exec } from 'node:child_process'
+import { promisify } from 'node:util'
+
 import { autoUpdater } from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 import { join } from 'node:path'
+
+
 import {
   loadSettings,
   saveSettings,
@@ -20,9 +25,58 @@ import { pluginManager, type PluginState } from './services/pluginManager'
 import { toolAuditLog } from './services/toolAuditLog'
 import { applyWin11RoundedCorners } from './services/dwmCorners'
 
+const execAsync = promisify(exec)
+
 let mainWindow: BrowserWindow | null = null
+let previewWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
+
+function createPreviewWindow(): void {
+  if (previewWindow) {
+    previewWindow.focus()
+    return
+  }
+
+  previewWindow = new BrowserWindow({
+    width: 900,
+    height: 700,
+    title: 'Ava Preview',
+    autoHideMenuBar: true,
+    transparent: true,
+    frame: false,
+    backgroundColor: '#00000000',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#00000000',
+      symbolColor: '#ffffff',
+      height: 44
+    },
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  previewWindow.on('ready-to-show', () => {
+    if (previewWindow) {
+      applyWin11RoundedCorners(previewWindow, 'round')
+      previewWindow.show()
+    }
+  })
+
+  previewWindow.on('closed', () => {
+    previewWindow = null
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    previewWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?view=preview`)
+  } else {
+    previewWindow.loadFile(join(__dirname, '../renderer/index.html'), { query: { view: 'preview' } })
+  }
+}
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -207,6 +261,39 @@ function registerIpc(): void {
   ipcMain.handle('ava:fs:writeFile', async (_e, path: string, content: string) => {
     await fs.writeFile(path, content, 'utf8')
     return true
+  })
+
+  ipcMain.handle('ava:fs:readFile', async (_e, path: string) => {
+    return fs.readFile(path, 'utf8')
+  })
+
+  ipcMain.handle('ava:fs:listDir', async (_e, path: string) => {
+    const files = await fs.readdir(path, { withFileTypes: true })
+    return files.map(f => ({
+      name: f.name,
+      isDirectory: f.isDirectory(),
+      size: 0 // Simplification
+    }))
+  })
+
+  ipcMain.handle('ava:shell:openInTerminal', async (_e, path: string) => {
+    // Windows: opens powershell at the specified path
+    return execAsync(`start powershell.exe -NoExit -WorkingDirectory "${path}"`)
+  })
+
+  ipcMain.handle('ava:shell:openInVSCode', async (_e, path: string) => {
+    return execAsync(`code "${path}"`)
+  })
+
+  // ── Window Management ──────────────────────
+  ipcMain.handle('ava:window:openPreview', () => {
+    createPreviewWindow()
+  })
+
+  ipcMain.handle('ava:window:updatePreview', (_e, content: string) => {
+    BrowserWindow.getAllWindows().forEach(w => {
+      w.webContents.send('ava:preview:update', content)
+    })
   })
 
   // ── Provider connectivity probe ─────────────

@@ -322,9 +322,23 @@ const ava = {
   },
   shell: {
     openPath: (path: string): Promise<string> => ipcRenderer.invoke('ava:shell:openPath', path),
+    openInTerminal: (path: string): Promise<void> => ipcRenderer.invoke('ava:shell:openInTerminal', path),
+    openInVSCode: (path: string): Promise<void> => ipcRenderer.invoke('ava:shell:openInVSCode', path),
   },
   fs: {
     writeFile: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('ava:fs:writeFile', path, content),
+    readFile: (path: string): Promise<string> => ipcRenderer.invoke('ava:fs:readFile', path),
+    listDir: (path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>> => 
+      ipcRenderer.invoke('ava:fs:listDir', path),
+  },
+  window: {
+    openPreview: (): Promise<void> => ipcRenderer.invoke('ava:window:openPreview'),
+    updatePreview: (content: string): Promise<void> => ipcRenderer.invoke('ava:window:updatePreview', content),
+    onUpdate: (callback: (content: string) => void) => {
+      const listener = (_e: any, content: string) => callback(content)
+      ipcRenderer.on('ava:preview:update', listener)
+      return () => ipcRenderer.removeListener('ava:preview:update', listener)
+    },
   },
 }
 
