@@ -1,4 +1,5 @@
 import { useCallback, useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ArrowLeft } from 'lucide-react'
 import { useStore } from '../store'
 import {
@@ -20,6 +21,7 @@ import { VoiceSection } from './settings/VoiceSection'
 import { AboutSection } from './settings/AboutSection'
 
 export function SettingsView() {
+  const { t } = useTranslation()
   const { state, dispatch } = useStore()
   const [localPlugins, setLocalPlugins] = useState<any[]>([])
 
@@ -62,9 +64,9 @@ export function SettingsView() {
           className="flex items-center gap-1.5 text-sm text-text-2 cursor-pointer hover:text-text transition-colors"
         >
           <ArrowLeft size={16} />
-          返回
+          {t('settings.back', 'Back')}
         </button>
-        <div className="flex-1 text-center text-sm text-text">设置</div>
+        <div className="flex-1 text-center text-sm text-text">{t('settings.title', 'Settings')}</div>
         <div className="w-16" />
       </div>
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ListPlus, Send, Star, StopCircle, Mic, Image as ImageIcon, X, FileText, FileCode, File as FileIcon } from 'lucide-react'
 import type { CommandInvocation, PluginCommand } from '../types'
 
@@ -43,6 +44,7 @@ export function PromptInput({
   sttText,
   externalDroppedFiles,
 }: Props) {
+  const { t } = useTranslation()
   const [value, setValue] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
 
@@ -290,8 +292,8 @@ export function PromptInput({
         <div className="absolute left-6 right-6 bottom-[5.25rem] z-50 max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-[#1a1b1e]/98 shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
             <div>
-              <div className="text-xs font-medium text-text">Plugin Commands</div>
-              <div className="text-[11px] text-text-3">输入 / 可打开；选择后会插入输入框，发送前可编辑。</div>
+              <div className="text-xs font-medium text-text">{t('chat.plugin_commands', 'Plugin Commands')}</div>
+              <div className="text-[11px] text-text-3">{t('chat.plugin_commands_tip', 'Type / to open; selecting will insert into input.')}</div>
             </div>
             <button
               type="button"
@@ -299,7 +301,7 @@ export function PromptInput({
               disabled={commandsLoading}
               className="px-2 py-1 text-xs text-text-2 rounded cursor-pointer hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {commandsLoading ? '刷新中…' : 'Refresh'}
+              {commandsLoading ? t('chat.refreshing', 'Refreshing...') : t('chat.refresh', 'Refresh')}
             </button>
           </div>
           <div className="px-3 py-2 border-b border-border-subtle">
@@ -313,18 +315,18 @@ export function PromptInput({
                   textareaRef.current?.focus()
                 }
               }}
-              placeholder="搜索 command…"
+              placeholder={t('chat.search_commands', 'Search commands...')}
               className="w-full px-2.5 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
             />
           </div>
           {commands.length === 0 ? (
             <div className="px-3 py-3 text-xs text-text-3">
-              没有可用命令。确认插件已启用，并包含 commands/*.md。
+              {t('chat.no_commands', 'No commands available. Ensure plugins are enabled.')}
             </div>
           ) : (
             <div className="py-1">
               {sortedCommands.length === 0 && (
-                <div className="px-3 py-3 text-xs text-text-3">没有匹配的命令。</div>
+                <div className="px-3 py-3 text-xs text-text-3">{t('chat.no_matching_commands', 'No matching commands.')}</div>
               )}
               {sortedCommands.map(command => (
                 <div
@@ -338,7 +340,7 @@ export function PromptInput({
                       toggleFavorite(command)
                     }}
                     className={`p-1 rounded ${favoriteCommandKeys.includes(`${command.pluginId}:${command.name}`) ? 'text-warning' : 'text-text-3'}`}
-                    title="收藏命令"
+                    title={t('chat.favorite_command', 'Favorite Command')}
                   >
                     <Star size={13} fill={favoriteCommandKeys.includes(`${command.pluginId}:${command.name}`) ? 'currentColor' : 'none'} />
                   </button>
@@ -401,7 +403,7 @@ export function PromptInput({
           }}
           disabled={disabled || isStreaming}
           className="flex-shrink-0 p-2 text-text-2 rounded-xl cursor-pointer hover:text-text hover:bg-surface-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title="插件命令"
+          title={t('chat.plugin_commands', 'Plugin Commands')}
         >
           <ListPlus size={18} />
         </button>
@@ -436,7 +438,7 @@ export function PromptInput({
                 ))}
               </div>
             ) : (
-              <div className="text-xs text-text-3">这个命令没有声明参数。</div>
+              <div className="text-xs text-text-3">{t('chat.no_args_declared', 'No arguments declared for this command.')}</div>
             )}
             <button
               type="button"
@@ -454,7 +456,7 @@ export function PromptInput({
           onChange={e => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={disabled ? (disabledReason ?? '请先在设置中启用 LLM 供应商') : '输入消息…  (Enter 发送 / Shift+Enter 换行，支持拖拽粘贴图片)'}
+          placeholder={disabled ? (disabledReason ?? t('chat.no_provider_error', 'Please configure LLM')) : t('chat.input_placeholder', 'Type message...')}
           disabled={disabled}
           rows={1}
           className="flex-1 bg-transparent resize-none outline-none text-sm text-text placeholder-text-3 py-2 px-1 max-h-[220px]"
@@ -464,7 +466,7 @@ export function PromptInput({
             type="button"
             onClick={onStop}
             className="flex-shrink-0 p-2 text-error rounded-xl cursor-pointer hover:bg-error/10 transition-colors"
-            title="停止生成"
+            title={t('chat.stop_generation', 'Stop generation')}
           >
             <StopCircle size={18} />
           </button>
@@ -475,7 +477,7 @@ export function PromptInput({
                 type="submit"
                 disabled={disabled}
                 className="flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer text-accent hover:bg-accent/10"
-                title="发送"
+                title={t('chat.send', 'Send')}
               >
                 <Send size={18} />
               </button>
@@ -487,7 +489,7 @@ export function PromptInput({
                 className={`flex-shrink-0 p-2 rounded-xl transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
                   isRecording ? 'text-error bg-error/10 animate-pulse' : 'text-text-3 hover:text-text hover:bg-surface-2'
                 } ${!voiceEnabled ? 'hidden' : ''}`}
-                title={isRecording ? '停止录音' : '语音输入'}
+                title={isRecording ? t('chat.stop_recording', 'Stop recording') : t('chat.voice_input', 'Voice input')}
               >
                 <Mic size={18} />
               </button>

@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { RotateCw, Trash2, Volume2, VolumeX } from 'lucide-react'
 import type { ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
@@ -60,6 +61,7 @@ function MessageBubbleImpl({
   onRetry,
   onCommandRetry,
 }: Props) {
+  const { t } = useTranslation()
   const { state } = useStore()
   const isUser = message.role === 'user'
   const isError = Boolean(message.error)
@@ -194,10 +196,10 @@ function MessageBubbleImpl({
                 type="button"
                 onClick={onRetry}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 transition-colors"
-                title="重新生成"
+                title={t('chat.regenerate', 'Regenerate')}
               >
                 <RotateCw size={12} />
-                重试
+                {t('settings.retry', 'Retry')}
               </button>
             )}
             {onDelete && (
@@ -205,7 +207,7 @@ function MessageBubbleImpl({
                 type="button"
                 onClick={() => onDelete(message.id)}
                 className="p-1 text-text-3 rounded cursor-pointer hover:text-error hover:bg-error/10"
-                title="删除消息"
+                title={t('sidebar.delete', 'Delete')}
               >
                 <Trash2 size={12} />
               </button>

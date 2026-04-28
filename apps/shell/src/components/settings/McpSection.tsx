@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
 import type { McpServerConfig, Settings } from '../../types'
 import { Toggle } from './shared'
 
 export function McpSection({ settings, update }: { settings: Settings; update: (p: (s: Settings) => Settings) => void }) {
+  const { t } = useTranslation()
   const [runtime, setRuntime] = useState<Record<string, Awaited<ReturnType<typeof window.ava.mcp.listServers>>[number]>>({})
 
   useEffect(() => {
@@ -44,14 +46,14 @@ export function McpSection({ settings, update }: { settings: Settings; update: (
 
   return (
     <section>
-      <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">MCP Servers</h2>
+      <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">{t('settings.mcp', 'MCP Servers')}</h2>
       <div className="mb-3 p-3 bg-surface border border-border-subtle rounded-lg space-y-2">
-        <div className="text-xs text-text-2">添加远程 SSE Server</div>
+        <div className="text-xs text-text-2">{t('settings.mcp_add_sse', 'Add Remote SSE Server')}</div>
         <div className="flex gap-2">
           <input
             value={newSseName}
             onChange={e => setNewSseName(e.target.value)}
-            placeholder="名称 (e.g. Remote DB)"
+            placeholder={t('settings.mcp_name_placeholder', 'Name (e.g. Remote DB)')}
             className="w-1/3 px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
           />
           <input
@@ -66,7 +68,7 @@ export function McpSection({ settings, update }: { settings: Settings; update: (
             disabled={!newSseName.trim() || !newSseUrl.trim()}
             className="px-3 py-1.5 text-xs text-accent bg-accent/10 rounded-md cursor-pointer hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            添加
+            {t('settings.mcp_add', 'Add')}
           </button>
         </div>
       </div>
@@ -102,6 +104,7 @@ function McpServerRow({
   onChange: (next: McpServerConfig) => void
   onDelete?: () => void
 }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [restarting, setRestarting] = useState(false)
 
@@ -163,7 +166,7 @@ function McpServerRow({
       {expanded && (
         <div className="px-3 pb-3 pt-1 space-y-3 border-t border-border-subtle">
           <div>
-            <div className="text-xs text-text-3 mb-1">允许目录</div>
+            <div className="text-xs text-text-3 mb-1">{t('settings.mcp_allowed_dirs', 'Allowed Directories')}</div>
             <div className="flex flex-wrap gap-2">
               {(server.allowedDirs ?? []).map(dir => (
                 <span key={dir} className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-surface-2 rounded-full text-text-2">
@@ -178,7 +181,7 @@ function McpServerRow({
                 </span>
               ))}
               {(server.allowedDirs ?? []).length === 0 && (
-                <span className="text-xs text-text-3">还没有白名单目录</span>
+                <span className="text-xs text-text-3">{t('settings.mcp_no_dirs', 'No whitelisted directories yet')}</span>
               )}
             </div>
           </div>
@@ -189,7 +192,7 @@ function McpServerRow({
               onClick={addDirectory}
               className="px-2.5 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20"
             >
-              + Add directory
+              {t('settings.mcp_add_dir', '+ Add directory')}
             </button>
             <button
               type="button"
@@ -197,7 +200,7 @@ function McpServerRow({
               disabled={restarting}
               className="px-2.5 py-1 text-xs text-text bg-surface-2 rounded-full cursor-pointer hover:bg-surface-3 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {restarting ? '重启中…' : 'Restart'}
+              {restarting ? t('settings.mcp_restarting', 'Restarting...') : t('settings.mcp_restart', 'Restart')}
             </button>
             {onDelete && (
               <button
@@ -205,13 +208,13 @@ function McpServerRow({
                 onClick={onDelete}
                 className="px-2.5 py-1 text-xs text-error bg-error/10 rounded-full cursor-pointer hover:bg-error/20"
               >
-                Delete
+                {t('settings.mcp_delete', 'Delete')}
               </button>
             )}
             <span className="text-xs text-text-3">
               {runtime?.status === 'running'
-                ? `运行中 · ${(runtime.tools ?? []).length} 个工具`
-                : runtime?.lastError ?? '未运行'}
+                ? t('settings.mcp_running_tools', { count: (runtime.tools ?? []).length })
+                : runtime?.lastError ?? t('settings.mcp_not_running', 'Not running')}
             </span>
           </div>
         </div>

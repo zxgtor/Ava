@@ -24,8 +24,11 @@
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
     "electron-updater": "^6.8.3",
     "highlight.js": "^11.11.1",
+    "i18next": "^26.0.8",
+    "i18next-browser-languagedetector": "^8.2.1",
     "koffi": "^2.16.1",
     "lucide-react": "^0.460.0",
+    "react-i18next": "^17.0.6",
     "react-markdown": "^9.0.1",
     "rehype-highlight": "^7.0.1",
     "remark-gfm": "^4.0.0"

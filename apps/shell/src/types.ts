@@ -210,6 +210,12 @@ export interface VoiceConfig {
   autoRead: boolean
 }
 
+export interface ProjectBrief {
+  tasksDone: number
+  tasksTotal: number
+  files: string[]
+}
+
 // ── Settings ────────────────────────────────────────────────────────
 
 /**
@@ -232,6 +238,7 @@ export interface Settings {
   modelToolFormatMap: Record<string, ToolCallFormat>
   voice: VoiceConfig
   theme: 'aura-glass' | 'cyber-zen' | 'nebula-clear'
+  language: 'auto' | 'en-US' | 'zh-CN'
 }
 
 // ── View mode ───────────────────────────────────────────────────────

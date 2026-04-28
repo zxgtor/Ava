@@ -8,11 +8,13 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import type {
   CommandInvocation,
   ContentPart,
   Conversation,
   Message,
+  ProjectBrief,
   Settings,
   ToolCallStatus,
   ViewMode,
@@ -32,6 +34,7 @@ interface AppState {
   settings: Settings
   viewMode: ViewMode
   sidebarOpen: boolean
+  projectBriefs: Record<string, ProjectBrief>
   hydrated: boolean
 }
 
@@ -56,6 +59,7 @@ type Action =
   | { type: 'APPEND_DELTA'; conversationId: string; messageId: string; delta: string }
   | { type: 'DELETE_MESSAGE'; conversationId: string; messageId: string }
   | { type: 'UPDATE_SETTINGS'; settings: Settings }
+  | { type: 'SET_PROJECT_BRIEF'; conversationId: string; brief: ProjectBrief | null }
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -65,6 +69,7 @@ function reducer(state: AppState, action: Action): AppState {
         conversations: action.conversations,
         settings: action.settings,
         activeConversationId: action.activeId,
+        projectBriefs: {},
         hydrated: true,
       }
 
@@ -276,6 +281,16 @@ function reducer(state: AppState, action: Action): AppState {
     case 'UPDATE_SETTINGS':
       return { ...state, settings: action.settings }
 
+    case 'SET_PROJECT_BRIEF': {
+      const nextBriefs = { ...state.projectBriefs }
+      if (action.brief) {
+        nextBriefs[action.conversationId] = action.brief
+      } else {
+        delete nextBriefs[action.conversationId]
+      }
+      return { ...state, projectBriefs: nextBriefs }
+    }
+
     default:
       return state
   }
@@ -288,6 +303,7 @@ function initialState(): AppState {
     settings: defaultSettings(),
     viewMode: 'chat',
     sidebarOpen: true,
+    projectBriefs: {},
     hydrated: false,
   }
 }
@@ -582,6 +598,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }, 400)
   }, [state.hydrated, state.conversations, state.activeConversationId])
 
+  const { t } = useTranslation()
+
   const activeConversation = useMemo(
     () => state.conversations.find(c => c.id === state.activeConversationId) ?? null,
     [state.conversations, state.activeConversationId],
@@ -591,7 +609,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const now = Date.now()
     const convo: Conversation = {
       id: `c_${now}_${Math.random().toString(36).slice(2, 8)}`,
-      title: '新纪元',
+      title: t('sidebar.new_chat', 'New Initiative'),
       messages: [],
       traits: ['chat'],
       createdAt: now,

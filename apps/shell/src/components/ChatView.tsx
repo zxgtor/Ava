@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Upload, FolderOpen, Plus } from 'lucide-react'
 import { useStore } from '../store'
 import { ChatHeader } from './ChatHeader'
@@ -40,6 +41,7 @@ function lastStreamingAssistant(conversation: Conversation): string | null {
 }
 
 export function ChatView() {
+  const { t } = useTranslation()
   const { state, dispatch, activeConversation, createConversation } = useStore()
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamId, setStreamId] = useState<string | null>(null)
@@ -83,12 +85,13 @@ export function ChatView() {
     el.scrollTop = el.scrollHeight
   }, [activeConversation?.messages, isStreaming])
 
-  // Project Status & Context (Level 2 & 3)
-  const [projectBrief, setProjectBrief] = useState<{ tasksDone: number; tasksTotal: number; files: string[] } | null>(null)
+  // Project Status & Context (Level 3)
+  const projectBrief = state.projectBriefs[activeConversation?.id ?? '']
 
   const syncProjectContext = useCallback(async () => {
-    if (!activeConversation?.folderPath) {
-      setProjectBrief(null)
+    if (!activeConversation) return
+    if (!activeConversation.folderPath) {
+      dispatch({ type: 'SET_PROJECT_BRIEF', conversationId: activeConversation.id, brief: null })
       return
     }
     try {
@@ -109,11 +112,12 @@ export function ChatView() {
         })
       } catch { /* TASKS.md might not exist yet */ }
 
-      setProjectBrief({ tasksDone, tasksTotal, files })
+      dispatch({ type: 'SET_PROJECT_BRIEF', conversationId: activeConversation.id, brief: { tasksDone, tasksTotal, files } })
     } catch (err) {
       console.warn('Project sync failed:', err)
+      dispatch({ type: 'SET_PROJECT_BRIEF', conversationId: activeConversation.id, brief: null })
     }
-  }, [activeConversation?.folderPath])
+  }, [activeConversation?.folderPath, activeConversation?.id, dispatch])
 
   useEffect(() => {
     syncProjectContext()
@@ -318,7 +322,7 @@ export function ChatView() {
       let enrichedContent = content
       if (projectBrief) {
         const fileList = projectBrief.files.join(', ')
-        const progress = projectBrief.tasksTotal > 0 ? `Progress: ${projectBrief.tasksDone}/${projectBrief.tasksTotal}` : ''
+        const progress = projectBrief.tasksTotal > 0 ? `${t('chat.project_progress', 'Progress')}: ${projectBrief.tasksDone}/${projectBrief.tasksTotal}` : ''
         enrichedContent = `[System Context: Active Folder "${conversation.folderPath}". Files: ${fileList}. ${progress}]\n\n${content}`
       }
 
@@ -500,47 +504,8 @@ export function ChatView() {
           <div className="w-20 h-20 bg-accent/10 rounded-full flex items-center justify-center text-accent mb-4">
             <Upload size={32} className="animate-bounce" />
           </div>
-          <div className="text-xl font-medium text-text">释放以添加文件</div>
-          <div className="text-sm text-text-3 mt-1">支持图片、文档、代码等</div>
-        </div>
-      )}
-
-      {/* Level 2: Project Status Bar */}
-      {projectBrief && activeConversation?.folderPath && (
-        <div className="mx-6 mt-4 p-2 bg-accent/5 border border-accent/10 rounded-xl flex items-center justify-between animate-in slide-in-from-top-4 duration-500">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent">
-              <FolderOpen size={16} />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-[11px] font-medium text-text-1">Project Active: {activeConversation.folderPath.split(/[\\/]/).pop()}</span>
-              <span className="text-[9px] text-text-3">{projectBrief.files.length} files detected</span>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            {projectBrief.tasksTotal > 0 && (
-              <div className="flex flex-col items-end gap-1">
-                <div className="flex items-center gap-2 text-[9px] font-mono text-accent">
-                  <span>TASKS</span>
-                  <span>{projectBrief.tasksDone}/{projectBrief.tasksTotal}</span>
-                </div>
-                <div className="w-24 h-1 bg-white/5 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-accent transition-all duration-1000" 
-                    style={{ width: `${(projectBrief.tasksDone / projectBrief.tasksTotal) * 100}%` }}
-                  />
-                </div>
-              </div>
-            )}
-            <button 
-              onClick={() => syncProjectContext()}
-              className="p-1.5 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors"
-              title="Sync Project Context"
-            >
-              <Plus size={14} className="rotate-45" /> {/* Use as sync/refresh icon */}
-            </button>
-          </div>
+          <div className="text-xl font-medium text-text">{t('chat.drop_to_upload', 'Drop to upload files')}</div>
+          <div className="text-sm text-text-3 mt-1">{t('chat.drop_types', 'Images, documents, code, etc.')}</div>
         </div>
       )}
 
@@ -585,7 +550,7 @@ export function ChatView() {
         onStop={handleStop}
         isStreaming={isStreaming}
         disabled={!hasProvider}
-        disabledReason={!hasProvider ? '请在设置中配置并启用 LLM' : undefined}
+        disabledReason={!hasProvider ? t('chat.no_provider_error', 'Please configure and enable LLM in settings') : undefined}
         commands={commands}
         commandsLoading={commandsLoading}
         onRefreshCommands={refreshCommands}

@@ -1,4 +1,5 @@
 import { MessageSquarePlus, Settings, Trash2, FolderOpen, Terminal, Code, LayoutPanelLeft } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Logo } from './Logo'
 import type { Conversation } from '../types'
 
@@ -21,6 +22,7 @@ export function ChatHeader({
   onDeleteConversation,
   onOpenPreview,
 }: Props) {
+  const { t } = useTranslation()
   const folderPath = activeConversation?.folderPath
   const folderName = folderPath ? folderPath.split(/[\\/]/).pop() : null
 
@@ -72,20 +74,20 @@ export function ChatHeader({
                 </span>
               </button>
               <div className="flex items-center bg-black/20 rounded-md p-0.5 border border-white/5">
-                <button onClick={handleOpenTerminal} className="p-1 rounded hover:bg-white/10 text-text-3 hover:text-white transition-colors" title="Open in Terminal">
+                <button onClick={handleOpenTerminal} className="p-1 rounded hover:bg-white/10 text-text-3 hover:text-white transition-colors" title={t('chat.open_terminal', 'Open in Terminal')}>
                   <Terminal size={12} />
                 </button>
-                <button onClick={handleOpenCode} className="p-1 rounded hover:bg-white/10 text-text-3 hover:text-white transition-colors" title="Open in VS Code">
+                <button onClick={handleOpenCode} className="p-1 rounded hover:bg-white/10 text-text-3 hover:text-white transition-colors" title={t('chat.open_code', 'Open in VS Code')}>
                   <Code size={12} />
                 </button>
               </div>
               <button 
                 onClick={onOpenPreview}
                 className="flex items-center gap-2 px-2 py-1 rounded-md bg-accent/10 border border-accent/20 text-accent hover:bg-accent/20 transition-all group ml-1"
-                title="Open Design Preview Window"
+                title={t('chat.open_preview', 'Open Design Preview Window')}
               >
                 <LayoutPanelLeft size={13} />
-                <span className="text-[10px] font-medium uppercase tracking-wider">Preview</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider">{t('chat.preview', 'Preview')}</span>
               </button>
             </div>
           </>

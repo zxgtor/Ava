@@ -1,12 +1,14 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ModelProvider, Settings } from '../../types'
 import { LabeledInput, ModelChips, Toggle } from './shared'
 
 export function ProvidersSection({ settings, update }: { settings: Settings; update: (p: (s: Settings) => Settings) => void }) {
+  const { t } = useTranslation()
   return (
     <section>
-      <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">供应商</h2>
+      <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">{t('settings.llm', 'LLM Providers')}</h2>
       <div className="space-y-2">
         {settings.modelProviders.map(provider => (
           <ProviderRow
@@ -24,6 +26,7 @@ export function ProvidersSection({ settings, update }: { settings: Settings; upd
 }
 
 function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange: (p: ModelProvider) => void }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [probing, setProbing] = useState(false)
   const [probeResult, setProbeResult] = useState<string | null>(null)
@@ -40,9 +43,9 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
       if (result.ok) {
         if (result.models.length > 0) {
           onChange({ ...provider, models: result.models })
-          setProbeResult(`✓ 发现 ${result.models.length} 个模型`)
+          setProbeResult(t('settings.discover_models', { count: result.models.length }))
         } else {
-          setProbeResult('✓ 连通，但没返回模型列表')
+          setProbeResult(t('settings.connected_no_models', '✓ Connected, but no model list returned'))
         }
       } else {
         setProbeResult(`✗ ${result.error}`)
@@ -67,7 +70,7 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
             <span className="text-sm text-text">{provider.name}</span>
             <span className="px-1.5 py-0.5 text-[10px] text-text-3 bg-surface-2 rounded">{provider.type}</span>
           </div>
-          <div className="text-xs text-text-3 truncate">{provider.baseUrl || '（未设置 baseUrl）'}</div>
+          <div className="text-xs text-text-3 truncate">{provider.baseUrl || t('settings.no_base_url', '(no baseUrl set)')}</div>
         </div>
         <Toggle
           value={provider.enabled}
@@ -88,10 +91,10 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
             value={provider.apiKey}
             onChange={v => onChange({ ...provider, apiKey: v })}
             type="password"
-            placeholder={provider.type === 'local' ? '本地一般不需要' : 'sk-...'}
+            placeholder={provider.type === 'local' ? t('settings.local_api_key_placeholder') : t('settings.api_key_placeholder')}
           />
           <LabeledInput
-            label="默认模型"
+            label={t('settings.default_model', 'Default Model')}
             value={provider.defaultModel}
             onChange={v => onChange({ ...provider, defaultModel: v })}
             list={provider.models}
@@ -110,7 +113,7 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
               disabled={!provider.baseUrl || probing}
               className="px-2.5 py-1 text-xs text-accent bg-accent/10 rounded-full cursor-pointer hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {probing ? '探测中…' : '探测连通性'}
+              {probing ? t('settings.probing', 'Probing...') : t('settings.probe_connectivity', 'Probe Connectivity')}
             </button>
             {probeResult && (
               <span className={`text-xs ${probeResult.startsWith('✓') ? 'text-success' : 'text-error'}`}>

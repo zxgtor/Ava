@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Download, Loader2, Monitor, Database, Box, Trash2 } from 'lucide-react'
 import type { DiscoveredPlugin, Settings } from '../../types'
 
@@ -28,6 +29,7 @@ export function MarketplaceSection({
   onInstall: (url: string) => Promise<void>
   onUninstall: (id: string) => Promise<void>
 }) {
+  const { t } = useTranslation()
   const [items, setItems] = useState<MarketplaceItem[]>([])
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -45,7 +47,7 @@ export function MarketplaceSection({
       await window.ava.plugins.installGit(item.repoUrl)
       await onInstall(item.repoUrl) // Trigger a reload
     } catch (e: any) {
-      setError(`安装失败: ${e.message}`)
+      setError(`${t('settings.marketplace_install_failed', 'Installation failed')}: ${e.message}`)
     } finally {
       setLoadingId(null)
     }
@@ -58,7 +60,7 @@ export function MarketplaceSection({
       await window.ava.plugins.uninstall(pluginId)
       await onUninstall(pluginId) // Trigger a reload
     } catch (e: any) {
-      setError(`卸载失败: ${e.message}`)
+      setError(`${t('settings.marketplace_uninstall_failed', 'Uninstallation failed')}: ${e.message}`)
     } finally {
       setLoadingId(null)
     }
@@ -67,9 +69,9 @@ export function MarketplaceSection({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-text">插件市场 (Marketplace)</h3>
+        <h3 className="text-sm font-medium text-text">{t('settings.marketplace_title', 'Plugin Marketplace')}</h3>
       </div>
-      <div className="text-xs text-text-3 mb-2">发现并安装社区提供的强大插件与 MCP Server。</div>
+      <div className="text-xs text-text-3 mb-2">{t('settings.marketplace_desc', 'Discover and install community plugins and MCP Servers.')}</div>
       
       {error && <div className="text-xs text-error p-2 bg-error/10 rounded">{error}</div>}
 
@@ -99,7 +101,7 @@ export function MarketplaceSection({
                     <button
                       onClick={() => handleUninstall(installed.id, item.id)}
                       className="p-1.5 text-text-3 hover:text-error hover:bg-error/10 rounded-md transition-colors"
-                      title="卸载"
+                      title={t('settings.marketplace_uninstall', 'Uninstall')}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -107,7 +109,7 @@ export function MarketplaceSection({
                     <button
                       onClick={() => handleInstall(item)}
                       className="p-1.5 text-accent hover:bg-accent/10 rounded-md transition-colors"
-                      title="安装"
+                      title={t('settings.marketplace_install', 'Install')}
                     >
                       <Download size={16} />
                     </button>
@@ -123,7 +125,7 @@ export function MarketplaceSection({
       </div>
       {items.length === 0 && !error && (
         <div className="text-xs text-text-3 p-4 text-center border border-dashed border-border-subtle rounded-xl">
-          正在加载插件市场...
+          {t('settings.marketplace_loading', 'Loading Marketplace...')}
         </div>
       )}
     </div>

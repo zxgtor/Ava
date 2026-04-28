@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, RefreshCw, Trash2 } from 'lucide-react'
 
 type ToolAuditEntry = Awaited<ReturnType<typeof window.ava.toolAudit.list>>[number]
@@ -16,6 +17,7 @@ function prettyJson(value: unknown): string {
 }
 
 export function ToolAuditSection() {
+  const { t } = useTranslation()
   const [entries, setEntries] = useState<ToolAuditEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -35,7 +37,7 @@ export function ToolAuditSection() {
   }, [refresh])
 
   const clear = async () => {
-    const ok = window.confirm('清空 Tool Audit Log？这只删除审计记录，不影响对话。')
+    const ok = window.confirm(t('settings.audit_clear_confirm', 'Clear Tool Audit Log? This only deletes records, not conversations.'))
     if (!ok) return
     await window.ava.toolAudit.clear()
     setEntries([])
@@ -45,8 +47,8 @@ export function ToolAuditSection() {
     <section>
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide">Tool Audit Log</h2>
-          <p className="text-xs text-text-3 mt-1">最近 50 次工具调用；用于排查模型为什么调用某个工具。</p>
+          <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide">{t('settings.audit_title', 'Tool Audit Log')}</h2>
+          <p className="text-xs text-text-3 mt-1">{t('settings.audit_desc', 'Recent 50 tool calls; used to debug why a model called a tool.')}</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -56,7 +58,7 @@ export function ToolAuditSection() {
             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs text-text bg-surface border border-border-subtle rounded-full cursor-pointer hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            Refresh
+            {t('chat.refresh', 'Refresh')}
           </button>
           <button
             type="button"
@@ -65,14 +67,14 @@ export function ToolAuditSection() {
             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs text-error bg-error/10 rounded-full cursor-pointer hover:bg-error/20 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Trash2 size={13} />
-            Clear
+            {t('sidebar.delete', 'Delete')}
           </button>
         </div>
       </div>
 
       {entries.length === 0 ? (
         <div className="px-3 py-3 text-xs text-text-3 bg-surface border border-border-subtle rounded-lg">
-          暂无工具调用记录。
+          {t('settings.audit_empty', 'No tool call records yet.')}
         </div>
       ) : (
         <div className="space-y-2">

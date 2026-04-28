@@ -3,6 +3,7 @@ import {
   Settings, Trash2, Edit2, Plus, ChevronRight, X,
   MoreVertical, Pin, Archive, FolderPlus, FolderOpen
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
 import { getTraitConfig } from '../lib/agent/traits'
 import type { Conversation } from '../types'
@@ -20,6 +21,7 @@ function formatRelativeTime(dateMs: number) {
 }
 
 export function ConversationSidebar() {
+  const { t } = useTranslation()
   const { state, dispatch, createConversation } = useStore()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -147,7 +149,7 @@ export function ConversationSidebar() {
           className="w-full flex items-center gap-2 px-2.5 py-1.5 text-text-2 bg-white/5 border border-white/5 rounded-md hover:bg-white/10 hover:text-text transition-colors"
         >
           <Plus size={14} className="opacity-50" />
-          <span className="font-medium text-text-2">New Initiative</span>
+          <span className="font-medium text-text-2">{t('sidebar.new_chat')}</span>
         </button>
 
         {/* 视图切换 */}
@@ -156,13 +158,13 @@ export function ConversationSidebar() {
             onClick={() => setShowArchived(false)}
             className={`flex-1 py-1 rounded-md transition-all ${!showArchived ? 'bg-white/10 text-white shadow-sm' : 'text-text-3 hover:text-text-2'}`}
           >
-            Active
+            {t('sidebar.active', 'Active')}
           </button>
           <button 
             onClick={() => setShowArchived(true)}
             className={`flex-1 py-1 rounded-md transition-all ${showArchived ? 'bg-white/10 text-white shadow-sm' : 'text-text-3 hover:text-text-2'}`}
           >
-            Archived
+            {t('sidebar.archived', 'Archived')}
           </button>
         </div>
       </div>
@@ -171,7 +173,7 @@ export function ConversationSidebar() {
         <div className="px-1 space-y-0.5 pb-2">
           {sorted.length === 0 ? (
             <div className="px-4 py-8 text-center text-text-3 italic opacity-40">
-              No active initiatives.
+              {t('sidebar.no_conversations')}
             </div>
           ) : (
             sorted.map((conv) => {
@@ -217,13 +219,33 @@ export function ConversationSidebar() {
                     ) : (
                       <div className="flex-1 min-w-0 flex flex-col">
                         <span className={`truncate font-normal tracking-tight transition-colors ${isActive ? 'text-white' : 'text-text-2 group-hover:text-text-1'}`}>
-                          {conv.title || 'Untitled'}
+                          {conv.title || t('sidebar.untitled', 'Untitled')}
                         </span>
                         {conv.folderPath && (
-                          <span className="text-[9px] text-text-3 truncate opacity-50 flex items-center gap-1 mt-0.5">
-                            <FolderOpen size={8} />
-                            {conv.folderPath.split(/[\\/]/).pop()}
-                          </span>
+                          <div className="flex flex-col gap-0.5 mt-0.5">
+                            <span className="text-[9px] text-text-3 truncate opacity-50 flex items-center gap-1">
+                              <FolderOpen size={8} />
+                              {conv.folderPath.split(/[\\/]/).pop()}
+                              {state.projectBriefs[conv.id] && (
+                                <span className="opacity-70">
+                                  · {state.projectBriefs[conv.id].files.length} {t('chat.files_detected', 'files')}
+                                </span>
+                              )}
+                            </span>
+                            {state.projectBriefs[conv.id]?.tasksTotal > 0 && (
+                              <div className="flex items-center gap-1.5 h-1">
+                                <div className="flex-1 h-[2px] bg-white/5 rounded-full overflow-hidden">
+                                  <div 
+                                    className="h-full bg-accent transition-all" 
+                                    style={{ width: `${(state.projectBriefs[conv.id].tasksDone / state.projectBriefs[conv.id].tasksTotal) * 100}%` }}
+                                  />
+                                </div>
+                                <span className="text-[8px] font-mono text-accent opacity-60">
+                                  {Math.round((state.projectBriefs[conv.id].tasksDone / state.projectBriefs[conv.id].tasksTotal) * 100)}%
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -254,35 +276,35 @@ export function ConversationSidebar() {
                     >
                       <button onClick={() => startEditing(conv)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-white">
                         <Edit2 size={13} className="opacity-60" />
-                        <span>Change Initiative name</span>
+                        <span>{t('sidebar.rename', 'Rename')}</span>
                       </button>
                       <button onClick={() => dispatch({ type: 'TOGGLE_PIN_CONVERSATION', id: conv.id })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-white">
                         <Pin size={13} className={conv.pinned ? 'text-accent' : 'opacity-60'} fill={conv.pinned ? 'currentColor' : 'none'} />
-                        <span>{conv.pinned ? 'Unpin from Top' : 'Pin to Top'}</span>
+                        <span>{conv.pinned ? t('sidebar.unpin', 'Unpin') : t('sidebar.pin', 'Pin')}</span>
                       </button>
                       {conv.folderPath ? (
                         <>
                           <button onClick={() => dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conv.id, path: '' })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-white">
                             <X size={13} className="opacity-60" />
-                            <span>Unlink working Folder</span>
+                            <span>{t('sidebar.unlink_folder', 'Unlink folder')}</span>
                           </button>
                         </>
                       ) : (
                         <button onClick={() => handleLinkFolder(conv.id)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-white">
                           <FolderPlus size={13} className="opacity-60" />
-                          <span>Link to Working Folder</span>
+                          <span>{t('sidebar.link_folder', 'Link folder')}</span>
                         </button>
                       )}
                       <div className="h-[1px] bg-white/5 my-1.5 mx-2" />
                       {conv.archived ? (
                         <button onClick={() => dispatch({ type: 'ARCHIVE_CONVERSATION', id: conv.id, archived: false })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-white">
                           <Archive size={13} className="text-accent" />
-                          <span>Restore to Active</span>
+                          <span>{t('sidebar.restore', 'Restore')}</span>
                         </button>
                       ) : (
                         <button onClick={() => dispatch({ type: 'ARCHIVE_CONVERSATION', id: conv.id })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-white">
                           <Archive size={13} className="opacity-60" />
-                          <span>Archive it</span>
+                          <span>{t('sidebar.archive', 'Archive')}</span>
                         </button>
                       )}
                       <button onClick={() => {
@@ -290,7 +312,7 @@ export function ConversationSidebar() {
                         setMenuOpenId(null)
                       }} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-red-500/10 text-red-400 hover:text-red-300 transition-colors">
                         <Trash2 size={13} className="opacity-80" />
-                        <span>Delete</span>
+                        <span>{t('sidebar.delete', 'Delete')}</span>
                       </button>
                     </div>
                   )}
@@ -311,7 +333,7 @@ export function ConversationSidebar() {
           `}
         >
           <Settings size={14} />
-          <span className="font-medium">Settings</span>
+          <span className="font-medium">{t('sidebar.settings')}</span>
         </button>
       </div>
     </div>

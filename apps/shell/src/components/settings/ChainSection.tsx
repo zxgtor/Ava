@@ -1,8 +1,10 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ArrowUp, ArrowDown, X } from 'lucide-react'
 import type { Settings } from '../../types'
 
 export function ChainSection({ settings, update }: { settings: Settings; update: (p: (s: Settings) => Settings) => void }) {
+  const { t } = useTranslation()
   const chainWithInfo = useMemo(
     () => settings.primaryModelChain.map(id => ({
       id,
@@ -35,8 +37,8 @@ export function ChainSection({ settings, update }: { settings: Settings; update:
 
   return (
     <section>
-      <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">主回退链</h2>
-      <p className="text-xs text-text-3 mb-3">按顺序尝试；上面失败才用下面。</p>
+      <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">{t('settings.fallback_chain', 'Primary Fallback Chain')}</h2>
+      <p className="text-xs text-text-3 mb-3">{t('settings.fallback_desc', 'Tried in order; used only if those above fail.')}</p>
       <div className="space-y-2">
         {chainWithInfo.map(({ id, provider }, idx) => (
           <div key={id} className="flex items-center gap-2 px-3 py-2 bg-surface border border-border-subtle rounded-lg">
@@ -44,7 +46,7 @@ export function ChainSection({ settings, update }: { settings: Settings; update:
             <div className="flex-1">
               <div className="text-sm text-text">{provider?.name ?? id}</div>
               <div className="text-xs text-text-3">
-                {provider?.enabled ? provider.defaultModel : '❗ 未启用'}
+                {provider?.enabled ? provider.defaultModel : t('settings.not_enabled', '❗ Not Enabled')}
               </div>
             </div>
             <button
@@ -63,14 +65,14 @@ export function ChainSection({ settings, update }: { settings: Settings; update:
               type="button"
               onClick={() => remove(id)}
               className="p-1 text-text-2 rounded cursor-pointer hover:text-error hover:bg-error/10"
-              title="从链中移除"
+              title={t('settings.remove_from_chain', 'Remove from chain')}
             ><X size={14} /></button>
           </div>
         ))}
 
         {enabledButUnranked.length > 0 && (
           <div className="pt-2 flex flex-wrap gap-2">
-            <span className="text-xs text-text-3 py-1">可添加：</span>
+            <span className="text-xs text-text-3 py-1">{t('settings.available_to_add', 'Available to add:')}</span>
             {enabledButUnranked.map(p => (
               <button
                 key={p.id}

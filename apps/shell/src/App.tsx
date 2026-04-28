@@ -6,6 +6,8 @@ import { ConversationSidebar } from './components/ConversationSidebar'
 import { PreviewView } from './components/PreviewView'
 import { ChatHeader } from './components/ChatHeader'
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
+import i18n from './lib/i18n'
 import type { ContentPart } from './types'
 
 function partsToText(parts: ContentPart[]): string {
@@ -17,6 +19,7 @@ function partsToText(parts: ContentPart[]): string {
 
 function Shell() {
   const { state, dispatch, activeConversation, createConversation } = useStore()
+  const { t } = useTranslation()
 
   const handleOpenPreview = useCallback(async () => {
     // 1. 开启/聚焦窗口
@@ -49,10 +52,19 @@ function Shell() {
     }
   }, [state.settings.theme])
 
+  useEffect(() => {
+    if (state.settings.language && state.settings.language !== 'auto') {
+      i18n.changeLanguage(state.settings.language)
+    } else {
+      // If auto, we let language-detector do its job, or we could force system language
+      i18n.changeLanguage(navigator.language)
+    }
+  }, [state.settings.language])
+
   if (!state.hydrated) {
     return (
       <div className="flex items-center justify-center flex-1 text-text-3 text-sm">
-        正在加载…
+        {t('chat.loading', 'Loading...')}
       </div>
     )
   }

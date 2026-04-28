@@ -242,10 +242,11 @@ export function defaultSettings(): Settings {
       enabled: true,
       sttServerUrl: 'ws://127.0.0.1:8000/ws',
       ttsServerUrl: 'http://127.0.0.1:8002/tts',
-      voiceId: '中文女',
+      voiceId: 'default',
       autoRead: true,
     },
     theme: 'aura-glass',
+    language: 'auto',
   }
 }
 
