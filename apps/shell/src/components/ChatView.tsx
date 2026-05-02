@@ -14,19 +14,13 @@ import {
   makeStreamId,
   makeTaskId,
   makeUserMessage,
+  partsToText,
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
 import type { CommandInvocation, ContentPart, Conversation, PluginCommand } from '../types'
-
-function partsToText(parts: ContentPart[]): string {
-  return parts
-    .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
-    .map(p => p.text)
-    .join('')
-}
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -41,26 +35,6 @@ function lastStreamingAssistant(conversation: Conversation): string | null {
     if (message.role === 'assistant' && message.streaming) return message.id
   }
   return null
-}
-
-function makeProjectContextMessage(
-  taskId: string,
-  folderPath: string | undefined,
-  brief: { files: string[]; tasksDone: number; tasksTotal: number } | undefined,
-): ContentPart[] | null {
-  if (!brief || !folderPath) return null
-  const fileList = brief.files.join(', ')
-  const progress = brief.tasksTotal > 0 ? `Progress: ${brief.tasksDone}/${brief.tasksTotal}` : ''
-  return [{
-    type: 'text',
-    text: [
-      'Project context for the current task only.',
-      `Active folder: ${folderPath}`,
-      `Files: ${fileList || '(none)'}`,
-      progress,
-      'Use this as background context. Do not repeat it unless the user asks.',
-    ].filter(Boolean).join('\n'),
-  }]
 }
 
 function ChatSessionBar({
@@ -477,6 +451,8 @@ export function ChatView() {
         const result = await sendChat({
           conversation: conversationSnapshot,
           settings: state.settings,
+          projectBrief,
+          folderPath: conversationSnapshot.folderPath,
           streamId: id,
           activeTaskId,
           onStatus: ({ taskId, phase }) => {
@@ -491,6 +467,14 @@ export function ChatView() {
           onDelta: delta => {
             dispatch({
               type: 'APPEND_DELTA',
+              conversationId,
+              messageId: placeholderId,
+              delta,
+            })
+          },
+          onReasoningDelta: delta => {
+            dispatch({
+              type: 'APPEND_REASONING_DELTA',
               conversationId,
               messageId: placeholderId,
               delta,
@@ -593,18 +577,7 @@ export function ChatView() {
   const runSend = useCallback(
     async (content: string, attachments: string[] = [], conversation: Conversation, commandInvocation?: CommandInvocation) => {
       const taskId = makeTaskId()
-      
       const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments)
-      const projectContext = makeProjectContextMessage(taskId, conversation.folderPath, projectBrief)
-      const contextMsg = projectContext
-        ? {
-            id: `ctx_${taskId}`,
-            taskId,
-            role: 'system' as const,
-            content: projectContext,
-            createdAt: Date.now(),
-          }
-        : null
       const placeholder = makeAssistantPlaceholder(taskId)
       const conversationId = conversation.id
 
@@ -629,16 +602,14 @@ export function ChatView() {
       await driveStream(
         {
           ...conversation,
-          messages: contextMsg
-            ? [...conversation.messages, contextMsg, userMsg]
-            : [...conversation.messages, userMsg],
+          messages: [...conversation.messages, userMsg],
         },
         conversationId,
         placeholder.id,
         taskId,
       )
     },
-    [dispatch, driveStream, projectBrief],
+    [dispatch, driveStream],
   )
 
   const runEditedResend = useCallback(
@@ -662,16 +633,6 @@ export function ChatView() {
 
       const taskId = makeTaskId()
       const editedUser = makeUserMessage(nextText, original.commandInvocation, taskId, attachments)
-      const projectContext = makeProjectContextMessage(taskId, conversation.folderPath, projectBrief)
-      const contextMsg = projectContext
-        ? {
-            id: `ctx_${taskId}`,
-            taskId,
-            role: 'system' as const,
-            content: projectContext,
-            createdAt: Date.now(),
-          }
-        : null
       const placeholder = makeAssistantPlaceholder(taskId)
       const conversationId = conversation.id
 
@@ -692,16 +653,14 @@ export function ChatView() {
       await driveStream(
         {
           ...conversation,
-          messages: contextMsg
-            ? [...conversation.messages.slice(0, idx), contextMsg, editedUser]
-            : [...conversation.messages.slice(0, idx), editedUser],
+          messages: [...conversation.messages.slice(0, idx), editedUser],
         },
         conversationId,
         placeholder.id,
         taskId,
       )
     },
-    [dispatch, driveStream, projectBrief, runSend],
+    [dispatch, driveStream, runSend],
   )
 
   const handleSend = useCallback(

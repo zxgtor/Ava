@@ -318,7 +318,7 @@ export function PromptInput({
   return (
     <form
       onSubmit={handleFormSubmit}
-      className="mx-auto w-full max-w-[56rem] px-14 pt-0 pb-4 relative"
+      className="mx-auto w-full max-w-[1400px] px-14 pt-0 pb-4 relative"
       onDrop={handleDrop}
       onDragOver={e => e.preventDefault()}
     >

@@ -62,6 +62,7 @@ type Action =
   | { type: 'UPDATE_PART'; conversationId: string; messageId: string; partIndex: number; partId?: string; patch: Partial<Extract<ContentPart, { type: 'tool_call' }>> }
   | { type: 'ABORT_RUNNING_PARTS'; conversationId: string; messageId: string }
   | { type: 'APPEND_DELTA'; conversationId: string; messageId: string; delta: string }
+  | { type: 'APPEND_REASONING_DELTA'; conversationId: string; messageId: string; delta: string }
   | { type: 'DELETE_MESSAGE'; conversationId: string; messageId: string }
   | { type: 'REPLACE_MESSAGES_FROM'; conversationId: string; fromMessageId: string; messages: Message[] }
   | { type: 'UPDATE_SETTINGS'; settings: Settings }
@@ -272,6 +273,24 @@ function reducer(state: AppState, action: Action): AppState {
                     content: [...m.content, { type: 'text', text: action.delta }],
                   }
                 }),
+              },
+        ),
+      }
+
+    case 'APPEND_REASONING_DELTA':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id !== action.conversationId
+            ? c
+            : {
+                ...c,
+                updatedAt: Date.now(),
+                messages: c.messages.map(m =>
+                  m.id !== action.messageId
+                    ? m
+                    : { ...m, reasoningContent: (m.reasoningContent ?? '') + action.delta },
+                ),
               },
         ),
       }

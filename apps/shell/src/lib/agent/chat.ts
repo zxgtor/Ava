@@ -1,15 +1,94 @@
-import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, Settings } from '../../types'
+import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ProjectBrief, Settings } from '../../types'
 import { getEnabledProviders } from '../llm/providers'
 
-function partsToText(parts: ContentPart[]): string {
+// ── Shared utilities ────────────────────────────────────────────────
+
+export function partsToText(parts: ContentPart[]): string {
   return parts
     .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
     .map(p => p.text)
     .join('')
 }
 
-function buildSystemPrompt(settings: Settings): string {
-  return [
+/** Rough token estimate: ~4 chars per token for English, ~2 for CJK. */
+function estimateTokens(text: string): number {
+  // Count CJK characters (they use ~1 token each instead of ~0.25)
+  const cjk = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length
+  const rest = text.length - cjk
+  return Math.ceil(rest / 4) + cjk
+}
+
+function estimateMessageTokens(msg: LlmMessage): number {
+  if (typeof msg.content === 'string') return estimateTokens(msg.content) + 4 // role overhead
+  // Multimodal: only count text parts, images are handled separately by the API
+  const text = msg.content
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map(p => p.text)
+    .join('')
+  return estimateTokens(text) + 4
+}
+
+// ── Image file extensions ───────────────────────────────────────────
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'])
+
+function isImageUrl(url: string): boolean {
+  if (url.startsWith('data:image/')) return true
+  const ext = url.split('.').pop()?.toLowerCase().split('?')[0] || ''
+  return IMAGE_EXTENSIONS.has(ext)
+}
+
+// ── System prompt construction ──────────────────────────────────────
+
+const TRAIT_PROMPTS: Record<string, string[]> = {
+  code: [
+    'You are in Code mode.',
+    'Prioritize working, runnable code. Use markdown code blocks with language tags.',
+    'Explain technical trade-offs briefly. Prefer concise implementations over verbose explanations.',
+    'When debugging, show the fix first, then explain why.',
+  ],
+  design: [
+    'You are in Design mode.',
+    'Think visually. Describe layouts, colors, and typography precisely.',
+    'When generating UI, provide complete HTML/CSS. Use modern design patterns.',
+    'Suggest visual improvements proactively.',
+  ],
+  business: [
+    'You are in Business mode.',
+    'Focus on actionable insights: ROI, market analysis, competitive positioning.',
+    'Use structured formats (tables, bullet lists) for data comparisons.',
+    'Quantify recommendations whenever possible.',
+  ],
+  idea: [
+    'You are in Brainstorm mode.',
+    'Generate diverse, creative options. Think laterally.',
+    'Present ideas in numbered lists. Include unconventional approaches.',
+    'Build on ideas iteratively rather than dismissing them.',
+  ],
+  video: [
+    'You are in Video/Script mode.',
+    'Structure content for visual storytelling: scenes, shots, timing.',
+    'Include technical specs (resolution, duration, transitions) when relevant.',
+  ],
+  mastery: [
+    'You are in Learning mode.',
+    'Break complex topics into digestible steps. Use analogies.',
+    'Provide examples before definitions. Check understanding with follow-up questions.',
+  ],
+}
+
+const TRAIT_TEMPERATURES: Record<string, number> = {
+  code: 0.2,
+  idea: 0.8,
+  design: 0.5,
+  business: 0.3,
+  video: 0.6,
+  mastery: 0.4,
+  chat: 0.4,
+}
+
+function buildSystemPrompt(settings: Settings, traits?: string[]): string {
+  const base = [
     `You are ${settings.persona.assistantName}, a reliable and practical AI assistant.`,
     `The user's name is ${settings.persona.userName}.`,
     'Your primary goal is to help the user successfully complete their task.',
@@ -25,7 +104,14 @@ function buildSystemPrompt(settings: Settings): string {
     '- If the latest user message gives a new concrete target, path, or scope, it replaces older unfinished requests.',
     '- Do not continue or retry older failed requests unless the user explicitly asks to continue or retry them.',
     '- Before every tool call, verify that the action is necessary for the latest user message, not merely related to older chat history.',
-  ].join('\n')
+  ]
+
+  const trait = traits?.[0] || 'chat'
+  if (TRAIT_PROMPTS[trait]) {
+    base.push('', ...TRAIT_PROMPTS[trait])
+  }
+
+  return base.join('\n')
 }
 
 function buildCurrentTaskPrompt(latestUserRequest: string, taskId?: string): string {
@@ -39,6 +125,20 @@ function buildCurrentTaskPrompt(latestUserRequest: string, taskId?: string): str
     'If the user changed the target path, file, or scope, use only the new target.',
   ].filter(Boolean).join('\n')
 }
+
+function buildProjectContext(folderPath: string, brief: ProjectBrief): string {
+  const lines = [
+    'Project context (background only, do not repeat unless asked):',
+    `Active folder: ${folderPath}`,
+    `Files: ${brief.files.join(', ') || '(none)'}`,
+  ]
+  if (brief.tasksTotal > 0) {
+    lines.push(`Task progress: ${brief.tasksDone}/${brief.tasksTotal} completed`)
+  }
+  return lines.join('\n')
+}
+
+// ── History helpers ─────────────────────────────────────────────────
 
 function hasFailedToolCall(parts: ContentPart[]): boolean {
   return parts.some(part =>
@@ -77,6 +177,8 @@ function summarizeHistoricalMessage(message: Message, includeUserHistory: boolea
   }
 }
 
+// ── LLM message construction ────────────────────────────────────────
+
 interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
@@ -84,9 +186,19 @@ interface LlmMessage {
   toolCallId?: string
 }
 
+/**
+ * Default context budget: 6000 tokens.
+ * This is conservative for local 7B models (typically 4K-8K context).
+ * Cloud models can handle much more, but keeping it tight reduces cost and latency.
+ * The budget does NOT include the latest user message or system prompts — those are always included.
+ */
+const DEFAULT_CONTEXT_BUDGET = 6000
+
 function conversationToLlmMessages(
   conversation: Conversation,
   settings: Settings,
+  projectBrief?: ProjectBrief,
+  folderPath?: string,
 ): LlmMessage[] {
   const latestUserIndex = (() => {
     for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
@@ -99,40 +211,32 @@ function conversationToLlmMessages(
   const latestUserRequest = latestUser ? partsToText(latestUser.content).trim() : ''
   const includeUserHistory = wantsHistoricalContinuation(latestUserRequest)
 
-  const messages: LlmMessage[] = [
-    { role: 'system', content: buildSystemPrompt(settings) },
+  // ── 1. Build mandatory messages (always included, not counted against budget) ──
+  const mandatory: LlmMessage[] = [
+    { role: 'system', content: buildSystemPrompt(settings, conversation.traits) },
   ]
+
+  // Project context — injected dynamically, always fresh
+  if (projectBrief && folderPath) {
+    mandatory.push({ role: 'system', content: buildProjectContext(folderPath, projectBrief) })
+  }
+
   if (latestUserRequest) {
-    messages.push({ role: 'system', content: buildCurrentTaskPrompt(latestUserRequest, activeTaskId) })
+    mandatory.push({ role: 'system', content: buildCurrentTaskPrompt(latestUserRequest, activeTaskId) })
   }
-  const historyStart = Math.max(0, latestUserIndex - 12)
-  if (historyStart > 0) {
-    const compacted = conversation.messages
-      .slice(0, historyStart)
-      .map(m => summarizeHistoricalMessage(m, includeUserHistory))
-      .filter((m): m is LlmMessage => Boolean(m))
-      .slice(-8)
-    if (compacted.length > 0) {
-      messages.push({
-        role: 'system',
-        content: 'Compacted older conversation context follows. It is historical context only and must not trigger old tool calls.',
-      })
-      messages.push(...compacted)
-    }
-  }
-  for (let i = historyStart; i < conversation.messages.length; i += 1) {
+
+  // ── 2. Build the active-task messages (latest user + same-task messages after it) ──
+  const activeMessages: LlmMessage[] = []
+  for (let i = latestUserIndex; i >= 0 && i < conversation.messages.length; i += 1) {
     const m = conversation.messages[i]
     const isActiveTask = activeTaskId ? m.taskId === activeTaskId : i >= latestUserIndex
+    if (!isActiveTask && i > latestUserIndex) break
     if (m.role === 'system' && !isActiveTask) continue
-    if (i < latestUserIndex && !isActiveTask) {
-      const summarized = summarizeHistoricalMessage(m, includeUserHistory)
-      if (summarized) messages.push(summarized)
-      continue
-    }
+
     const text = partsToText(m.content)
     const imageParts = m.content.filter((p): p is Extract<ContentPart, { type: 'image_url' }> => p.type === 'image_url')
     if (!text.trim() && !m.streaming && imageParts.length === 0) continue
-    
+
     let content: LlmMessage['content'] = text
     if (isActiveTask && m.role === 'user' && imageParts.length > 0) {
       content = [
@@ -141,20 +245,94 @@ function conversationToLlmMessages(
       ]
     }
 
-    messages.push({
+    activeMessages.push({
       role: m.role,
       content,
       taskId: m.taskId,
       ...(m.role === 'tool' && m.toolCallId ? { toolCallId: m.toolCallId } : {}),
     })
   }
-  return messages
+
+  // ── 3. Build history messages within the token budget ──
+  const mandatoryTokens = mandatory.reduce((sum, m) => sum + estimateMessageTokens(m), 0)
+  const activeTokens = activeMessages.reduce((sum, m) => sum + estimateMessageTokens(m), 0)
+  let remainingBudget = DEFAULT_CONTEXT_BUDGET - mandatoryTokens - activeTokens
+
+  const historyMessages: LlmMessage[] = []
+
+  // Walk backwards from latestUserIndex - 1 to include recent history
+  for (let i = latestUserIndex - 1; i >= 0 && remainingBudget > 0; i -= 1) {
+    const m = conversation.messages[i]
+    const isActiveTask = activeTaskId ? m.taskId === activeTaskId : false
+
+    if (m.role === 'system' && !isActiveTask) continue
+
+    let msg: LlmMessage | null = null
+
+    if (isActiveTask) {
+      // Same-task messages: include verbatim
+      const text = partsToText(m.content)
+      const imageParts = m.content.filter((p): p is Extract<ContentPart, { type: 'image_url' }> => p.type === 'image_url')
+      if (!text.trim() && imageParts.length === 0) continue
+
+      let content: LlmMessage['content'] = text
+      if (m.role === 'user' && imageParts.length > 0) {
+        content = [
+          { type: 'text', text },
+          ...imageParts.map(p => ({ type: 'image_url' as const, image_url: { url: p.image_url.url } }))
+        ]
+      }
+      msg = {
+        role: m.role,
+        content,
+        taskId: m.taskId,
+        ...(m.role === 'tool' && m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+      }
+    } else {
+      // Historical messages: summarize to save tokens
+      msg = summarizeHistoricalMessage(m, includeUserHistory)
+    }
+
+    if (!msg) continue
+
+    const tokens = estimateMessageTokens(msg)
+    if (tokens > remainingBudget) {
+      // If this single message blows the budget, try a truncated version
+      if (typeof msg.content === 'string' && msg.content.length > 200) {
+        msg = { ...msg, content: msg.content.slice(0, 200) + '... (truncated)' }
+        const truncatedTokens = estimateMessageTokens(msg)
+        if (truncatedTokens > remainingBudget) break
+        remainingBudget -= truncatedTokens
+      } else {
+        break
+      }
+    } else {
+      remainingBudget -= tokens
+    }
+
+    historyMessages.unshift(msg) // prepend to maintain chronological order
+  }
+
+  // ── 4. Assemble final message array ──
+  if (historyMessages.length > 0) {
+    mandatory.push({
+      role: 'system',
+      content: 'Conversation history follows. Older messages are historical context only.',
+    })
+  }
+
+  return [...mandatory, ...historyMessages, ...activeMessages]
 }
+
+// ── Public API ──────────────────────────────────────────────────────
 
 export interface SendOptions {
   conversation: Conversation
   settings: Settings
+  projectBrief?: ProjectBrief
+  folderPath?: string
   onDelta: (delta: string) => void
+  onReasoningDelta?: (delta: string) => void
   onAttempt?: (attempts: Array<{ providerId: string; ok: boolean; error?: string }>) => void
   onStatus?: (payload: { taskId?: string; phase: AssistantRunPhase }) => void
   activeTaskId?: string
@@ -187,37 +365,59 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     }
   }
 
-  const messages = conversationToLlmMessages(options.conversation, options.settings)
+  const messages = conversationToLlmMessages(
+    options.conversation,
+    options.settings,
+    options.projectBrief,
+    options.folderPath,
+  )
 
-  const offChunk = window.ava.llm.onChunk(({ streamId, text }) => {
-    if (streamId === options.streamId) options.onDelta(text)
-  })
-  const offAttempt = options.onAttempt
-    ? window.ava.llm.onAttempt(({ streamId, attempts }) => {
-        if (streamId === options.streamId) options.onAttempt!(attempts)
-      })
-    : () => { /* noop */ }
-  const offStatus = options.onStatus
-    ? window.ava.llm.onStatus(({ streamId, taskId, phase }) => {
-        if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
-          options.onStatus!({ taskId, phase })
-        }
-      })
-    : () => { /* noop */ }
-  const offPart = options.onPart
-    ? window.ava.llm.onPart(({ streamId, taskId, partIndex, part }) => {
-        if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
-          options.onPart!({ taskId, partIndex, part })
-        }
-      })
-    : () => { /* noop */ }
-  const offPartUpdate = options.onPartUpdate
-    ? window.ava.llm.onPartUpdate(({ streamId, taskId, partIndex, partId, patch }) => {
-        if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
-          options.onPartUpdate!({ taskId, partIndex, partId, patch })
-        }
-      })
-    : () => { /* noop */ }
+  // Trait-based temperature
+  const trait = options.conversation.traits?.[0] || 'chat'
+  const temperature = TRAIT_TEMPERATURES[trait] ?? 0.4
+
+  // ── Event listeners (simplified cleanup) ──
+  const cleanups: (() => void)[] = [
+    window.ava.llm.onChunk(({ streamId, text }) => {
+      if (streamId === options.streamId) options.onDelta(text)
+    }),
+  ]
+  if (options.onReasoningDelta) {
+    const cb = options.onReasoningDelta
+    cleanups.push(window.ava.llm.onReasoningChunk(({ streamId, text }) => {
+      if (streamId === options.streamId) cb(text)
+    }))
+  }
+  if (options.onAttempt) {
+    const cb = options.onAttempt
+    cleanups.push(window.ava.llm.onAttempt(({ streamId, attempts }) => {
+      if (streamId === options.streamId) cb(attempts)
+    }))
+  }
+  if (options.onStatus) {
+    const cb = options.onStatus
+    cleanups.push(window.ava.llm.onStatus(({ streamId, taskId, phase }) => {
+      if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
+        cb({ taskId, phase })
+      }
+    }))
+  }
+  if (options.onPart) {
+    const cb = options.onPart
+    cleanups.push(window.ava.llm.onPart(({ streamId, taskId, partIndex, part }) => {
+      if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
+        cb({ taskId, partIndex, part })
+      }
+    }))
+  }
+  if (options.onPartUpdate) {
+    const cb = options.onPartUpdate
+    cleanups.push(window.ava.llm.onPartUpdate(({ streamId, taskId, partIndex, partId, patch }) => {
+      if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
+        cb({ taskId, partIndex, partId, patch })
+      }
+    }))
+  }
 
   try {
     const reply = await window.ava.llm.stream({
@@ -226,7 +426,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       providers,
       activeTaskId: options.activeTaskId,
       activeCommandInvocation: latestCommandInvocation(options.conversation),
-      temperature: 0.4,
+      temperature,
       toolFormatMap: options.settings.modelToolFormatMap,
       pluginStates: options.settings.pluginStates,
     })
@@ -245,11 +445,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       detectedToolFormat: reply.result.detectedToolFormat,
     }
   } finally {
-    offChunk()
-    offAttempt()
-    offStatus()
-    offPart()
-    offPartUpdate()
+    cleanups.forEach(fn => fn())
   }
 }
 
@@ -260,6 +456,8 @@ function latestCommandInvocation(conversation: Conversation): CommandInvocation 
   }
   return undefined
 }
+
+// ── Message factories ───────────────────────────────────────────────
 
 export function makeStreamId(): string {
   return `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -281,7 +479,12 @@ export function makeUserMessage(
 ): Message {
   const parts: ContentPart[] = [{ type: 'text', text: content }]
   for (const url of attachments) {
-    parts.push({ type: 'image_url', image_url: { url } })
+    if (isImageUrl(url)) {
+      parts.push({ type: 'image_url', image_url: { url } })
+    } else {
+      // Non-image files: append as text context with file path
+      parts.push({ type: 'text', text: `\n[Attached file: ${url}]` })
+    }
   }
   return {
     id: makeMessageId(),

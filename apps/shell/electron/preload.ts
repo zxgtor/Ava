@@ -302,6 +302,7 @@ const ava = {
       { ok: true; models: string[] } | { ok: false; error: string }
     > => ipcRenderer.invoke('ava:llm:probe', args),
     onChunk: (handler: (payload: ChunkPayload) => void) => on<ChunkPayload>('ava:llm:chunk', handler),
+    onReasoningChunk: (handler: (payload: ChunkPayload) => void) => on<ChunkPayload>('ava:llm:reasoning-chunk', handler),
     onAttempt: (handler: (payload: AttemptPayload) => void) => on<AttemptPayload>('ava:llm:attempt', handler),
     onStatus: (handler: (payload: StatusPayload) => void) => on<StatusPayload>('ava:llm:status', handler),
     onPart: (handler: (payload: PartPayload) => void) => on<PartPayload>('ava:llm:part', handler),

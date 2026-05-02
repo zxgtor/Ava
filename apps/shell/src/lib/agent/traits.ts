@@ -54,12 +54,17 @@ export function detectTraitsFromText(text: string): string[] {
     
     let score = 0
     def.keywords.forEach(kw => {
-      if (lowerText.includes(kw.toLowerCase())) {
+      // Use word-boundary matching to avoid false positives
+      // e.g. "design a function" should not trigger "design" trait
+      const escaped = kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i')
+      if (regex.test(lowerText)) {
         score += 1
       }
     })
     
-    if (score > 0) {
+    // Require at least 2 keyword matches to reduce false positives
+    if (score >= 2) {
       results.push({ trait: def.id, score })
     }
   })

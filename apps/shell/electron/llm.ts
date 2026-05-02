@@ -491,6 +491,7 @@ function streamFromProvider(
   args: StreamStepArgs,
   controller: AbortController,
   onChunk: (text: string) => void,
+  onReasoningChunk?: (text: string) => void,
 ): Promise<StreamStepResult> {
   const adapter = getAdapter(provider.id)
   return adapter.streamChat({
@@ -498,6 +499,7 @@ function streamFromProvider(
     args,
     controller,
     onChunk,
+    onReasoningChunk,
   })
 }
 
@@ -578,6 +580,11 @@ async function runToolLoop(
         }
         if (!webContents.isDestroyed()) {
           webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
+        }
+      },
+      text => {
+        if (!webContents.isDestroyed()) {
+          webContents.send('ava:llm:reasoning-chunk', { streamId: args.streamId, text })
         }
       },
     )

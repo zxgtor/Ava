@@ -11,6 +11,7 @@ export interface AdapterOptions {
   args: StreamStepArgs
   controller: AbortController
   onChunk: (text: string) => void
+  onReasoningChunk?: (text: string) => void
 }
 
 export abstract class LlmAdapter {

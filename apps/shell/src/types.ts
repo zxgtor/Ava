@@ -64,6 +64,8 @@ export interface Message {
   runPhase?: AssistantRunPhase
   error?: string
   aborted?: boolean
+  /** Accumulated reasoning/thinking content from the model (hidden by default, shown in collapsible block). */
+  reasoningContent?: string
   commandInvocation?: CommandInvocation
 }
 

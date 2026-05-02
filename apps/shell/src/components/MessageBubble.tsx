@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, Edit2, RotateCw, Trash2 } from 'lucide-react'
+import { Check, ChevronRight, Copy, Edit2, RotateCw, Trash2, Brain, Wrench } from 'lucide-react'
 import type { AssistantRunPhase, ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
 import { ToolCallBubble } from './ToolCallBubble'
@@ -60,6 +60,118 @@ function RunIndicator({ phase }: { phase?: AssistantRunPhase }) {
     <span className="run-indicator run-indicator-connecting" aria-label="connecting">
       <span />
     </span>
+  )
+}
+
+// ── Collapsible Thinking Block ──────────────────────────────────────
+
+function useElapsedTimer(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0)
+  const startRef = useRef(Date.now())
+
+  useEffect(() => {
+    if (!active) return
+    startRef.current = Date.now()
+    setElapsed(0)
+    const interval = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000))
+    }, 1000)
+    return () => window.clearInterval(interval)
+  }, [active])
+
+  return elapsed
+}
+
+function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const elapsed = useElapsedTimer(isStreaming)
+  const finalDurationRef = useRef(0)
+
+  // Auto-collapse when streaming finishes
+  useEffect(() => {
+    if (!isStreaming && content) {
+      finalDurationRef.current = elapsed
+      const timer = window.setTimeout(() => setCollapsed(true), 400)
+      return () => window.clearTimeout(timer)
+    }
+  }, [isStreaming, content])
+
+  if (!content && !isStreaming) return null
+
+  const duration = isStreaming ? elapsed : finalDurationRef.current
+  const label = isStreaming
+    ? `Thinking for ${duration}s`
+    : `Thought for ${duration}s`
+
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed(c => !c)}
+        className="inline-flex items-center gap-1.5 text-[11px] text-text-3 hover:text-text-2 transition-colors cursor-pointer select-none"
+      >
+        <Brain size={12} className={isStreaming ? 'animate-pulse text-accent' : 'text-text-3'} />
+        <span>{label}</span>
+        <ChevronRight
+          size={10}
+          className={`transition-transform duration-200 ${collapsed ? '' : 'rotate-90'}`}
+        />
+      </button>
+      {!collapsed && (
+        <div className="mt-1.5 pl-4 border-l-2 border-accent/20 text-[12px] text-text-3 leading-relaxed max-h-40 overflow-y-auto hide-scrollbar whitespace-pre-wrap">
+          {content}
+          {isStreaming && <span className="animate-pulse"> ▊</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CollapsibleToolCalls({ parts, isStreaming }: { parts: ContentPart[]; isStreaming: boolean }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const elapsed = useElapsedTimer(isStreaming)
+  const finalDurationRef = useRef(0)
+  const toolCalls = parts.filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
+
+  // Auto-collapse when all tool calls are done
+  const allDone = toolCalls.length > 0 && toolCalls.every(tc => tc.status === 'ok' || tc.status === 'error' || tc.status === 'aborted')
+
+  useEffect(() => {
+    if (allDone) {
+      finalDurationRef.current = elapsed
+      const timer = window.setTimeout(() => setCollapsed(true), 800)
+      return () => window.clearTimeout(timer)
+    }
+  }, [allDone])
+
+  if (toolCalls.length === 0) return null
+
+  const duration = allDone ? finalDurationRef.current : elapsed
+  const label = allDone
+    ? `Worked for ${duration}s`
+    : `Working for ${duration}s`
+
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed(c => !c)}
+        className="inline-flex items-center gap-1.5 text-[11px] text-text-3 hover:text-text-2 transition-colors cursor-pointer select-none"
+      >
+        <Wrench size={12} className={!allDone ? 'animate-spin text-accent' : 'text-text-3'} style={!allDone ? { animationDuration: '2s' } : undefined} />
+        <span>{label}</span>
+        <span className="text-text-3/50">({toolCalls.length} tool{toolCalls.length > 1 ? 's' : ''})</span>
+        <ChevronRight
+          size={10}
+          className={`transition-transform duration-200 ${collapsed ? '' : 'rotate-90'}`}
+        />
+      </button>
+      {!collapsed && (
+        <div className="mt-1.5 space-y-1">
+          {toolCalls.map((tc, idx) => <ToolCallBubble key={idx} part={tc} />)}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -126,6 +238,16 @@ function MessageBubbleImpl({
   const textLen = textContent.length
   const hasAnyPart = message.content.length > 0
   const hasVisibleContent = textLen > 0 || hasAnyPart
+  const hasToolCalls = message.content.some(p => p.type === 'tool_call')
+
+  // For assistant messages: render text+image parts only (tool calls are rendered by CollapsibleToolCalls).
+  // For user messages: render everything via renderParts.
+  const renderTextAndImageParts = isUser
+    ? renderParts(message.content, { isUser, isError })
+    : renderParts(
+        message.content.filter(p => p.type !== 'tool_call'),
+        { isUser, isError },
+      )
 
   const handleCopy = async () => {
     if (!textContent.trim()) return
@@ -183,7 +305,7 @@ function MessageBubbleImpl({
   }, [])
 
   return (
-    <div className="mx-auto w-full max-w-[56rem] px-14">
+    <div className="mx-auto w-full max-w-[1400px] px-14">
     <div className={`group relative flex py-3 animate-fade-in ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
         className={`absolute top-3 flex items-center justify-center w-8 h-8 text-sm font-medium rounded-full ${
@@ -210,7 +332,13 @@ function MessageBubbleImpl({
             </div>
           )}
           <div className="message-selectable">
-            {renderParts(message.content, { isUser, isError })}
+            {!isUser && message.reasoningContent && (
+              <ThinkingBlock content={message.reasoningContent} isStreaming={Boolean(message.streaming)} />
+            )}
+            {!isUser && hasToolCalls && (
+              <CollapsibleToolCalls parts={message.content} isStreaming={Boolean(message.streaming)} />
+            )}
+            {renderTextAndImageParts}
             {message.streaming && !hasVisibleContent && <RunIndicator phase={message.runPhase} />}
             {message.streaming && hasVisibleContent && <RunIndicator phase={message.runPhase ?? 'generating'} />}
             {isAborted && !hasVisibleContent && (

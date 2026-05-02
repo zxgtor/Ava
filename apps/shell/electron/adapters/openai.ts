@@ -57,7 +57,7 @@ function applyReasoningRequestOptions(
 
 export class OpenAiAdapter extends LlmAdapter {
   async streamChat(options: AdapterOptions): Promise<StreamStepResult> {
-    const { provider, args, controller, onChunk } = options
+    const { provider, args, controller, onChunk, onReasoningChunk } = options
     const model = provider.defaultModel
     const endpoint = chatCompletionsEndpoint(provider.baseUrl)
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -122,6 +122,7 @@ export class OpenAiAdapter extends LlmAdapter {
         if (typeof reasoning === 'string' && reasoning.length > 0) {
           sawHiddenReasoning = true
           hiddenReasoningChars += reasoning.length
+          if (onReasoningChunk) onReasoningChunk(reasoning)
         }
         const content = deltaRecord.content
         if (typeof content === 'string') pusher.push(content)
