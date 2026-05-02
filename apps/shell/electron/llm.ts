@@ -31,6 +31,7 @@ export interface ModelProvider {
   enabled: boolean
   models: string[]
   defaultModel: string
+  reasoningMode?: 'auto' | 'off' | 'on'
 }
 
 export interface LlmAttempt {
@@ -44,6 +45,15 @@ export interface LlmAttempt {
 
 export type ToolCallFormat = 'openai' | 'hermes' | 'none'
 export type ToolCallStatus = 'pending' | 'running' | 'ok' | 'error' | 'aborted'
+export type AssistantRunPhase =
+  | 'connecting'
+  | 'waiting_first_token'
+  | 'generating'
+  | 'tool_running'
+  | 'fallback'
+  | 'completed'
+  | 'error'
+  | 'aborted'
 
 export interface ToolCallPart {
   type: 'tool_call'
@@ -73,6 +83,7 @@ export interface StreamStepArgs extends StreamChatArgs {
   messages: LlmMessage[]
   tools: McpToolDescriptor[]
   toolFormatHint?: ToolCallFormat
+  hiddenReasoningBudgetChars?: number
 }
 
 export interface StreamChatResult {
@@ -104,6 +115,8 @@ export interface StreamStepResult {
   toolCalls: ToolCallCandidate[]
   model: string
   detectedToolFormat: ToolCallFormat
+  hiddenReasoningChars?: number
+  hiddenReasoningExceeded?: boolean
 }
 
 interface ActiveStream {
@@ -118,6 +131,12 @@ const ANTHROPIC_MAX_TOKENS = 4096
 const MAX_TOOL_LOOP = 10
 const WINDOWS_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：、]+/g
 const WINDOWS_DRIVE_SCOPE_RE = /\b[A-Za-z]:\\?(?![^\s"'`<>|?*])/g
+const TOOL_INTENT_RE =
+  /\b(read|open|inspect|check|list|search|find|scan|write|create|edit|modify|delete|run|execute|call|use tool|tool call)\b|读取|打开|检查|查看|列出|搜索|查找|扫描|写入|创建|编辑|修改|删除|运行|执行|调用工具|使用工具/i
+const REASONING_INTENT_RE =
+  /\b(debug|diagnose|trace|root cause|why|architecture|architect|design|plan|strategy|refactor|migrate|compare|tradeoff|risk|review|analyze|complex|investigate|fix|implement)\b|为什么|原因|诊断|排查|调试|架构|设计|计划|方案|重构|迁移|比较|权衡|风险|审查|分析|复杂|调查|修复|实现/i
+const SIMPLE_CHAT_RE =
+  /\b(what is|how to|do you know|explain|summarize|translate|tell me|can this|does this|support)\b|是什么|怎么|如何|解释|总结|翻译|支持吗|知道/i
 
 export function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
@@ -219,16 +238,60 @@ function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask
   return `Blocked stale filesystem tool call. The requested path "${path}" is outside the latest user request scope: ${scopes.join(', ')}.`
 }
 
+function shouldExposeTools(currentTask: string, activeCommandInvocation?: ToolAuditCommandInvocation): boolean {
+  if (activeCommandInvocation) return true
+  if (extractPathScopes(currentTask).length > 0) return true
+  return TOOL_INTENT_RE.test(currentTask)
+}
+
+function chooseReasoningMode(
+  provider: ModelProvider,
+  currentTask: string,
+  toolsExposed: boolean,
+): 'off' | 'on' {
+  if (provider.reasoningMode === 'off') return 'off'
+  if (provider.reasoningMode === 'on') return 'on'
+  if (REASONING_INTENT_RE.test(currentTask)) return 'on'
+  if (toolsExposed && !SIMPLE_CHAT_RE.test(currentTask)) return 'on'
+  return 'off'
+}
+
+function chooseHiddenReasoningBudgetChars(mode: 'off' | 'on', currentTask: string, toolsExposed: boolean): number {
+  if (mode === 'off') return 0
+  if (REASONING_INTENT_RE.test(currentTask) || toolsExposed) return 10_000
+  return 4_000
+}
+
+function withFinalizePrompt(messages: LlmMessage[]): LlmMessage[] {
+  const instruction: LlmMessage = {
+    role: 'system',
+    content: [
+      'The previous attempt used hidden reasoning but produced no visible final answer.',
+      'Do not continue hidden reasoning.',
+      'Answer the latest user request directly in visible content now.',
+      'If a tool is needed, call only the necessary tool; otherwise provide the final answer.',
+    ].join(' '),
+  }
+  return [instruction, ...messages]
+}
+
 export function buildToolPrompt(tools: McpToolDescriptor[]): string {
   const toolLines = tools.map(tool => {
     const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema) : '{}'
     return `- ${tool.name}: ${tool.description ?? 'No description'} | args schema: ${schema}`
   })
+  const exampleTool = tools.find(tool => tool.name === 'filesystem.read_text_file')
+    ?? tools.find(tool => tool.name.startsWith('filesystem.') && /read/i.test(tool.name))
+    ?? tools[0]
+  const exampleName = exampleTool?.name ?? 'filesystem.read_text_file'
   return [
     'Available tools:',
     ...toolLines,
+    'Only call a tool when the latest user request requires external state, filesystem access, or an explicit action.',
+    'For conceptual questions, instructions, or explanations, answer directly without a tool call.',
     'To call a tool, respond with exactly one or more blocks like:',
-    '<tool_call>{"name":"filesystem.read_file","arguments":{"path":"D:\\\\example.txt"}}</tool_call>',
+    `<tool_call>{"name":"${exampleName}","arguments":{"path":"D:\\\\example.txt"}}</tool_call>`,
+    'Use tool names exactly as listed above.',
     'Do not wrap tool calls in markdown fences.',
   ].join('\n')
 }
@@ -353,6 +416,10 @@ export function extractOpenAiPayload(line: string): Record<string, unknown> | nu
   return parseJsonObject(payload)
 }
 
+export function isOpenAiDoneLine(line: string): boolean {
+  return line.startsWith('data:') && line.slice(5).trim() === '[DONE]'
+}
+
 export function normalizeToolCallCandidates(accs: ToolCallAccumulator[]): ToolCallCandidate[] {
   const out: ToolCallCandidate[] = []
   for (let i = 0; i < accs.length; i += 1) {
@@ -434,6 +501,24 @@ function streamFromProvider(
   })
 }
 
+function sendRunStatus(
+  webContents: WebContents,
+  args: StreamChatArgs,
+  provider: ModelProvider,
+  model: string,
+  phase: AssistantRunPhase,
+): void {
+  if (webContents.isDestroyed()) return
+  webContents.send('ava:llm:status', {
+    streamId: args.streamId,
+    taskId: args.activeTaskId,
+    providerId: provider.id,
+    providerName: provider.name,
+    model,
+    phase,
+  })
+}
+
 async function runToolLoop(
   webContents: WebContents,
   provider: ModelProvider,
@@ -441,19 +526,35 @@ async function runToolLoop(
   controller: AbortController,
 ): Promise<Omit<StreamChatResult, 'provider' | 'attempts' | 'fallbackUsed'>> {
   const model = provider.defaultModel
-  const tools = mcpSupervisor.listAllTools()
-  const initialHint = args.toolFormatMap?.[toolKey(provider.id, model)]
-  const effectiveInitialHint: ToolCallFormat | undefined =
-    initialHint ?? (provider.id === 'lmstudio' && tools.length > 0 ? 'hermes' : undefined)
-  const workingMessages: LlmMessage[] = [...args.messages]
   const currentTask = latestUserRequest(args.messages)
+  const tools = shouldExposeTools(currentTask, args.activeCommandInvocation)
+    ? mcpSupervisor.listAllTools()
+    : []
+  const effectiveProvider: ModelProvider = {
+    ...provider,
+    reasoningMode: chooseReasoningMode(provider, currentTask, tools.length > 0),
+  }
+  const hiddenReasoningBudgetChars = chooseHiddenReasoningBudgetChars(
+    effectiveProvider.reasoningMode === 'on' ? 'on' : 'off',
+    currentTask,
+    tools.length > 0,
+  )
+  const savedHint = args.toolFormatMap?.[toolKey(provider.id, model)]
+  const initialHint = tools.length > 0 ? savedHint : 'none'
+  const effectiveInitialHint: ToolCallFormat | undefined =
+    initialHint === 'none'
+      ? undefined
+      : initialHint ?? (provider.id === 'lmstudio' && tools.length > 0 ? 'hermes' : undefined)
+  const workingMessages: LlmMessage[] = [...args.messages]
   const parts: StreamChatResult['parts'] = []
   let fullContent = ''
   let detectedToolFormat: ToolCallFormat = initialHint ?? 'none'
   let toolCallsIssued = 0
+  let sawFirstToken = false
 
   for (let round = 0; round < MAX_TOOL_LOOP; round += 1) {
     if (controller.signal.aborted) throw new Error('aborted')
+    sendRunStatus(webContents, args, provider, model, round === 0 ? 'waiting_first_token' : 'generating')
 
     const stepMessages =
       effectiveInitialHint === 'hermes'
@@ -461,15 +562,20 @@ async function runToolLoop(
         : workingMessages
 
     const step = await streamFromProvider(
-      provider,
+      effectiveProvider,
       {
         ...args,
         messages: stepMessages,
         tools,
         toolFormatHint: detectedToolFormat === 'none' ? effectiveInitialHint : detectedToolFormat,
+        hiddenReasoningBudgetChars,
       },
       controller,
       text => {
+        if (!sawFirstToken) {
+          sawFirstToken = true
+          sendRunStatus(webContents, args, provider, model, 'generating')
+        }
         if (!webContents.isDestroyed()) {
           webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
         }
@@ -485,6 +591,57 @@ async function runToolLoop(
     if (step.visibleText) {
       fullContent += step.visibleText
       parts.push({ type: 'text', text: step.visibleText })
+    }
+
+    if (step.hiddenReasoningExceeded && !step.visibleText && step.toolCalls.length === 0) {
+      const finalizeProvider: ModelProvider = { ...effectiveProvider, reasoningMode: 'off' }
+      const finalizeMessages = withFinalizePrompt(workingMessages)
+      const finalizeStep = await streamFromProvider(
+        finalizeProvider,
+        {
+          ...args,
+          messages: finalizeMessages,
+          tools: [],
+          toolFormatHint: 'none',
+          hiddenReasoningBudgetChars: 0,
+        },
+        controller,
+        text => {
+          if (!sawFirstToken) {
+            sawFirstToken = true
+            sendRunStatus(webContents, args, provider, model, 'generating')
+          }
+          if (!webContents.isDestroyed()) {
+            webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
+          }
+        },
+      )
+      if (finalizeStep.visibleText) {
+        fullContent += finalizeStep.visibleText
+        parts.push({ type: 'text', text: finalizeStep.visibleText })
+        return {
+          fullContent,
+          parts,
+          model,
+          toolCallsIssued,
+          loopRounds: round + 1,
+          detectedToolFormat,
+        }
+      }
+      const failText = '模型超过 hidden reasoning 预算后仍没有返回可显示的最终答案。当前模型 profile 可能只输出 reasoning_content，请换用 chat/instruct profile 或关闭该模型模板的 thinking 输出。'
+      fullContent += failText
+      parts.push({ type: 'text', text: failText })
+      if (!webContents.isDestroyed()) {
+        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: failText })
+      }
+      return {
+        fullContent,
+        parts,
+        model,
+        toolCallsIssued,
+        loopRounds: round + 1,
+        detectedToolFormat,
+      }
     }
 
     if (step.toolCalls.length === 0) {
@@ -509,6 +666,7 @@ async function runToolLoop(
     })
     for (const toolCall of step.toolCalls) {
       if (controller.signal.aborted) throw new Error('aborted')
+      sendRunStatus(webContents, args, provider, model, 'tool_running')
 
       const partIndex = parts.length
       const staleReason = validateToolAgainstCurrentTask(toolCall, currentTask)
@@ -607,6 +765,7 @@ async function runToolLoop(
         content: toolText,
       })
     }
+    sendRunStatus(webContents, args, provider, model, 'generating')
   }
 
   const stopText = 'Tool loop exceeded, stopping.'
@@ -686,7 +845,9 @@ export async function streamChat(
     for (const provider of args.providers) {
       const model = provider.defaultModel
       try {
+        sendRunStatus(webContents, argsWithSkills, provider, model, 'connecting')
         const result = await runToolLoop(webContents, provider, argsWithSkills, controller)
+        sendRunStatus(webContents, argsWithSkills, provider, model, 'completed')
         attempts.push({ providerId: provider.id, providerName: provider.name, model, ok: true })
         return {
           ...result,
@@ -706,6 +867,13 @@ export async function streamChat(
         if (!webContents.isDestroyed()) {
           webContents.send('ava:llm:attempt', { streamId: args.streamId, attempts: [...attempts] })
         }
+        sendRunStatus(
+          webContents,
+          argsWithSkills,
+          provider,
+          model,
+          attempts.length < args.providers.length ? 'fallback' : 'error',
+        )
       }
     }
 

@@ -167,6 +167,7 @@
     "stop_generation": "Stop generation",
     "send": "Send",
     "stop_recording": "Stop recording",
-    "voice_input": "Voice input"
+    "voice_input": "Voice input",
+    "edit_resend": "Edit and resend"
   }
 }

@@ -147,6 +147,7 @@ export function ConversationSidebar() {
     setEditingId(conv.id)
     setEditTitle(conv.title)
     setMenuOpenId(null)
+    setOrganizeOpenId(null)
   }
 
   const saveEditing = () => {
@@ -321,44 +322,45 @@ export function ConversationSidebar() {
                     {canUseGroupActions && isOrganizeOpen && (
                       <div
                         ref={menuRef}
-                        className="absolute right-8 top-6 z-50 w-44 rounded-lg border border-white/10 bg-[#252528]/98 py-2 text-[12px] text-text-2 shadow-[0_20px_50px_rgba(0,0,0,0.65)] backdrop-blur-2xl"
+                        className="ava-menu absolute right-8 top-6 z-50 w-44 py-2"
+                        onMouseDown={e => e.stopPropagation()}
                         onClick={e => e.stopPropagation()}
                       >
-                        <div className="px-3 pb-1 text-[11px] font-medium text-text-3">{t('sidebar.sort_by', 'Sort by')}</div>
+                        <div className="ava-menu-label">{t('sidebar.sort_by', 'Sort by')}</div>
                         <button
                           onClick={() => setGroupSorts(prev => ({ ...prev, [group.id]: 'created' }))}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5 hover:text-text"
+                          className="ava-menu-item py-1.5"
                         >
                           <CirclePlus size={13} className="text-text-3" />
                           <span className="font-medium">{t('sidebar.sort_created', 'Created')}</span>
-                          {groupSort === 'created' && <span className="ml-auto text-text-3">✓</span>}
+                          {groupSort === 'created' && <span className="ava-menu-shortcut">✓</span>}
                         </button>
                         <button
                           onClick={() => setGroupSorts(prev => ({ ...prev, [group.id]: 'updated' }))}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5 hover:text-text"
+                          className="ava-menu-item py-1.5"
                         >
                           <RefreshCw size={13} className="text-text-3" />
                           <span className="font-medium">{t('sidebar.sort_updated', 'Updated')}</span>
-                          {groupSort === 'updated' && <span className="ml-auto text-text-3">✓</span>}
+                          {groupSort === 'updated' && <span className="ava-menu-shortcut">✓</span>}
                         </button>
 
-                        <div className="mx-3 my-2 h-[1px] bg-white/8" />
-                        <div className="px-3 pb-1 text-[11px] font-medium text-text-3">{t('sidebar.show', 'Show')}</div>
+                        <div className="ava-menu-separator my-2" />
+                        <div className="ava-menu-label">{t('sidebar.show', 'Show')}</div>
                         <button
                           onClick={() => setGroupShowModes(prev => ({ ...prev, [group.id]: 'all' }))}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5 hover:text-text"
+                          className="ava-menu-item py-1.5"
                         >
                           <MessageCircle size={13} className="text-text-3" />
                           <span className="font-medium">{t('sidebar.all_chats', 'All chats')}</span>
-                          {groupShowMode === 'all' && <span className="ml-auto text-text-3">✓</span>}
+                          {groupShowMode === 'all' && <span className="ava-menu-shortcut">✓</span>}
                         </button>
                         <button
                           onClick={() => setGroupShowModes(prev => ({ ...prev, [group.id]: 'active' }))}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5 hover:text-text"
+                          className="ava-menu-item py-1.5"
                         >
                           <ArchiveRestore size={13} className="text-text-3" />
                           <span className="font-medium">{t('sidebar.active', 'Active')}</span>
-                          {groupShowMode === 'active' && <span className="ml-auto text-text-3">✓</span>}
+                          {groupShowMode === 'active' && <span className="ava-menu-shortcut">✓</span>}
                         </button>
                       </div>
                     )}
@@ -436,38 +438,47 @@ export function ConversationSidebar() {
                             {isMenuOpen && (
                               <div
                                 ref={menuRef}
-                                className="absolute right-2 top-8 z-50 w-48 bg-[#1a1b1e]/98 border border-white/10 rounded-lg shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl py-1.5 animate-in fade-in zoom-in duration-150 ring-1 ring-black/5"
+                                className="ava-menu absolute right-2 top-8 z-50 w-48 py-1.5 animate-in fade-in zoom-in duration-150"
+                                onMouseDown={e => e.stopPropagation()}
                                 onClick={e => e.stopPropagation()}
                               >
-                                <button onClick={() => startEditing(conv)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-text">
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    startEditing(conv)
+                                  }}
+                                  className="ava-menu-item"
+                                >
                                   <Edit2 size={13} className="opacity-60" />
                                   <span>{t('sidebar.rename', 'Rename')}</span>
                                 </button>
-                                <button onClick={() => dispatch({ type: 'TOGGLE_PIN_CONVERSATION', id: conv.id })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-text">
+                                <button onClick={() => dispatch({ type: 'TOGGLE_PIN_CONVERSATION', id: conv.id })} className="ava-menu-item">
                                   <Pin size={13} className={conv.pinned ? 'text-accent' : 'opacity-60'} fill={conv.pinned ? 'currentColor' : 'none'} />
                                   <span>{conv.pinned ? t('sidebar.unpin', 'Unpin') : t('sidebar.pin', 'Pin')}</span>
                                 </button>
                                 {conv.folderPath ? (
                                   <>
-                                    <button onClick={() => dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conv.id, path: '' })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-text">
+                                    <button onClick={() => dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conv.id, path: '' })} className="ava-menu-item">
                                       <X size={13} className="opacity-60" />
                                       <span>{t('sidebar.unlink_folder', 'Unlink folder')}</span>
                                     </button>
                                   </>
                                 ) : (
-                                  <button onClick={() => handleLinkFolder(conv.id)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-text">
+                                  <button onClick={() => handleLinkFolder(conv.id)} className="ava-menu-item">
                                     <FolderPlus size={13} className="opacity-60" />
                                     <span>{t('sidebar.link_folder', 'Link folder')}</span>
                                   </button>
                                 )}
-                                <div className="h-[1px] bg-white/5 my-1.5 mx-2" />
+                                <div className="ava-menu-separator my-1.5" />
                                 {conv.archived ? (
-                                  <button onClick={() => dispatch({ type: 'ARCHIVE_CONVERSATION', id: conv.id, archived: false })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-text">
+                                  <button onClick={() => dispatch({ type: 'ARCHIVE_CONVERSATION', id: conv.id, archived: false })} className="ava-menu-item">
                                     <Archive size={13} className="text-accent" />
                                     <span>{t('sidebar.restore', 'Restore')}</span>
                                   </button>
                                 ) : (
-                                  <button onClick={() => dispatch({ type: 'ARCHIVE_CONVERSATION', id: conv.id })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors text-text-2 hover:text-text">
+                                  <button onClick={() => dispatch({ type: 'ARCHIVE_CONVERSATION', id: conv.id })} className="ava-menu-item">
                                     <Archive size={13} className="opacity-60" />
                                     <span>{t('sidebar.archive', 'Archive')}</span>
                                   </button>
@@ -475,7 +486,7 @@ export function ConversationSidebar() {
                                 <button onClick={() => {
                                   dispatch({ type: 'DELETE_CONVERSATION', id: conv.id })
                                   setMenuOpenId(null)
-                                }} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-red-500/10 text-red-400 hover:text-red-300 transition-colors">
+                                }} className="ava-menu-item text-red-400 hover:bg-red-500/10 hover:text-red-300">
                                   <Trash2 size={13} className="opacity-80" />
                                   <span>{t('sidebar.delete', 'Delete')}</span>
                                 </button>

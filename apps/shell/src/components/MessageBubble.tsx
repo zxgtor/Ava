@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RotateCw, Trash2 } from 'lucide-react'
+import { Edit2, RotateCw, Trash2 } from 'lucide-react'
 import type { AssistantRunPhase, ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
 import { ToolCallBubble } from './ToolCallBubble'
@@ -14,6 +14,7 @@ interface Props {
   onDelete?: (id: string) => void
   onRetry?: () => void
   onCommandRetry?: () => void
+  onEditResend?: (id: string) => void
 }
 
 function StreamingDots() {
@@ -103,6 +104,7 @@ function MessageBubbleImpl({
   onDelete,
   onRetry,
   onCommandRetry,
+  onEditResend,
 }: Props) {
   const { t } = useTranslation()
   const { state } = useStore()
@@ -173,15 +175,16 @@ function MessageBubbleImpl({
   }, [])
 
   return (
-    <div className={`group flex gap-3 px-6 py-3 animate-fade-in ${isUser ? 'flex-row-reverse' : ''}`}>
+    <div className="mx-auto w-full max-w-[56rem] px-6">
+    <div className={`group relative flex py-3 animate-fade-in ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`flex items-center justify-center flex-shrink-0 w-8 h-8 text-sm font-medium rounded-full ${
+        className={`absolute top-3 flex items-center justify-center w-8 h-8 text-sm font-medium rounded-full ${
           isUser ? 'bg-accent/20 text-accent' : 'bg-surface-2 text-text-2'
-        }`}
+        } ${isUser ? '-right-11' : '-left-11'}`}
       >
         {isUser ? userInitial : assistantInitial}
       </div>
-      <div className={`flex flex-col max-w-[85%] md:max-w-[75%] min-w-0 ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col max-w-[82%] md:max-w-[68%] min-w-0 ${isUser ? 'items-end' : 'items-start'}`}>
         <div
           className={`relative px-4 py-2.5 rounded-2xl break-words text-sm leading-relaxed glass-bubble overflow-hidden w-fit ${
             isUser
@@ -215,8 +218,18 @@ function MessageBubbleImpl({
         </div>
         <div className={`mt-1 flex items-center gap-1 px-1 ${isUser ? 'justify-end' : 'justify-start'}`}>
           <span className="text-[10px] text-text-3 opacity-60">{formatMessageTime(message.createdAt)}</span>
-          {(onDelete || onRetry || onCommandRetry) && !message.streaming && (
+          {(onDelete || onRetry || onCommandRetry || (isUser && onEditResend)) && !message.streaming && (
             <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+              {isUser && onEditResend && (
+                <button
+                  type="button"
+                  onClick={() => onEditResend(message.id)}
+                  className="p-1 text-text-3 rounded cursor-pointer hover:text-accent hover:bg-accent/10"
+                  title={t('chat.edit_resend', 'Edit and resend')}
+                >
+                  <Edit2 size={12} />
+                </button>
+              )}
               {onCommandRetry && (
                 <button
                   type="button"
@@ -253,6 +266,7 @@ function MessageBubbleImpl({
           )}
           </div>
       </div>
+    </div>
     </div>
   )
 }

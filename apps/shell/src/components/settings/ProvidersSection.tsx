@@ -99,6 +99,27 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
             onChange={v => onChange({ ...provider, defaultModel: v })}
             list={provider.models}
           />
+          <label className="block">
+            <span className="block text-xs text-text-3 mb-1">Reasoning policy</span>
+            <select
+              value={provider.reasoningMode ?? 'auto'}
+              onChange={e => onChange({
+                ...provider,
+                reasoningMode:
+                  e.target.value === 'off' || e.target.value === 'on'
+                    ? e.target.value
+                    : 'auto',
+              })}
+              className="w-full px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
+            >
+              <option value="auto">Auto decide</option>
+              <option value="off">Always off</option>
+              <option value="on">Always on</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-text-3">
+              Auto keeps simple Q&A direct and allows reasoning for debugging, planning, refactors, reviews, and tool-heavy work.
+            </span>
+          </label>
           {(provider.models.length > 0 || provider.defaultModel) && (
             <ModelChips
               models={provider.models}

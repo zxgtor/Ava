@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ava Radical Logo Concepts</title>
+  <style>
+    :root {
+      --ink: #edf6ff;
+      --dim: #8ba0c0;
+      --void: #050b18;
+      --panel: rgba(8, 18, 35, 0.76);
+      --line: rgba(174, 205, 255, 0.13);
+      --acid: #b6ff4d;
+      --aqua: #48f0ff;
+      --blue: #7194ff;
+      --pink: #ff5fa2;
+      --orange: #ffb14a;
+      --violet: #9a7cff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 16% 18%, rgba(182,255,77,0.12), transparent 18rem),
+        radial-gradient(circle at 84% 20%, rgba(255,95,162,0.14), transparent 20rem),
+        radial-gradient(circle at 48% 90%, rgba(72,240,255,0.19), transparent 26rem),
+        linear-gradient(135deg, #040915, #07142a 48%, #101d3b);
+      color: var(--ink);
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      padding: 34px;
+    }
+
+    .wrap { width: min(1240px, 100%); margin: 0 auto; }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 58px);
+      letter-spacing: -0.07em;
+      line-height: 0.9;
+    }
+
+    .sub {
+      max-width: 420px;
+      color: var(--dim);
+      font-size: 13px;
+      line-height: 1.5;
+      text-align: right;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(210px, 1fr));
+      gap: 16px;
+    }
+
+    .tile {
+      height: 260px;
+      border-radius: 34px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.015)),
+        var(--panel);
+      box-shadow: 0 28px 90px rgba(0,0,0,0.34);
+      position: relative;
+      overflow: hidden;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .tile::before {
+      content: "";
+      position: absolute;
+      inset: -60px;
+      background: radial-gradient(circle at var(--x) var(--y), var(--glow), transparent 12rem);
+      opacity: 0.78;
+    }
+
+    .show {
+      height: 150px;
+      display: grid;
+      place-items: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .desc {
+      position: relative;
+      z-index: 1;
+      border-top: 1px solid var(--line);
+      padding-top: 13px;
+    }
+
+    .desc b {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .desc span {
+      display: block;
+      color: var(--dim);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      transform: translateZ(0);
+    }
+
+    .word {
+      font-size: 34px;
+      font-weight: 760;
+      letter-spacing: -0.055em;
+    }
+
+    .sigil {
+      width: 74px;
+      height: 74px;
+      position: relative;
+      filter: drop-shadow(0 18px 34px rgba(72,240,255,0.16));
+    }
+
+    .sigil::before,
+    .sigil::after {
+      content: "";
+      position: absolute;
+      inset: 8px;
+      border-radius: 28px 10px 28px 10px;
+      background: linear-gradient(135deg, var(--acid), var(--aqua));
+      transform: rotate(45deg);
+    }
+
+    .sigil::after {
+      inset: 22px;
+      border-radius: 999px;
+      background: var(--void);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+    }
+
+    .sigil-word {
+      font-weight: 820;
+      background: linear-gradient(90deg, var(--acid), white, var(--aqua));
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .split-a {
+      width: 78px;
+      height: 76px;
+      position: relative;
+    }
+
+    .split-a i {
+      position: absolute;
+      background: white;
+      border-radius: 999px;
+      box-shadow: 0 0 28px rgba(255,255,255,0.18);
+    }
+
+    .split-a i:nth-child(1) {
+      width: 16px; height: 70px; left: 18px; top: 3px; transform: rotate(18deg);
+      background: linear-gradient(var(--pink), var(--orange));
+    }
+    .split-a i:nth-child(2) {
+      width: 16px; height: 70px; right: 18px; top: 3px; transform: rotate(-18deg);
+      background: linear-gradient(var(--aqua), var(--blue));
+    }
+    .split-a i:nth-child(3) {
+      width: 38px; height: 13px; left: 20px; top: 42px;
+      background: white;
+    }
+    .split-a::after {
+      content: "";
+      position: absolute;
+      left: 33px;
+      top: 21px;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--void);
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+
+    .split-word {
+      font-size: 38px;
+      letter-spacing: -0.09em;
+    }
+
+    .split-word span:first-child { color: var(--pink); }
+    .split-word span:last-child { color: var(--aqua); }
+
+    .loop {
+      width: 80px;
+      height: 58px;
+      position: relative;
+    }
+
+    .loop::before {
+      content: "";
+      position: absolute;
+      inset: 2px 6px;
+      border-radius: 999px;
+      border: 9px solid transparent;
+      background:
+        linear-gradient(var(--void), var(--void)) padding-box,
+        conic-gradient(from 180deg, var(--aqua), var(--violet), var(--pink), var(--orange), var(--aqua)) border-box;
+      transform: rotate(-8deg);
+    }
+
+    .loop::after {
+      content: "A";
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      font-size: 20px;
+      color: white;
+    }
+
+    .loop-word {
+      font-style: italic;
+      letter-spacing: -0.08em;
+    }
+
+    .totem {
+      width: 62px;
+      height: 86px;
+      border-radius: 999px 999px 20px 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(72,240,255,0.28));
+      position: relative;
+      box-shadow: 0 0 40px rgba(72,240,255,0.18);
+    }
+
+    .totem::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 12px;
+      width: 24px;
+      height: 24px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: var(--void);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2);
+    }
+
+    .totem::after {
+      content: "";
+      position: absolute;
+      left: 17px;
+      bottom: 16px;
+      width: 28px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--void);
+      box-shadow: 0 -13px 0 var(--void);
+    }
+
+    .totem-word {
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      letter-spacing: 0.12em;
+      font-size: 25px;
+    }
+
+    .syntax {
+      height: 72px;
+      padding: 0 18px;
+      border-radius: 22px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background:
+        linear-gradient(135deg, rgba(182,255,77,0.14), rgba(72,240,255,0.08)),
+        rgba(255,255,255,0.045);
+      border: 1px solid rgba(182,255,77,0.24);
+      font-family: "Cascadia Code", monospace;
+    }
+
+    .syntax .brace {
+      color: var(--acid);
+      font-size: 32px;
+      font-weight: 300;
+    }
+
+    .syntax .word {
+      font-size: 30px;
+      letter-spacing: -0.08em;
+    }
+
+    .syntax .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--aqua);
+      box-shadow: 0 0 15px var(--aqua);
+      margin-left: 2px;
+    }
+
+    .portal {
+      width: 82px;
+      height: 82px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle, var(--void) 0 30%, transparent 31%),
+        repeating-conic-gradient(from 0deg, var(--aqua) 0 14deg, transparent 14deg 26deg, var(--blue) 26deg 38deg, transparent 38deg 52deg);
+      box-shadow: 0 0 48px rgba(72,240,255,0.2);
+      position: relative;
+    }
+
+    .portal::after {
+      content: "A";
+      position: absolute;
+      inset: 22px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: rgba(5,11,24,0.86);
+      font-weight: 900;
+    }
+
+    .portal-word {
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-size: 28px;
+    }
+
+    .ribbon {
+      width: 94px;
+      height: 56px;
+      position: relative;
+      transform: rotate(-6deg);
+    }
+
+    .ribbon::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, var(--pink), var(--orange), var(--acid));
+      clip-path: polygon(0 22%, 64% 22%, 64% 0, 100% 50%, 64% 100%, 64% 78%, 0 78%);
+      border-radius: 14px;
+      filter: drop-shadow(0 18px 26px rgba(255,95,162,0.18));
+    }
+
+    .ribbon::after {
+      content: "A";
+      position: absolute;
+      left: 21px;
+      top: 12px;
+      font-size: 28px;
+      font-weight: 900;
+      color: var(--void);
+    }
+
+    .ribbon-word {
+      font-size: 37px;
+      letter-spacing: -0.12em;
+      transform: rotate(-3deg);
+    }
+
+    .monogram {
+      width: 86px;
+      height: 86px;
+      border-radius: 28px;
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.15);
+      display: grid;
+      place-items: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .monogram::before {
+      content: "";
+      position: absolute;
+      inset: -20px;
+      background: conic-gradient(from 210deg, transparent, var(--aqua), transparent, var(--pink), transparent);
+      animation: spin 6s linear infinite;
+    }
+
+    .monogram::after {
+      content: "av";
+      position: absolute;
+      inset: 5px;
+      border-radius: 23px;
+      background: var(--void);
+      display: grid;
+      place-items: center;
+      font-size: 25px;
+      font-weight: 850;
+      letter-spacing: -0.18em;
+      padding-right: 5px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .mono-word {
+      font-size: 32px;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+    }
+
+    @media (max-width: 1040px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 640px) {
+      body { padding: 20px; }
+      .top { flex-direction: column; align-items: start; }
+      .sub { text-align: left; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="top">
+      <h1>More Creative Ava Marks</h1>
+      <div class="sub">These are more experimental. Some are brand-first, some are code-agent-first, some are personal-assistant-first.</div>
+    </div>
+
+    <section class="grid">
+      <article class="tile" style="--x:30%;--y:20%;--glow:rgba(182,255,77,0.18)">
+        <div class="show"><div class="brand"><div class="sigil"></div><div class="word sigil-word">Ava</div></div></div>
+        <div class="desc"><b>07. Sigil Core</b><span>Memorable symbol, almost like a spell mark for an autonomous agent.</span></div>
+      </article>
+
+      <article class="tile" style="--x:80%;--y:20%;--glow:rgba(255,95,162,0.18)">
+        <div class="show"><div class="brand"><div class="split-a"><i></i><i></i><i></i></div><div class="word split-word"><span>A</span>v<span>a</span></div></div></div>
+        <div class="desc"><b>08. Split Signal</b><span>A bolder custom A. The two sides imply human plus machine collaboration.</span></div>
+      </article>
+
+      <article class="tile" style="--x:45%;--y:22%;--glow:rgba(72,240,255,0.16)">
+        <div class="show"><div class="brand"><div class="loop"></div><div class="word loop-word">Ava</div></div></div>
+        <div class="desc"><b>09. Infinite Loop</b><span>Agent loop as identity: think, act, observe, continue.</span></div>
+      </article>
+
+      <article class="tile" style="--x:50%;--y:18%;--glow:rgba(255,255,255,0.12)">
+        <div class="show"><div class="brand"><div class="totem"></div><div class="word totem-word">Ava</div></div></div>
+        <div class="desc"><b>10. Assistant Totem</b><span>Strange and iconic. More mascot-like, less standard software logo.</span></div>
+      </article>
+
+      <article class="tile" style="--x:68%;--y:28%;--glow:rgba(182,255,77,0.13)">
+        <div class="show"><div class="syntax"><span class="brace">{</span><span class="word">ava</span><span class="dot"></span><span class="brace">}</span></div></div>
+        <div class="desc"><b>11. Syntax Capsule</b><span>Developer-native. Feels like skills, tools, and structured agent actions.</span></div>
+      </article>
+
+      <article class="tile" style="--x:35%;--y:20%;--glow:rgba(72,240,255,0.19)">
+        <div class="show"><div class="brand"><div class="portal"></div><div class="word portal-word">Ava</div></div></div>
+        <div class="desc"><b>12. Action Portal</b><span>Ava as an interface into tools and worlds. Strong app icon potential.</span></div>
+      </article>
+
+      <article class="tile" style="--x:48%;--y:35%;--glow:rgba(255,177,74,0.16)">
+        <div class="show"><div class="brand"><div class="ribbon"></div><div class="word ribbon-word">Ava</div></div></div>
+        <div class="desc"><b>13. Momentum Ribbon</b><span>Fast, energetic, less AI cliche. Good if Ava is about getting things done.</span></div>
+      </article>
+
+      <article class="tile" style="--x:52%;--y:24%;--glow:rgba(154,124,255,0.16)">
+        <div class="show"><div class="brand"><div class="monogram"></div><div class="word mono-word">Ava</div></div></div>
+        <div class="desc"><b>14. Rotating Monogram</b><span>Premium app mark. Compact, animated, and suitable for tray/icon usage.</span></div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

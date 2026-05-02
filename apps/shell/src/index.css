@@ -416,3 +416,51 @@ body,
 .glass-bubble-error {
   --bubble-bg: rgba(242, 139, 130, 0.15);
 }
+
+.ava-menu {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  background: rgb(37, 37, 40);
+  color: var(--color-text-2);
+  font-size: 12px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+}
+
+.ava-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.ava-menu-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text);
+}
+
+.ava-menu-item-disabled {
+  cursor: not-allowed;
+  opacity: 0.32;
+}
+
+.ava-menu-separator {
+  height: 1px;
+  margin: 0.25rem 0.75rem;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ava-menu-label {
+  padding: 0 0.75rem 0.25rem;
+  color: var(--color-text-3);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.ava-menu-shortcut {
+  margin-left: auto;
+  color: var(--color-text-3);
+  font-size: 10px;
+}

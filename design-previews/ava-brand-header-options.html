@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ava Brand Header Options</title>
+  <style>
+    :root {
+      --bg: #08162b;
+      --panel: #101f36;
+      --panel-2: #162a47;
+      --line: rgba(156, 189, 255, 0.14);
+      --text: #dbe8ff;
+      --muted: #8294b5;
+      --blue: #74a9ff;
+      --cyan: #53e2ff;
+      --green: #45f3ac;
+      --amber: #ffd166;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 100%, rgba(71, 111, 255, 0.45), transparent 24rem),
+        radial-gradient(circle at 88% 8%, rgba(83, 226, 255, 0.14), transparent 22rem),
+        linear-gradient(135deg, #061225, #0b1730 46%, #122449);
+      color: var(--text);
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+    }
+
+    .board {
+      width: min(1120px, 100%);
+    }
+
+    .title {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: -0.04em;
+      font-weight: 680;
+    }
+
+    .note {
+      max-width: 520px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      text-align: right;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(180px, 1fr));
+      gap: 16px;
+    }
+
+    .option {
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: rgba(9, 22, 42, 0.72);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .sidebar {
+      height: 440px;
+      background:
+        linear-gradient(180deg, rgba(21, 39, 67, 0.98), rgba(16, 31, 55, 0.98)),
+        radial-gradient(circle at 20% 0%, rgba(116, 169, 255, 0.18), transparent 14rem);
+      border-right: 1px solid var(--line);
+    }
+
+    .header {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tabs {
+      height: 48px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      color: #6f82a3;
+    }
+
+    .tab {
+      height: 32px;
+      margin: 0 6px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      font-size: 17px;
+    }
+
+    .tab.active {
+      background: rgba(116, 169, 255, 0.14);
+      color: #9cc2ff;
+    }
+
+    .list {
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .row {
+      height: 34px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      color: #b9c7df;
+      font-size: 11px;
+    }
+
+    .row.active {
+      background: rgba(255, 255, 255, 0.08);
+      color: white;
+      font-weight: 650;
+    }
+
+    .row .mini {
+      width: 13px;
+      height: 13px;
+      border: 1px solid currentColor;
+      border-radius: 3px;
+      opacity: 0.65;
+    }
+
+    .row .time {
+      margin-left: auto;
+      color: #7f8ca5;
+      font-weight: 500;
+    }
+
+    .caption {
+      padding: 13px 15px 16px;
+      border-top: 1px solid var(--line);
+      background: rgba(3, 11, 24, 0.26);
+    }
+
+    .caption strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .caption span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-width: 0;
+    }
+
+    .brand-name {
+      font-size: 16px;
+      letter-spacing: 0.02em;
+      font-weight: 620;
+    }
+
+    .status {
+      width: 5px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--blue);
+      box-shadow: 0 0 12px var(--blue);
+      margin-left: 2px;
+    }
+
+    .orbit {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      position: relative;
+      background: radial-gradient(circle, white 0 12%, #9cc4ff 13% 28%, #233e70 29% 100%);
+      box-shadow: 0 0 18px rgba(116, 169, 255, 0.72), inset 0 0 10px rgba(255, 255, 255, 0.28);
+    }
+
+    .orbit::after {
+      content: "";
+      position: absolute;
+      inset: -4px;
+      border: 1px solid rgba(116, 169, 255, 0.62);
+      border-left-color: transparent;
+      border-bottom-color: transparent;
+      border-radius: 999px;
+      transform: rotate(-24deg);
+    }
+
+    .command {
+      width: 34px;
+      height: 28px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, rgba(116, 169, 255, 0.22), rgba(83, 226, 255, 0.08));
+      border: 1px solid rgba(116, 169, 255, 0.32);
+      color: white;
+      font-family: "Cascadia Code", monospace;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: inset 0 1px rgba(255, 255, 255, 0.14), 0 0 22px rgba(83, 226, 255, 0.11);
+    }
+
+    .constellation {
+      width: 30px;
+      height: 28px;
+      position: relative;
+    }
+
+    .constellation i {
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: #dff7ff;
+      box-shadow: 0 0 14px rgba(83, 226, 255, 0.85);
+    }
+
+    .constellation i:nth-child(1) { left: 4px; top: 18px; }
+    .constellation i:nth-child(2) { left: 14px; top: 4px; }
+    .constellation i:nth-child(3) { right: 3px; top: 19px; }
+    .constellation::before,
+    .constellation::after {
+      content: "";
+      position: absolute;
+      height: 1px;
+      background: rgba(83, 226, 255, 0.55);
+      transform-origin: left center;
+    }
+    .constellation::before {
+      width: 18px;
+      left: 8px;
+      top: 18px;
+      transform: rotate(-54deg);
+    }
+    .constellation::after {
+      width: 19px;
+      left: 16px;
+      top: 9px;
+      transform: rotate(50deg);
+    }
+
+    .avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      position: relative;
+      color: white;
+      font-size: 14px;
+      font-weight: 760;
+      background: linear-gradient(145deg, #395dff, #54d6ff);
+      box-shadow: 0 12px 28px rgba(69, 121, 255, 0.32);
+    }
+
+    .avatar::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      bottom: 1px;
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--green);
+      border: 2px solid #142540;
+    }
+
+    .stack {
+      width: 31px;
+      height: 28px;
+      position: relative;
+    }
+
+    .stack span {
+      position: absolute;
+      left: 3px;
+      width: 24px;
+      height: 9px;
+      border-radius: 5px;
+      border: 1px solid rgba(116, 169, 255, 0.38);
+      background: linear-gradient(135deg, rgba(116, 169, 255, 0.36), rgba(83, 226, 255, 0.1));
+      box-shadow: 0 0 18px rgba(83, 226, 255, 0.14);
+    }
+
+    .stack span:nth-child(1) { top: 3px; }
+    .stack span:nth-child(2) { top: 10px; left: 6px; }
+    .stack span:nth-child(3) { top: 17px; left: 9px; }
+
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }
+      .title { align-items: start; flex-direction: column; }
+      .note { text-align: left; }
+    }
+
+    @media (max-width: 520px) {
+      body { padding: 18px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="board">
+    <div class="title">
+      <h1>Ava Sidebar Brand Header Options</h1>
+      <div class="note">Five directions shown in the same sidebar frame. Pick the one that best matches Ava's product identity before we implement it in the app.</div>
+    </div>
+
+    <section class="grid">
+      <article class="option">
+        <div class="sidebar">
+          <div class="header">
+            <div class="brand">
+              <div class="orbit"></div>
+              <div class="brand-name">Ava</div>
+              <div class="status"></div>
+            </div>
+          </div>
+          <div class="tabs"><div class="tab active">□</div><div class="tab">▱</div><div class="tab">＋</div><div class="tab">·</div></div>
+          <div class="list">
+            <div class="row active"><span class="mini"></span>This app support skill...<span class="time">now</span></div>
+            <div class="row"><span class="mini"></span>写个 Python 脚本<span class="time">5d</span></div>
+            <div class="row"><span class="mini"></span>what are today's news<span class="time">5d</span></div>
+          </div>
+        </div>
+        <div class="caption"><strong>A. Orbit Core</strong><span>Friendly AI core. Closest to current look, but more intentional.</span></div>
+      </article>
+
+      <article class="option">
+        <div class="sidebar">
+          <div class="header">
+            <div class="brand">
+              <div class="command">A&gt;</div>
+              <div class="brand-name">Ava</div>
+              <div class="status"></div>
+            </div>
+          </div>
+          <div class="tabs"><div class="tab active">□</div><div class="tab">▱</div><div class="tab">＋</div><div class="tab">·</div></div>
+          <div class="list">
+            <div class="row active"><span class="mini"></span>This app support skill...<span class="time">now</span></div>
+            <div class="row"><span class="mini"></span>写个 Python 脚本<span class="time">5d</span></div>
+            <div class="row"><span class="mini"></span>what are today's news<span class="time">5d</span></div>
+          </div>
+        </div>
+        <div class="caption"><strong>B. Command Mark</strong><span>Best for code-agent positioning. Clear, sharp, task-oriented.</span></div>
+      </article>
+
+      <article class="option">
+        <div class="sidebar">
+          <div class="header">
+            <div class="brand">
+              <div class="constellation"><i></i><i></i><i></i></div>
+              <div class="brand-name">Ava</div>
+              <div class="status"></div>
+            </div>
+          </div>
+          <div class="tabs"><div class="tab active">□</div><div class="tab">▱</div><div class="tab">＋</div><div class="tab">·</div></div>
+          <div class="list">
+            <div class="row active"><span class="mini"></span>This app support skill...<span class="time">now</span></div>
+            <div class="row"><span class="mini"></span>写个 Python 脚本<span class="time">5d</span></div>
+            <div class="row"><span class="mini"></span>what are today's news<span class="time">5d</span></div>
+          </div>
+        </div>
+        <div class="caption"><strong>C. Constellation</strong><span>Elegant personal assistant feel. More premium, less developer-heavy.</span></div>
+      </article>
+
+      <article class="option">
+        <div class="sidebar">
+          <div class="header">
+            <div class="brand">
+              <div class="avatar">A</div>
+              <div class="brand-name">Ava</div>
+            </div>
+          </div>
+          <div class="tabs"><div class="tab active">□</div><div class="tab">▱</div><div class="tab">＋</div><div class="tab">·</div></div>
+          <div class="list">
+            <div class="row active"><span class="mini"></span>This app support skill...<span class="time">now</span></div>
+            <div class="row"><span class="mini"></span>写个 Python 脚本<span class="time">5d</span></div>
+            <div class="row"><span class="mini"></span>what are today's news<span class="time">5d</span></div>
+          </div>
+        </div>
+        <div class="caption"><strong>D. Avatar Initial</strong><span>Simple and readable. Unifies app mark with assistant avatar.</span></div>
+      </article>
+
+      <article class="option">
+        <div class="sidebar">
+          <div class="header">
+            <div class="brand">
+              <div class="stack"><span></span><span></span><span></span></div>
+              <div class="brand-name">Ava</div>
+              <div class="status"></div>
+            </div>
+          </div>
+          <div class="tabs"><div class="tab active">□</div><div class="tab">▱</div><div class="tab">＋</div><div class="tab">·</div></div>
+          <div class="list">
+            <div class="row active"><span class="mini"></span>This app support skill...<span class="time">now</span></div>
+            <div class="row"><span class="mini"></span>写个 Python 脚本<span class="time">5d</span></div>
+            <div class="row"><span class="mini"></span>what are today's news<span class="time">5d</span></div>
+          </div>
+        </div>
+        <div class="caption"><strong>E. Agent Stack</strong><span>Best match for plugins, skills, tools. Feels like a modular agent.</span></div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

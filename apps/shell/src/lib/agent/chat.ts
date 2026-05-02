@@ -1,4 +1,4 @@
-import type { CommandInvocation, ContentPart, Conversation, Message, Settings } from '../../types'
+import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, Settings } from '../../types'
 import { getEnabledProviders } from '../llm/providers'
 
 function partsToText(parts: ContentPart[]): string {
@@ -15,6 +15,7 @@ function buildSystemPrompt(settings: Settings): string {
     'Your primary goal is to help the user successfully complete their task.',
     'Prioritize correctness, clarity, and usefulness over brevity.',
     'Answer in the same language as the user.',
+    'Do not spend tokens on hidden reasoning. Provide the final answer directly.',
     'If the request is ambiguous or missing important information, ask follow-up questions before proceeding.',
     'Do not guess facts, requirements, or intent when uncertain.',
     'Point out mistakes, missing constraints, and important risks directly.',
@@ -121,8 +122,8 @@ function conversationToLlmMessages(
   }
   for (let i = historyStart; i < conversation.messages.length; i += 1) {
     const m = conversation.messages[i]
-    if (m.role === 'system') continue
     const isActiveTask = activeTaskId ? m.taskId === activeTaskId : i >= latestUserIndex
+    if (m.role === 'system' && !isActiveTask) continue
     if (i < latestUserIndex && !isActiveTask) {
       const summarized = summarizeHistoricalMessage(m, includeUserHistory)
       if (summarized) messages.push(summarized)
@@ -155,6 +156,7 @@ export interface SendOptions {
   settings: Settings
   onDelta: (delta: string) => void
   onAttempt?: (attempts: Array<{ providerId: string; ok: boolean; error?: string }>) => void
+  onStatus?: (payload: { taskId?: string; phase: AssistantRunPhase }) => void
   activeTaskId?: string
   onPart?: (payload: { taskId?: string; partIndex: number; part: ContentPart }) => void
   onPartUpdate?: (payload: { taskId?: string; partIndex: number; partId?: string; patch: Record<string, unknown> }) => void
@@ -193,6 +195,13 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
   const offAttempt = options.onAttempt
     ? window.ava.llm.onAttempt(({ streamId, attempts }) => {
         if (streamId === options.streamId) options.onAttempt!(attempts)
+      })
+    : () => { /* noop */ }
+  const offStatus = options.onStatus
+    ? window.ava.llm.onStatus(({ streamId, taskId, phase }) => {
+        if (streamId === options.streamId && (!options.activeTaskId || !taskId || taskId === options.activeTaskId)) {
+          options.onStatus!({ taskId, phase })
+        }
       })
     : () => { /* noop */ }
   const offPart = options.onPart
@@ -238,6 +247,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
   } finally {
     offChunk()
     offAttempt()
+    offStatus()
     offPart()
     offPartUpdate()
   }
@@ -291,5 +301,6 @@ export function makeAssistantPlaceholder(taskId?: string): Message {
     content: [],
     createdAt: Date.now(),
     streaming: true,
+    runPhase: 'connecting',
   }
 }

@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Upload, FolderOpen, Plus } from 'lucide-react'
+import {
+  Upload, FolderOpen, Terminal, Code, LayoutPanelLeft, MoreHorizontal,
+  FolderPlus, Archive, Trash2, X, Pin, Edit2, Copy, PanelRightOpen,
+  GitFork, Clock3, MonitorUp, HardDrive, FileText,
+} from 'lucide-react'
 import { useStore } from '../store'
-import { ChatHeader } from './ChatHeader'
 import { EmptyState } from './EmptyState'
 import { MessageBubble } from './MessageBubble'
 import { PromptInput } from './PromptInput'
@@ -38,6 +41,265 @@ function lastStreamingAssistant(conversation: Conversation): string | null {
     if (message.role === 'assistant' && message.streaming) return message.id
   }
   return null
+}
+
+function makeProjectContextMessage(
+  taskId: string,
+  folderPath: string | undefined,
+  brief: { files: string[]; tasksDone: number; tasksTotal: number } | undefined,
+): ContentPart[] | null {
+  if (!brief || !folderPath) return null
+  const fileList = brief.files.join(', ')
+  const progress = brief.tasksTotal > 0 ? `Progress: ${brief.tasksDone}/${brief.tasksTotal}` : ''
+  return [{
+    type: 'text',
+    text: [
+      'Project context for the current task only.',
+      `Active folder: ${folderPath}`,
+      `Files: ${fileList || '(none)'}`,
+      progress,
+      'Use this as background context. Do not repeat it unless the user asks.',
+    ].filter(Boolean).join('\n'),
+  }]
+}
+
+function ChatSessionBar({
+  conversation,
+  onOpenPreview,
+  onDelete,
+}: {
+  conversation: Conversation | null
+  onOpenPreview: () => void
+  onDelete?: () => void
+}) {
+  const { t } = useTranslation()
+  const { dispatch } = useStore()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const folderPath = conversation?.folderPath
+  const title = conversation?.title || t('sidebar.new_chat', 'New session')
+  const primaryTrait = conversation?.traits?.[0] || 'chat'
+  const canPreview = Boolean(conversation && (
+    primaryTrait === 'design' ||
+    primaryTrait === 'code' ||
+    primaryTrait === 'video' ||
+    conversation.messages.length > 0
+  ))
+
+  const copyText = async (text: string) => {
+    await navigator.clipboard.writeText(text)
+    setMenuOpen(false)
+  }
+
+  const copyMarkdown = async () => {
+    if (!conversation) return
+    const markdown = [
+      `# ${conversation.title}`,
+      '',
+      ...conversation.messages.map(message => {
+        const label = message.role === 'user' ? 'User' : message.role === 'assistant' ? 'Assistant' : message.role
+        const body = partsToText(message.content).trim()
+        return `## ${label}\n\n${body || '_No text content_'}`
+      }),
+      '',
+    ].join('\n')
+    await copyText(markdown)
+  }
+
+  const handleRename = () => {
+    if (!conversation) return
+    const nextTitle = window.prompt(t('sidebar.rename', 'Rename'), conversation.title)
+    if (nextTitle?.trim()) {
+      dispatch({ type: 'RENAME_CONVERSATION', id: conversation.id, title: nextTitle.trim() })
+    }
+    setMenuOpen(false)
+  }
+
+  const handlePin = () => {
+    if (!conversation) return
+    dispatch({ type: 'TOGGLE_PIN_CONVERSATION', id: conversation.id })
+    setMenuOpen(false)
+  }
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const handleLinkFolder = async () => {
+    if (!conversation) return
+    setMenuOpen(false)
+    const path = await window.ava.dialog.pickDirectory()
+    if (path) {
+      dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path })
+    }
+  }
+
+  const handleUnlinkFolder = () => {
+    if (!conversation) return
+    setMenuOpen(false)
+    dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path: '' })
+  }
+
+  const handleArchive = () => {
+    if (!conversation) return
+    setMenuOpen(false)
+    dispatch({ type: 'ARCHIVE_CONVERSATION', id: conversation.id })
+  }
+
+  return (
+    <div className="relative z-50 flex h-10 shrink-0 items-center justify-between bg-bg/20 px-4 backdrop-blur-xl">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <div className="truncate text-[13px] font-semibold text-text">{title}</div>
+        {conversation && (
+          <div className="relative shrink-0" ref={menuRef}>
+            <button
+              type="button"
+              onClick={() => setMenuOpen(v => !v)}
+              className="rounded p-1 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
+              title={t('chat.session_actions', 'Session actions')}
+            >
+              <MoreHorizontal size={14} />
+            </button>
+
+            {menuOpen && (
+              <div className="ava-menu absolute left-0 top-7 z-[999] w-68 py-1.5">
+                <button onClick={handlePin} className="ava-menu-item">
+                  <Pin size={13} className={conversation.pinned ? 'text-accent' : 'text-text-3'} fill={conversation.pinned ? 'currentColor' : 'none'} />
+                  <span>{conversation.pinned ? t('sidebar.unpin', 'Unpin chat') : t('sidebar.pin', 'Pin chat')}</span>
+                  <span className="ava-menu-shortcut">Ctrl+Alt+P</span>
+                </button>
+                <button onClick={handleRename} className="ava-menu-item">
+                  <Edit2 size={13} className="text-text-3" />
+                  <span>{t('sidebar.rename', 'Rename chat')}</span>
+                  <span className="ava-menu-shortcut">Ctrl+Alt+R</span>
+                </button>
+                <button onClick={handleArchive} className="ava-menu-item">
+                  <Archive size={13} className="text-text-3" />
+                  <span>{t('sidebar.archive', 'Archive chat')}</span>
+                  <span className="ava-menu-shortcut">Ctrl+Shift+A</span>
+                </button>
+
+                <div className="ava-menu-separator" />
+
+                <button
+                  onClick={() => folderPath && copyText(folderPath)}
+                  disabled={!folderPath}
+                  className="ava-menu-item disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <HardDrive size={13} className="text-text-3" />
+                  <span>Copy working directory</span>
+                  <span className="ava-menu-shortcut">Ctrl+Shift+C</span>
+                </button>
+                <button onClick={() => copyText(conversation.id)} className="ava-menu-item">
+                  <Copy size={13} className="text-text-3" />
+                  <span>Copy session ID</span>
+                  <span className="ava-menu-shortcut">Ctrl+Alt+C</span>
+                </button>
+                <button onClick={() => copyText(`ava://session/${conversation.id}`)} className="ava-menu-item">
+                  <Copy size={13} className="text-text-3" />
+                  <span>Copy deeplink</span>
+                  <span className="ava-menu-shortcut">Ctrl+Alt+L</span>
+                </button>
+                <button onClick={copyMarkdown} className="ava-menu-item">
+                  <FileText size={13} className="text-text-3" />
+                  <span>Copy as Markdown</span>
+                </button>
+
+                <div className="ava-menu-separator" />
+
+                <button disabled className="ava-menu-item ava-menu-item-disabled">
+                  <PanelRightOpen size={13} className="text-text-3" />
+                  <span>Open side chat</span>
+                </button>
+                <button disabled className="ava-menu-item ava-menu-item-disabled">
+                  <GitFork size={13} className="text-text-3" />
+                  <span>Fork into local</span>
+                </button>
+                <button disabled className="ava-menu-item ava-menu-item-disabled">
+                  <GitFork size={13} className="text-text-3" />
+                  <span>Fork into new worktree</span>
+                </button>
+                <button disabled className="ava-menu-item ava-menu-item-disabled">
+                  <Clock3 size={13} className="text-text-3" />
+                  <span>Add automation...</span>
+                </button>
+
+                <div className="ava-menu-separator" />
+
+                {folderPath ? (
+                  <button onClick={handleUnlinkFolder} className="ava-menu-item">
+                    <X size={13} className="text-text-3" />
+                    <span>{t('sidebar.unlink_folder', 'Unlink folder')}</span>
+                  </button>
+                ) : (
+                  <button onClick={handleLinkFolder} className="ava-menu-item">
+                    <FolderPlus size={13} className="text-text-3" />
+                    <span>{t('sidebar.link_folder', 'Link folder')}</span>
+                  </button>
+                )}
+                <button disabled className="ava-menu-item ava-menu-item-disabled">
+                  <MonitorUp size={13} className="text-text-3" />
+                  <span>Open in mini window</span>
+                </button>
+                {onDelete && (
+                  <button onClick={onDelete} className="ava-menu-item text-red-400 hover:bg-red-500/10 hover:text-red-300">
+                    <Trash2 size={13} />
+                    <span>{t('sidebar.delete', 'Delete')}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {folderPath && (
+          <>
+            <button
+              type="button"
+              onClick={() => window.ava.shell.openPath(folderPath)}
+              className="rounded-md p-1.5 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
+              title={folderPath}
+            >
+              <FolderOpen size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => window.ava.shell.openInVSCode(folderPath)}
+              className="rounded-md p-1.5 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
+              title={t('chat.open_code', 'Open in VS Code')}
+            >
+              <Code size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => window.ava.shell.openInTerminal(folderPath)}
+              className="rounded-md p-1.5 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
+              title={t('chat.open_terminal', 'Open in Terminal')}
+            >
+              <Terminal size={14} />
+            </button>
+          </>
+        )}
+        {canPreview && (
+          <button
+            type="button"
+            onClick={onOpenPreview}
+            className="rounded-md p-1.5 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
+            title={t('chat.open_preview', 'Open Design Preview Window')}
+          >
+            <LayoutPanelLeft size={14} />
+          </button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function ChatView() {
@@ -212,6 +474,15 @@ export function ChatView() {
           settings: state.settings,
           streamId: id,
           activeTaskId,
+          onStatus: ({ taskId, phase }) => {
+            if (taskId && taskId !== activeTaskId) return
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { runPhase: phase },
+            })
+          },
           onDelta: delta => {
             dispatch({
               type: 'APPEND_DELTA',
@@ -260,21 +531,21 @@ export function ChatView() {
             type: 'UPDATE_MESSAGE',
             conversationId,
             messageId: placeholderId,
-            patch: { streaming: false },
+            patch: { streaming: false, runPhase: 'completed' },
           })
         } else if (result.error === 'aborted') {
           dispatch({
             type: 'UPDATE_MESSAGE',
             conversationId,
             messageId: placeholderId,
-            patch: { streaming: false, aborted: true },
+            patch: { streaming: false, aborted: true, runPhase: 'aborted' },
           })
         } else {
           dispatch({
             type: 'UPDATE_MESSAGE',
             conversationId,
             messageId: placeholderId,
-            patch: { streaming: false, error: result.error },
+            patch: { streaming: false, error: result.error, runPhase: 'error' },
           })
         }
 
@@ -296,14 +567,14 @@ export function ChatView() {
             type: 'UPDATE_MESSAGE',
             conversationId,
             messageId: placeholderId,
-            patch: { streaming: false, aborted: true },
+            patch: { streaming: false, aborted: true, runPhase: 'aborted' },
           })
         } else {
           dispatch({
             type: 'UPDATE_MESSAGE',
             conversationId,
             messageId: placeholderId,
-            patch: { streaming: false, error: msg },
+            patch: { streaming: false, error: msg, runPhase: 'error' },
           })
         }
       } finally {
@@ -318,15 +589,17 @@ export function ChatView() {
     async (content: string, attachments: string[] = [], conversation: Conversation, commandInvocation?: CommandInvocation) => {
       const taskId = makeTaskId()
       
-      // Level 3: RAG Injection
-      let enrichedContent = content
-      if (projectBrief) {
-        const fileList = projectBrief.files.join(', ')
-        const progress = projectBrief.tasksTotal > 0 ? `${t('chat.project_progress', 'Progress')}: ${projectBrief.tasksDone}/${projectBrief.tasksTotal}` : ''
-        enrichedContent = `[System Context: Active Folder "${conversation.folderPath}". Files: ${fileList}. ${progress}]\n\n${content}`
-      }
-
-      const userMsg = makeUserMessage(enrichedContent, commandInvocation, taskId, attachments)
+      const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments)
+      const projectContext = makeProjectContextMessage(taskId, conversation.folderPath, projectBrief)
+      const contextMsg = projectContext
+        ? {
+            id: `ctx_${taskId}`,
+            taskId,
+            role: 'system' as const,
+            content: projectContext,
+            createdAt: Date.now(),
+          }
+        : null
       const placeholder = makeAssistantPlaceholder(taskId)
       const conversationId = conversation.id
 
@@ -349,7 +622,12 @@ export function ChatView() {
       }
 
       await driveStream(
-        { ...conversation, messages: [...conversation.messages, userMsg] },
+        {
+          ...conversation,
+          messages: contextMsg
+            ? [...conversation.messages, contextMsg, userMsg]
+            : [...conversation.messages, userMsg],
+        },
         conversationId,
         placeholder.id,
         taskId,
@@ -397,6 +675,26 @@ export function ChatView() {
     if (!activeConversation) return
     dispatch({ type: 'DELETE_CONVERSATION', id: activeConversation.id })
   }, [activeConversation, dispatch])
+
+  const handleOpenPreview = useCallback(async () => {
+    await window.ava.window.openPreview(state.settings.theme)
+    if (!activeConversation) return
+
+    const lastAssistantMessage = [...activeConversation.messages].reverse().find(m => m.role === 'assistant')
+    if (!lastAssistantMessage) return
+
+    const text = partsToText(lastAssistantMessage.content)
+    const htmlMatch = text.match(/```(?:html|svg)\s*([\s\S]*?)\s*```/i) ||
+                      text.match(/<(html|svg)[\s\S]*?<\/\1>/i) ||
+                      text.match(/<svg[\s\S]*?>[\s\S]*/i)
+
+    if (htmlMatch) {
+      const htmlContent = htmlMatch[1] || htmlMatch[0]
+      setTimeout(() => {
+        window.ava.window.updatePreview(htmlContent)
+      }, 800)
+    }
+  }, [activeConversation, state.settings.theme])
 
   const handleOpenSettings = useCallback(() => {
     dispatch({ type: 'SET_VIEW', view: 'settings' })
@@ -479,6 +777,66 @@ export function ChatView() {
     [activeConversation, isStreaming, runSend],
   )
 
+  const handleEditResend = useCallback(
+    async (messageId: string) => {
+      if (!activeConversation || isStreaming) return
+      const idx = activeConversation.messages.findIndex(m => m.id === messageId)
+      if (idx < 0) return
+      const message = activeConversation.messages[idx]
+      if (message.role !== 'user') return
+
+      const currentText = partsToText(message.content)
+      const nextText = window.prompt(t('chat.edit_resend', 'Edit and resend'), currentText)
+      if (!nextText?.trim() || nextText === currentText) return
+
+      const taskId = message.taskId ?? makeTaskId()
+      const editedUser = {
+        ...message,
+        taskId,
+        content: [{ type: 'text' as const, text: nextText.trim() }],
+        createdAt: Date.now(),
+      }
+      const conversationId = activeConversation.id
+
+      for (const stale of activeConversation.messages.slice(idx + 1)) {
+        dispatch({ type: 'DELETE_MESSAGE', conversationId, messageId: stale.id })
+      }
+      dispatch({
+        type: 'UPDATE_MESSAGE',
+        conversationId,
+        messageId,
+        patch: {
+          taskId,
+          content: editedUser.content,
+          createdAt: editedUser.createdAt,
+        },
+      })
+
+      if (idx === 0) {
+        const title = nextText.length > 30 ? `${nextText.slice(0, 30)}…` : nextText
+        dispatch({ type: 'RENAME_CONVERSATION', id: conversationId, title })
+        const traits = detectTraitsFromText(nextText)
+        dispatch({ type: 'SET_TRAITS', id: conversationId, traits })
+      }
+
+      const placeholder = makeAssistantPlaceholder(taskId)
+      dispatch({ type: 'ADD_MESSAGE', conversationId, message: placeholder })
+      await driveStream(
+        {
+          ...activeConversation,
+          messages: [
+            ...activeConversation.messages.slice(0, idx),
+            editedUser,
+          ],
+        },
+        conversationId,
+        placeholder.id,
+        taskId,
+      )
+    },
+    [activeConversation, dispatch, driveStream, isStreaming, t],
+  )
+
   const messages = (activeConversation?.messages ?? []).filter(m => {
     // Skip ghost assistant messages: empty content, not streaming, no error/abort
     if (
@@ -499,6 +857,12 @@ export function ChatView() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      <ChatSessionBar
+        conversation={activeConversation}
+        onOpenPreview={handleOpenPreview}
+        onDelete={activeConversation ? handleDeleteConversation : undefined}
+      />
+
       {isDragging && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-bg/80 backdrop-blur-sm border-2 border-dashed border-accent m-4 rounded-3xl pointer-events-none transition-all animate-in fade-in zoom-in duration-200">
           <div className="w-20 h-20 bg-accent/10 rounded-full flex items-center justify-center text-accent mb-4">
@@ -509,7 +873,7 @@ export function ChatView() {
         </div>
       )}
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar-x">
+      <div ref={scrollRef} className="relative z-0 flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar-x">
         {showEmpty ? (
           <EmptyState
             userName={state.settings.persona.userName}
@@ -538,6 +902,7 @@ export function ChatView() {
                       ? () => handleCommandRetry(m.id)
                       : undefined
                   }
+                  onEditResend={!isStreaming && m.role === 'user' ? () => handleEditResend(m.id) : undefined}
                 />
               )
             })}

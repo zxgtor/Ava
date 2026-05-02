@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-04-26 · P15 complete + multi-theme UI overhaul_
+_Last updated: 2026-05-01 · P16.1 complete + animation-only LLM run indicators_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -119,6 +119,10 @@ _Last updated: 2026-04-26 · P15 complete + multi-theme UI overhaul_
   - Settings 新增 `AppearanceSection` 选择主题
   - Logo 组件抽出 + assets/ 资源目录；ChatHeader / ConversationSidebar / MessageBubble 全部按 token 重构
   - 透明背景 + backdrop-blur 玻璃感
+- [x] **P16.1 Animation-only LLM run indicators**：
+  - main process 发送 `ava:llm:status` lifecycle event
+  - assistant placeholder 按 `connecting / waiting_first_token / generating / tool_running / fallback` 显示无文字动画
+  - 完成 / 错误 / 中断时同步 `runPhase`，避免用户看不出 server 是否工作中
 
 ---
 
@@ -229,6 +233,7 @@ window.ava.llm.probe({ baseUrl, apiKey }): Promise<
 >
 window.ava.llm.onChunk((payload: { streamId, text }) => void): () => void  // returns unsubscribe
 window.ava.llm.onAttempt((payload: { streamId, attempts }) => void): () => void
+window.ava.llm.onStatus((payload: { streamId, taskId?, phase }) => void): () => void
 window.ava.llm.onPart((payload: { streamId, taskId?, partIndex, part }) => void): () => void
 window.ava.llm.onPartUpdate((payload: { streamId, taskId?, partIndex, partId?, patch }) => void): () => void
 window.ava.mcp.listServers(): Promise<McpServerRuntime[]>

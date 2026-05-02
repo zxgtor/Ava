@@ -85,6 +85,7 @@ function createPreviewWindow(theme?: string): void {
 }
 
 function createMainWindow(): void {
+  const appIconPath = join(__dirname, '../../build/icon.png')
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -93,6 +94,7 @@ function createMainWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'Ava',
+    icon: appIconPath,
     // Transparent + frameless window. CSS `backdrop-filter: blur()` on the
     // root container blurs whatever the OS composites behind us (the
     // desktop) — that gives us the Win11 acrylic look without depending

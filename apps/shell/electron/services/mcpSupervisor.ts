@@ -95,6 +95,9 @@ const IS_WIN = process.platform === 'win32'
 const CLIENT_NAME = 'ava-shell'
 const CLIENT_VERSION = '0.1.0'
 const CONNECT_TIMEOUT_MS = 30_000
+const TOOL_ALIASES: Record<string, string> = {
+  'filesystem.read_file': 'filesystem.read_text_file',
+}
 
 /**
  * Resolve a command to an absolute/runnable form on Windows, where
@@ -168,17 +171,19 @@ export class McpSupervisor extends EventEmitter {
 
   /** Find a tool by its namespaced name; returns the owning server id + raw name. */
   resolveTool(namespacedName: string): { serverId: string; rawName: string } | null {
+    const canonicalName = TOOL_ALIASES[namespacedName] ?? namespacedName
     const dotIdx = namespacedName.indexOf('.')
     if (dotIdx > 0) {
-      const serverId = namespacedName.slice(0, dotIdx)
-      const rawName = namespacedName.slice(dotIdx + 1)
+      const canonicalDotIdx = canonicalName.indexOf('.')
+      const serverId = canonicalName.slice(0, canonicalDotIdx)
+      const rawName = canonicalName.slice(canonicalDotIdx + 1)
       const entry = this.entries.get(serverId)
       if (entry?.tools?.some(t => t.rawName === rawName)) {
         return { serverId, rawName }
       }
     }
     // Fallback: bare name that matches exactly one running tool.
-    const matches = this.listAllTools().filter(t => t.rawName === namespacedName)
+    const matches = this.listAllTools().filter(t => t.rawName === canonicalName)
     if (matches.length === 1) {
       const [serverId] = matches[0].name.split('.')
       return { serverId, rawName: namespacedName }

@@ -131,6 +131,10 @@ function sanitizeProvider(provider: ModelProvider): ModelProvider {
     enabled: Boolean(provider.enabled),
     models,
     defaultModel,
+    reasoningMode:
+      provider.reasoningMode === 'off' || provider.reasoningMode === 'on'
+        ? provider.reasoningMode
+        : 'auto',
   }
 }
 

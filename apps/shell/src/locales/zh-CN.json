@@ -167,6 +167,7 @@
     "stop_generation": "停止生成",
     "send": "发送",
     "stop_recording": "停止录音",
-    "voice_input": "语音输入"
+    "voice_input": "语音输入",
+    "edit_resend": "编辑并重新发送"
   }
 }

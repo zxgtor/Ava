@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ava Logo + Name Concepts</title>
+  <style>
+    :root {
+      --bg: #071326;
+      --card: rgba(12, 25, 47, 0.78);
+      --line: rgba(157, 191, 255, 0.14);
+      --text: #eaf2ff;
+      --muted: #8ea2c3;
+      --blue: #78a9ff;
+      --cyan: #5ae7ff;
+      --mint: #52f5b5;
+      --rose: #ff7aa7;
+      --amber: #ffd36b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 15%, rgba(90, 231, 255, 0.14), transparent 22rem),
+        radial-gradient(circle at 84% 22%, rgba(255, 122, 167, 0.13), transparent 20rem),
+        radial-gradient(circle at 50% 100%, rgba(120, 169, 255, 0.30), transparent 28rem),
+        linear-gradient(135deg, #061020, #0c1830 52%, #142346);
+      color: var(--text);
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      padding: 38px;
+    }
+
+    .wrap {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+    }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 26px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(26px, 4vw, 46px);
+      letter-spacing: -0.055em;
+      line-height: 0.95;
+    }
+
+    .hint {
+      color: var(--muted);
+      max-width: 430px;
+      font-size: 13px;
+      line-height: 1.55;
+      text-align: right;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(240px, 1fr));
+      gap: 18px;
+    }
+
+    .card {
+      min-height: 230px;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.018)),
+        var(--card);
+      box-shadow: 0 26px 80px rgba(0,0,0,0.32);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      pointer-events: none;
+      background: radial-gradient(circle at var(--x, 50%) var(--y, 20%), rgba(120,169,255,0.15), transparent 12rem);
+    }
+
+    .mark-row {
+      min-height: 118px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .name {
+      font-size: 32px;
+      font-weight: 720;
+      letter-spacing: -0.035em;
+    }
+
+    .meta {
+      position: relative;
+      z-index: 1;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .meta strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 5px;
+    }
+
+    .meta span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .nova {
+      width: 58px;
+      height: 58px;
+      border-radius: 18px;
+      position: relative;
+      background:
+        radial-gradient(circle at 50% 50%, #fff 0 9%, var(--cyan) 10% 20%, transparent 21%),
+        conic-gradient(from 45deg, transparent, rgba(90,231,255,0.8), transparent, rgba(120,169,255,0.9), transparent);
+      box-shadow: 0 0 32px rgba(90,231,255,0.28);
+      transform: rotate(45deg);
+    }
+
+    .nova::after {
+      content: "";
+      position: absolute;
+      inset: 13px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.65);
+      transform: rotate(-45deg);
+    }
+
+    .nova-name {
+      background: linear-gradient(90deg, #ffffff, #a9d8ff 50%, #5ae7ff);
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .gate {
+      width: 62px;
+      height: 62px;
+      border-radius: 22px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, rgba(120,169,255,0.28), rgba(82,245,181,0.08));
+      border: 1px solid rgba(120,169,255,0.35);
+      box-shadow: inset 0 1px rgba(255,255,255,0.2), 0 18px 42px rgba(82,245,181,0.13);
+      font-family: "Cascadia Code", monospace;
+      color: #fff;
+      font-weight: 800;
+      font-size: 20px;
+    }
+
+    .gate-name {
+      font-family: "Cascadia Code", "Segoe UI", monospace;
+      letter-spacing: -0.08em;
+    }
+
+    .glyph {
+      width: 68px;
+      height: 62px;
+      position: relative;
+    }
+
+    .glyph span {
+      position: absolute;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--blue), var(--cyan));
+      box-shadow: 0 0 20px rgba(90,231,255,0.25);
+    }
+
+    .glyph span:nth-child(1) {
+      width: 14px; height: 56px; left: 8px; top: 4px; transform: skewX(-18deg);
+    }
+    .glyph span:nth-child(2) {
+      width: 14px; height: 56px; right: 8px; top: 4px; transform: skewX(18deg);
+    }
+    .glyph span:nth-child(3) {
+      width: 34px; height: 12px; left: 17px; top: 34px;
+    }
+
+    .glyph::after {
+      content: "";
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      right: 0;
+      top: 4px;
+      border-radius: 999px;
+      background: var(--mint);
+      box-shadow: 0 0 16px var(--mint);
+    }
+
+    .mesh {
+      width: 66px;
+      height: 60px;
+      position: relative;
+    }
+
+    .mesh i {
+      position: absolute;
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: 0 0 18px rgba(120,169,255,0.75);
+    }
+    .mesh i:nth-child(1) { left: 6px; top: 40px; background: var(--blue); }
+    .mesh i:nth-child(2) { left: 28px; top: 8px; background: #fff; }
+    .mesh i:nth-child(3) { right: 6px; top: 40px; background: var(--cyan); }
+    .mesh i:nth-child(4) { left: 28px; top: 33px; width: 9px; height: 9px; background: var(--mint); }
+    .mesh::before,
+    .mesh::after {
+      content: "";
+      position: absolute;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(151,201,255,0.8), transparent);
+      transform-origin: left center;
+    }
+    .mesh::before { width: 44px; left: 12px; top: 42px; transform: rotate(-56deg); }
+    .mesh::after { width: 44px; left: 32px; top: 14px; transform: rotate(56deg); }
+
+    .capsule {
+      height: 56px;
+      padding: 0 18px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.13);
+      box-shadow: inset 0 1px rgba(255,255,255,0.13);
+    }
+
+    .capsule-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--rose), var(--amber));
+      color: #1b1020;
+      font-weight: 900;
+    }
+
+    .capsule .name {
+      font-size: 25px;
+      letter-spacing: -0.06em;
+    }
+
+    .shard {
+      width: 63px;
+      height: 63px;
+      clip-path: polygon(50% 0, 94% 22%, 78% 88%, 18% 88%, 6% 22%);
+      background:
+        linear-gradient(145deg, rgba(255,255,255,0.85), rgba(90,231,255,0.2) 36%, rgba(120,169,255,0.78));
+      box-shadow: 0 0 32px rgba(120,169,255,0.32);
+      position: relative;
+    }
+
+    .shard::after {
+      content: "";
+      position: absolute;
+      inset: 15px 20px 12px;
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      background: #071326;
+      opacity: 0.86;
+    }
+
+    .shard-name {
+      font-size: 34px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    @media (max-width: 900px) {
+      body { padding: 22px; }
+      .top { align-items: start; flex-direction: column; }
+      .hint { text-align: left; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="top">
+      <h1>Logo + Name Only</h1>
+      <div class="hint">More creative directions focused only on the app mark and Ava wordmark. No sidebar layout, no extra UI.</div>
+    </div>
+
+    <section class="grid">
+      <article class="card" style="--x: 28%; --y: 28%;">
+        <div class="mark-row">
+          <div class="brand">
+            <div class="nova"></div>
+            <div class="name nova-name">Ava</div>
+          </div>
+        </div>
+        <div class="meta"><strong>01. Nova Fold</strong><span>A folded star/core. Feels intelligent, bright, and not generic chatbot.</span></div>
+      </article>
+
+      <article class="card" style="--x: 72%; --y: 30%;">
+        <div class="mark-row">
+          <div class="brand">
+            <div class="gate">A&gt;</div>
+            <div class="name gate-name">ava</div>
+          </div>
+        </div>
+        <div class="meta"><strong>02. Agent Gate</strong><span>Terminal-inspired, direct, strong for coding and tool execution.</span></div>
+      </article>
+
+      <article class="card" style="--x: 46%; --y: 20%;">
+        <div class="mark-row">
+          <div class="brand">
+            <div class="glyph"><span></span><span></span><span></span></div>
+            <div class="name">Ava</div>
+          </div>
+        </div>
+        <div class="meta"><strong>03. Living Glyph</strong><span>Custom A mark with online dot. Clean app icon potential.</span></div>
+      </article>
+
+      <article class="card" style="--x: 22%; --y: 18%;">
+        <div class="mark-row">
+          <div class="brand">
+            <div class="mesh"><i></i><i></i><i></i><i></i></div>
+            <div class="name">Ava</div>
+          </div>
+        </div>
+        <div class="meta"><strong>04. Skill Mesh</strong><span>Represents skills, plugins, memory, and tools connected together.</span></div>
+      </article>
+
+      <article class="card" style="--x: 60%; --y: 34%;">
+        <div class="mark-row">
+          <div class="capsule">
+            <div class="capsule-mark">A</div>
+            <div class="name">Ava</div>
+          </div>
+        </div>
+        <div class="meta"><strong>05. Warm Capsule</strong><span>More human and approachable. Less code-agent, more assistant.</span></div>
+      </article>
+
+      <article class="card" style="--x: 50%; --y: 18%;">
+        <div class="mark-row">
+          <div class="brand">
+            <div class="shard"></div>
+            <div class="name shard-name">AVA</div>
+          </div>
+        </div>
+        <div class="meta"><strong>06. Crystal Agent</strong><span>Bold product mark. Feels premium and distinct, best for app icon.</span></div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
