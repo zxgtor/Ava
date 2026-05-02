@@ -13,7 +13,7 @@ export interface ToolCallPart {
   taskId?: string
   /** Stable tool-call id (matches the OpenAI `tool_call_id` / Hermes id) */
   id: string
-  /** Namespaced tool name, e.g. `filesystem.read_file` */
+  /** Namespaced tool name, e.g. `filesystem.read_text_file` */
   name: string
   args: Record<string, unknown>
   status: ToolCallStatus
@@ -34,6 +34,16 @@ export interface ImagePart {
 
 export type ContentPart = TextPart | ToolCallPart | ImagePart
 
+export type AssistantRunPhase =
+  | 'connecting'
+  | 'waiting_first_token'
+  | 'generating'
+  | 'tool_running'
+  | 'fallback'
+  | 'completed'
+  | 'error'
+  | 'aborted'
+
 // ── Message / Conversation ──────────────────────────────────────────
 
 export interface Message {
@@ -51,6 +61,7 @@ export interface Message {
   toolCallId?: string
   createdAt: number
   streaming?: boolean
+  runPhase?: AssistantRunPhase
   error?: string
   aborted?: boolean
   commandInvocation?: CommandInvocation
@@ -102,6 +113,7 @@ export interface ModelProvider {
   enabled: boolean
   models: string[]
   defaultModel: string
+  reasoningMode?: 'auto' | 'off' | 'on'
 }
 
 // ── MCP servers ─────────────────────────────────────────────────────
@@ -187,6 +199,8 @@ export interface PluginCapabilityView {
 export interface PluginCommand {
   pluginId: string
   pluginName: string
+  bundled: boolean
+  sourceKind: PluginSourceInfo['kind']
   name: string
   description?: string
   arguments: PluginCommandArgument[]

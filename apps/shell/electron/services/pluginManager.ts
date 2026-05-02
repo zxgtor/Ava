@@ -77,6 +77,8 @@ export interface PluginSkill {
 export interface PluginCommand {
   pluginId: string
   pluginName: string
+  bundled: boolean
+  sourceKind: PluginSourceInfo['kind']
   name: string
   description?: string
   arguments: PluginCommandArgument[]
@@ -536,6 +538,7 @@ export class PluginManager {
     let totalChars = 0
     for (const plugin of loaded) {
       if (!plugin.enabled || !plugin.valid) continue
+      const sourceInfo = await readSourceInfo(plugin.rootPath, plugin.bundled)
       const manifest = await readJsonFile<PluginManifest>(join(plugin.rootPath, PLUGIN_MANIFEST)).catch(() => undefined)
       const paths = await discoverCommandPaths(plugin.rootPath, manifest)
       for (const command of paths) {
@@ -548,6 +551,8 @@ export class PluginManager {
         commands.push({
           pluginId: plugin.id,
           pluginName: plugin.manifest?.name ?? plugin.id,
+          bundled: plugin.bundled,
+          sourceKind: sourceInfo.kind,
           name: command.name,
           description: read.description,
           arguments: read.arguments,

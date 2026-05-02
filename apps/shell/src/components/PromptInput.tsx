@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ListPlus, Send, Star, StopCircle, Mic, Image as ImageIcon, X, FileText, FileCode, File as FileIcon } from 'lucide-react'
+import {
+  Send, StopCircle, Mic, X, FileText, FileCode, TerminalSquare,
+  Bug, Code2, Languages, Search, Sparkles, MessageSquareText, BookOpen,
+  ShieldCheck, Wrench, FileSearch, PenLine, ListChecks,
+} from 'lucide-react'
 import type { CommandInvocation, PluginCommand } from '../types'
 
 interface Props {
@@ -27,6 +31,27 @@ interface Attachment {
   type: string
   url?: string
   content?: string
+}
+
+function getCommandIcon(command: PluginCommand) {
+  const text = `${command.pluginName} ${command.name} ${command.description ?? ''} ${command.sourcePath}`.toLowerCase()
+  if (text.includes('debug') || text.includes('bug')) return Bug
+  if (text.includes('review') || text.includes('audit')) return ShieldCheck
+  if (text.includes('translate') || text.includes('language')) return Languages
+  if (text.includes('search') || text.includes('find')) return Search
+  if (text.includes('summar') || text.includes('compact')) return ListChecks
+  if (text.includes('rewrite') || text.includes('polish') || text.includes('write')) return PenLine
+  if (text.includes('explain') || text.includes('doc')) return BookOpen
+  if (text.includes('code') || text.includes('develop')) return Code2
+  if (text.includes('tool') || text.includes('mcp')) return Wrench
+  if (text.includes('file') || text.includes('knowledge')) return FileSearch
+  if (text.includes('chat') || text.includes('feedback')) return MessageSquareText
+  if (text.includes('idea') || text.includes('brainstorm')) return Sparkles
+  return TerminalSquare
+}
+
+function getCommandSourceLabel(command: PluginCommand) {
+  return command.bundled || command.sourceKind === 'bundled' ? 'Default' : 'User'
 }
 
 export function PromptInput({
@@ -65,7 +90,6 @@ export function PromptInput({
     }
   }, [sttText])
   const [commandsOpen, setCommandsOpen] = useState(false)
-  const [commandQuery, setCommandQuery] = useState('')
   const [selectedCommand, setSelectedCommand] = useState<PluginCommand | null>(null)
   const [commandArgs, setCommandArgs] = useState<Record<string, string>>({})
   const [recentCommandKeys, setRecentCommandKeys] = useState<string[]>(() => {
@@ -85,7 +109,6 @@ export function PromptInput({
     }
   })
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const searchRef = useRef<HTMLInputElement | null>(null)
 
   // Auto-resize textarea
   useEffect(() => {
@@ -95,16 +118,12 @@ export function PromptInput({
     ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`
   }, [value])
 
-  useEffect(() => {
-    if (commandsOpen) window.setTimeout(() => searchRef.current?.focus(), 0)
-  }, [commandsOpen])
-
   const sortedCommands = useMemo(() => {
-    const query = commandQuery.trim().toLowerCase()
+    const query = value.startsWith('/') ? value.slice(1).trim().toLowerCase() : ''
     return commands
       .filter(command => {
         if (!query) return true
-        return `${command.pluginName} ${command.name} ${command.sourcePath}`.toLowerCase().includes(query)
+        return `${command.pluginName} ${command.name} ${command.description ?? ''} ${command.sourcePath}`.toLowerCase().includes(query)
       })
       .sort((a, b) => {
         const ak = `${a.pluginId}:${a.name}`
@@ -117,7 +136,7 @@ export function PromptInput({
         if (ai >= 0 || bi >= 0) return (ai >= 0 ? ai : 999) - (bi >= 0 ? bi : 999)
         return a.name.localeCompare(b.name)
       })
-  }, [commandQuery, commands, favoriteCommandKeys, recentCommandKeys])
+  }, [commands, favoriteCommandKeys, recentCommandKeys, value])
 
   const submit = () => {
     let content = value.trim()
@@ -201,7 +220,18 @@ export function PromptInput({
     if (e.key === '/' && !value.trim() && !e.nativeEvent.isComposing) {
       e.preventDefault()
       onRefreshCommands?.()
+      setValue('/')
       setCommandsOpen(true)
+      return
+    }
+    if (commandsOpen && e.key === 'Escape') {
+      e.preventDefault()
+      setCommandsOpen(false)
+      return
+    }
+    if (commandsOpen && e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      if (sortedCommands[0]) selectCommand(sortedCommands[0])
       return
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -219,6 +249,7 @@ export function PromptInput({
     setSelectedCommand(command)
     setCommandArgs(Object.fromEntries(command.arguments.map(arg => [arg.name, arg.defaultValue ?? ''])))
     setCommandsOpen(false)
+    setValue('')
   }
 
   const renderCommandContent = (command: PluginCommand, args: Record<string, string>): string => {
@@ -267,18 +298,6 @@ export function PromptInput({
     })
     setValue('')
     setAttachments([])
-    setCommandQuery('')
-  }
-
-  const toggleFavorite = (command: PluginCommand) => {
-    const key = `${command.pluginId}:${command.name}`
-    setFavoriteCommandKeys(current => {
-      const next = current.includes(key)
-        ? current.filter(item => item !== key)
-        : [key, ...current].slice(0, 24)
-      window.localStorage.setItem('ava.favoritePluginCommands', JSON.stringify(next))
-      return next
-    })
   }
 
   return (
@@ -289,73 +308,44 @@ export function PromptInput({
       onDragOver={e => e.preventDefault()}
     >
       {commandsOpen && (
-        <div className="absolute left-6 right-6 bottom-[5.25rem] z-50 max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-[#1a1b1e]/98 shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
-            <div>
-              <div className="text-xs font-medium text-text">{t('chat.plugin_commands', 'Plugin Commands')}</div>
-              <div className="text-[11px] text-text-3">{t('chat.plugin_commands_tip', 'Type / to open; selecting will insert into input.')}</div>
-            </div>
-            <button
-              type="button"
-              onClick={onRefreshCommands}
-              disabled={commandsLoading}
-              className="px-2 py-1 text-xs text-text-2 rounded cursor-pointer hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {commandsLoading ? t('chat.refreshing', 'Refreshing...') : t('chat.refresh', 'Refresh')}
-            </button>
-          </div>
-          <div className="px-3 py-2 border-b border-border-subtle">
-            <input
-              ref={searchRef}
-              value={commandQuery}
-              onChange={e => setCommandQuery(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Escape') {
-                  setCommandsOpen(false)
-                  textareaRef.current?.focus()
-                }
-              }}
-              placeholder={t('chat.search_commands', 'Search commands...')}
-              className="w-full px-2.5 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
-            />
-          </div>
+        <div className="absolute left-6 right-6 bottom-[5.25rem] z-50 max-h-80 overflow-y-auto rounded-2xl border border-white/10 bg-[#242426]/98 p-1 shadow-[0_20px_50px_rgba(0,0,0,0.75)] backdrop-blur-2xl">
           {commands.length === 0 ? (
             <div className="px-3 py-3 text-xs text-text-3">
-              {t('chat.no_commands', 'No commands available. Ensure plugins are enabled.')}
+              {commandsLoading ? t('chat.refreshing', 'Refreshing...') : t('chat.no_commands', 'No commands available. Ensure plugins are enabled.')}
             </div>
           ) : (
-            <div className="py-1">
+            <div>
               {sortedCommands.length === 0 && (
                 <div className="px-3 py-3 text-xs text-text-3">{t('chat.no_matching_commands', 'No matching commands.')}</div>
               )}
-              {sortedCommands.map(command => (
-                <div
-                  key={`${command.pluginId}:${command.name}`}
-                  className="flex w-full items-center gap-2 text-left px-3 py-2 cursor-pointer hover:bg-surface-2"
-                >
+              {sortedCommands.map(command => {
+                const CommandIcon = getCommandIcon(command)
+                const sourceLabel = getCommandSourceLabel(command)
+                const isDefault = sourceLabel === 'Default'
+                return (
                   <button
                     type="button"
-                    onClick={e => {
-                      e.stopPropagation()
-                      toggleFavorite(command)
-                    }}
-                    className={`p-1 rounded ${favoriteCommandKeys.includes(`${command.pluginId}:${command.name}`) ? 'text-warning' : 'text-text-3'}`}
-                    title={t('chat.favorite_command', 'Favorite Command')}
-                  >
-                    <Star size={13} fill={favoriteCommandKeys.includes(`${command.pluginId}:${command.name}`) ? 'currentColor' : 'none'} />
-                  </button>
-                  <button
-                    type="button"
+                    key={`${command.pluginId}:${command.name}`}
                     onClick={() => selectCommand(command)}
-                    className="min-w-0 flex-1 text-left"
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-white/[0.08]"
                   >
-                    <div className="text-sm text-text">{command.name}</div>
-                    <div className="text-xs text-text-3 truncate">
-                      {command.description || `${command.pluginName} · ${command.sourcePath}`}
-                    </div>
+                    <CommandIcon size={13} className="shrink-0 text-text-2" />
+                    <span className="shrink-0 text-[13px] font-medium text-text">{command.name}</span>
+                    <span className="min-w-0 truncate text-[12px] text-text-3">
+                      {command.description || command.pluginName}
+                    </span>
+                    <span
+                      className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                        isDefault
+                          ? 'bg-white/[0.06] text-text-3'
+                          : 'bg-accent/10 text-accent'
+                      }`}
+                    >
+                      {sourceLabel}
+                    </span>
                   </button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
@@ -395,18 +385,6 @@ export function PromptInput({
           disabled ? 'opacity-60' : ''
         }`}
       >
-        <button
-          type="button"
-          onClick={() => {
-            onRefreshCommands?.()
-            setCommandsOpen(v => !v)
-          }}
-          disabled={disabled || isStreaming}
-          className="flex-shrink-0 p-2 text-text-2 rounded-xl cursor-pointer hover:text-text hover:bg-surface-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title={t('chat.plugin_commands', 'Plugin Commands')}
-        >
-          <ListPlus size={18} />
-        </button>
         {selectedCommand && (
           <div className="absolute left-6 right-6 bottom-[5.25rem] z-50 rounded-xl border border-white/10 bg-[#1a1b1e]/98 shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl p-3 space-y-3">
             <div className="flex items-start justify-between gap-3">
@@ -453,7 +431,16 @@ export function PromptInput({
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={e => {
+            const next = e.target.value
+            setValue(next)
+            if (next.startsWith('/')) {
+              if (!commandsOpen) onRefreshCommands?.()
+              setCommandsOpen(true)
+            } else {
+              setCommandsOpen(false)
+            }
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={disabled ? (disabledReason ?? t('chat.no_provider_error', 'Please configure LLM')) : t('chat.input_placeholder', 'Type message...')}

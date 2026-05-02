@@ -1,6 +1,4 @@
 import { useCallback, useState, useEffect } from 'react'
-import { useTranslation } from 'react-i18next'
-import { ArrowLeft } from 'lucide-react'
 import { useStore } from '../store'
 import {
   mergeMcpServers,
@@ -21,7 +19,6 @@ import { VoiceSection } from './settings/VoiceSection'
 import { AboutSection } from './settings/AboutSection'
 
 export function SettingsView() {
-  const { t } = useTranslation()
   const { state, dispatch } = useStore()
   const [localPlugins, setLocalPlugins] = useState<any[]>([])
 
@@ -51,41 +48,26 @@ export function SettingsView() {
     [dispatch, state.settings],
   )
 
-  const close = useCallback(() => {
-    dispatch({ type: 'SET_VIEW', view: 'chat' })
-  }, [dispatch])
-
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="flex items-center h-11 px-4 border-b border-border-subtle bg-bg/60 backdrop-blur">
-        <button
-          type="button"
-          onClick={close}
-          className="flex items-center gap-1.5 text-sm text-text-2 cursor-pointer hover:text-text transition-colors"
-        >
-          <ArrowLeft size={16} />
-          {t('settings.back', 'Back')}
-        </button>
-        <div className="flex-1 text-center text-sm text-text">{t('settings.title', 'Settings')}</div>
-        <div className="w-16" />
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-8">
-        <PersonaSection settings={state.settings} update={update} />
-        <AppearanceSection settings={state.settings} update={update} />
-        <ChainSection settings={state.settings} update={update} />
-        <ProvidersSection settings={state.settings} update={update} />
-        <McpSection settings={state.settings} update={update} />
-        <ToolAuditSection />
-        <MarketplaceSection 
-          settings={state.settings} 
-          localPlugins={localPlugins} 
-          onInstall={refreshPlugins}
-          onUninstall={refreshPlugins}
-        />
-        <PluginsSection settings={state.settings} update={update} />
-        <VoiceSection settings={state.settings} update={update} />
-        <AboutSection />
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6">
+        {state.settingsSection === 'persona' && <PersonaSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'appearance' && <AppearanceSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'chain' && <ChainSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'providers' && <ProvidersSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'mcp' && <McpSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'audit' && <ToolAuditSection />}
+        {state.settingsSection === 'marketplace' && (
+          <MarketplaceSection
+            settings={state.settings}
+            localPlugins={localPlugins}
+            onInstall={refreshPlugins}
+            onUninstall={refreshPlugins}
+          />
+        )}
+        {state.settingsSection === 'plugins' && <PluginsSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'voice' && <VoiceSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'about' && <AboutSection />}
       </div>
     </div>
   )

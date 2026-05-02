@@ -29,6 +29,7 @@ interface ModelProvider {
   enabled: boolean
   models: string[]
   defaultModel: string
+  reasoningMode?: 'auto' | 'off' | 'on'
 }
 
 interface LlmAttempt {
@@ -39,6 +40,16 @@ interface LlmAttempt {
   status?: number
   error?: string
 }
+
+type AssistantRunPhase =
+  | 'connecting'
+  | 'waiting_first_token'
+  | 'generating'
+  | 'tool_running'
+  | 'fallback'
+  | 'completed'
+  | 'error'
+  | 'aborted'
 
 interface StreamChatArgs {
   streamId: string
@@ -95,6 +106,15 @@ interface ChunkPayload {
 interface AttemptPayload {
   streamId: string
   attempts: LlmAttempt[]
+}
+
+interface StatusPayload {
+  streamId: string
+  taskId?: string
+  phase: AssistantRunPhase
+  providerId?: string
+  providerName?: string
+  model?: string
 }
 
 interface PartPayload {
@@ -190,6 +210,8 @@ interface PluginCapabilityView {
 interface PluginCommand {
   pluginId: string
   pluginName: string
+  bundled: boolean
+  sourceKind: PluginSourceInfo['kind']
   name: string
   description?: string
   arguments: PluginCommandArgument[]
@@ -281,6 +303,7 @@ const ava = {
     > => ipcRenderer.invoke('ava:llm:probe', args),
     onChunk: (handler: (payload: ChunkPayload) => void) => on<ChunkPayload>('ava:llm:chunk', handler),
     onAttempt: (handler: (payload: AttemptPayload) => void) => on<AttemptPayload>('ava:llm:attempt', handler),
+    onStatus: (handler: (payload: StatusPayload) => void) => on<StatusPayload>('ava:llm:status', handler),
     onPart: (handler: (payload: PartPayload) => void) => on<PartPayload>('ava:llm:part', handler),
     onPartUpdate: (handler: (payload: PartUpdatePayload) => void) => on<PartUpdatePayload>('ava:llm:partUpdate', handler),
   },

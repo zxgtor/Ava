@@ -1,6 +1,6 @@
-import { MessageSquarePlus, Settings, Trash2, FolderOpen, Terminal, Code, LayoutPanelLeft } from 'lucide-react'
+import { FolderOpen, Terminal, Code, LayoutPanelLeft } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Logo } from './Logo'
+import { SyntaxBrand } from './Logo'
 import type { Conversation } from '../types'
 
 interface Props {
@@ -43,29 +43,25 @@ export function ChatHeader({
 
   return (
     <div 
-      className="flex items-center h-12 px-3 border-b border-border-subtle bg-surface/20 backdrop-blur-xl select-none relative"
+      className="flex items-center h-9 px-2.5 border-b border-border-subtle bg-surface/20 backdrop-blur-xl select-none relative"
       style={{ webkitAppRegion: 'drag' } as any}
     >
       {/* 左侧：Logo + 项目信息 */}
-      <div className="flex items-center gap-3 shrink-0" style={{ webkitAppRegion: 'no-drag' } as any}>
+      <div className="flex items-center gap-2 shrink-0" style={{ webkitAppRegion: 'no-drag' } as any}>
         <button
           onClick={onToggleSidebar}
-          className="flex items-center gap-3 px-2 py-1 -ml-1 rounded-lg transition-all hover:bg-white/5 active:scale-95 group cursor-pointer"
+          className="flex items-center px-1 py-0.5 -ml-1 rounded-md transition-all hover:bg-white/5 active:scale-95 group cursor-pointer"
         >
-          <Logo size={22} className="transition-transform group-hover:scale-110" />
-          <div className="flex items-center gap-1.5">
-            <span className="text-[15px] font-light text-white/90 tracking-[0.15em]">Ava</span>
-            <span className="w-1 h-1 rounded-full bg-accent shadow-[0_0_8px_rgba(59,130,246,0.8)] animate-pulse" />
-          </div>
+          <SyntaxBrand className="scale-[0.78] origin-left" />
         </button>
 
         {folderPath && (
           <>
-            <div className="h-4 w-[1px] bg-white/10 mx-1" />
+            <div className="h-3.5 w-[1px] bg-white/10 mx-0.5" />
             <div className="flex items-center gap-1">
               <button
                 onClick={handleOpenFolder}
-                className="flex items-center gap-2 px-1.5 py-1 rounded-md hover:bg-white/5 transition-all group"
+                className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md hover:bg-white/5 transition-all group"
                 title={folderPath}
               >
                 <FolderOpen size={13} className="text-accent opacity-70 group-hover:opacity-100" />
@@ -74,15 +70,15 @@ export function ChatHeader({
                 </span>
               </button>
               <div className="flex items-center gap-0.5">
-                <button onClick={handleOpenTerminal} className="p-1.5 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors" title={t('chat.open_terminal', 'Open in Terminal')}>
+                <button onClick={handleOpenTerminal} className="p-1 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors" title={t('chat.open_terminal', 'Open in Terminal')}>
                   <Terminal size={13} />
                 </button>
-                <button onClick={handleOpenCode} className="p-1.5 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors" title={t('chat.open_code', 'Open in VS Code')}>
+                <button onClick={handleOpenCode} className="p-1 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors" title={t('chat.open_code', 'Open in VS Code')}>
                   <Code size={13} />
                 </button>
                 <button
                   onClick={onOpenPreview}
-                  className="p-1.5 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors"
+                  className="p-1 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-colors"
                   title={t('chat.open_preview', 'Open Design Preview Window')}
                 >
                   <LayoutPanelLeft size={13} />

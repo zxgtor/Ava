@@ -16,6 +16,7 @@ import type {
   InitiativeTrait,
   Message,
   ProjectBrief,
+  AssistantRunPhase,
   Settings,
   ToolCallStatus,
   ViewMode,
@@ -33,6 +34,7 @@ interface AppState {
   conversations: Conversation[]
   activeConversationId: string | null
   settings: Settings
+  settingsSection: string
   viewMode: ViewMode
   sidebarOpen: boolean
   projectBriefs: Record<string, ProjectBrief>
@@ -42,10 +44,12 @@ interface AppState {
 type Action =
   | { type: 'HYDRATE'; conversations: Conversation[]; settings: Settings; activeId: string | null }
   | { type: 'SET_VIEW'; view: ViewMode }
+  | { type: 'SET_SETTINGS_SECTION'; section: string }
   | { type: 'SET_SIDEBAR'; open: boolean }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'CREATE_CONVERSATION'; conversation: Conversation }
   | { type: 'SELECT_CONVERSATION'; id: string }
+  | { type: 'CLEAR_ACTIVE_CONVERSATION' }
   | { type: 'DELETE_CONVERSATION'; id: string }
   | { type: 'RENAME_CONVERSATION'; id: string; title: string }
   | { type: 'SET_TRAITS'; id: string; traits: InitiativeTrait[] }
@@ -77,6 +81,9 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_VIEW':
       return { ...state, viewMode: action.view }
 
+    case 'SET_SETTINGS_SECTION':
+      return { ...state, settingsSection: action.section }
+
     case 'SET_SIDEBAR':
       return { ...state, sidebarOpen: action.open }
 
@@ -92,6 +99,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'SELECT_CONVERSATION':
       return { ...state, activeConversationId: action.id }
+
+    case 'CLEAR_ACTIVE_CONVERSATION':
+      return { ...state, activeConversationId: null }
 
     case 'DELETE_CONVERSATION': {
       const remaining = state.conversations.filter(c => c.id !== action.id)
@@ -302,6 +312,7 @@ function initialState(): AppState {
     conversations: [],
     activeConversationId: null,
     settings: defaultSettings(),
+    settingsSection: 'persona',
     viewMode: 'chat',
     sidebarOpen: true,
     projectBriefs: {},
@@ -433,10 +444,24 @@ function sanitizeMessage(raw: unknown): Message | null {
     toolCallId: typeof m.toolCallId === 'string' ? m.toolCallId : undefined,
     createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now(),
     streaming: m.streaming ? true : undefined,
+    runPhase: sanitizeRunPhase(m.runPhase),
     error: typeof m.error === 'string' ? m.error : undefined,
     aborted: m.aborted ? true : undefined,
     commandInvocation: sanitizeCommandInvocation(m.commandInvocation),
   }
+}
+
+function sanitizeRunPhase(raw: unknown): AssistantRunPhase | undefined {
+  return raw === 'connecting' ||
+    raw === 'waiting_first_token' ||
+    raw === 'generating' ||
+    raw === 'tool_running' ||
+    raw === 'fallback' ||
+    raw === 'completed' ||
+    raw === 'error' ||
+    raw === 'aborted'
+    ? raw
+    : undefined
 }
 
 function sanitizeCommandInvocation(raw: unknown): CommandInvocation | undefined {
@@ -614,7 +639,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const now = Date.now()
     const convo: Conversation = {
       id: `c_${now}_${Math.random().toString(36).slice(2, 8)}`,
-      title: t('sidebar.new_chat', 'New Initiative'),
+      title: t('sidebar.new_chat', 'New session'),
       messages: [],
       traits: ['chat'],
       createdAt: now,

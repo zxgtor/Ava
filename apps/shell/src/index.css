@@ -28,9 +28,9 @@
   --bg-surface-active: #2E2E30;
   --border-main: #2A2A2C;
   --border-strong: #3A3A3C;
-  --text-main: #F0F0F0;
-  --text-muted: #A1A1A3;
-  --text-dim: #6E6E70;
+  --text-main: #D8D8DC;
+  --text-muted: #96969C;
+  --text-dim: #67676E;
   --accent-color: #6C9FFF;
   --blur-main: 0px;
   --bubble-user: var(--bg-surface-hover);
@@ -41,20 +41,20 @@
 
 [data-theme='aura-glass'] {
   --bg-app: transparent; /* Allow aura-container to show through */
-  --bg-surface: rgba(30, 30, 35, 0.4);
-  --bg-surface-hover: rgba(50, 50, 60, 0.5);
-  --bg-surface-active: rgba(70, 70, 85, 0.6);
-  --border-main: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --text-main: #FFFFFF;
-  --text-muted: rgba(255, 255, 255, 0.7);
-  --text-dim: rgba(255, 255, 255, 0.4);
+  --bg-surface: rgba(24, 24, 28, 0.68);
+  --bg-surface-hover: rgba(34, 34, 40, 0.74);
+  --bg-surface-active: rgba(46, 46, 54, 0.8);
+  --border-main: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.1);
+  --text-main: #D7D7DC;
+  --text-muted: rgba(215, 215, 220, 0.68);
+  --text-dim: rgba(215, 215, 220, 0.42);
   --accent-color: #8EB9FF;
   --blur-main: 24px;
   --bubble-user: rgba(126, 171, 255, 0.2);
-  --bubble-ai: rgba(255, 255, 255, 0.07);
-  --glass-border: rgba(255, 255, 255, 0.12);
-  --glass-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.5);
+  --bubble-ai: rgba(34, 34, 40, 0.68);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.58);
 }
 
 [data-theme='nebula-clear'] {
@@ -64,9 +64,9 @@
   --bg-surface-active: rgba(255, 255, 255, 0.1);
   --border-main: rgba(255, 255, 255, 0.05);
   --border-strong: rgba(255, 255, 255, 0.08);
-  --text-main: #FFFFFF;
-  --text-muted: rgba(255, 255, 255, 0.8);
-  --text-dim: rgba(255, 255, 255, 0.5);
+  --text-main: #DADAE0;
+  --text-muted: rgba(218, 218, 224, 0.74);
+  --text-dim: rgba(218, 218, 224, 0.48);
   --accent-color: #00D1FF;
   --blur-main: 40px;
   --bubble-user: rgba(0, 209, 255, 0.1);
@@ -125,6 +125,42 @@ body,
   background: rgba(255, 255, 255, 0.1);
 }
 
+/* ── Sidebar Brand ── */
+.ava-brand-mark {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  height: 1.9rem;
+  padding: 0 0.18rem;
+  color: var(--color-text);
+}
+
+.ava-brand-brace {
+  color: #b6ff4d;
+  font-family: var(--font-mono);
+  font-size: 1.2rem;
+  font-weight: 300;
+  line-height: 1;
+  text-shadow: 0 0 14px color-mix(in srgb, #b6ff4d 46%, transparent);
+}
+
+.ava-brand-name {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 760;
+  letter-spacing: -0.08em;
+  line-height: 1;
+}
+
+.ava-brand-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: #48f0ff;
+  box-shadow: 0 0 12px #48f0ff;
+}
+
 /* ── Global Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -146,6 +182,18 @@ body,
   color: #fff;
 }
 
+.message-selectable,
+.message-selectable * {
+  user-select: text;
+}
+
+.message-selectable button,
+.message-selectable button *,
+.message-selectable .run-indicator,
+.message-selectable .run-indicator * {
+  user-select: none;
+}
+
 /* ── Animations ── */
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -160,6 +208,126 @@ body,
 
 .animate-fade-in {
   animation: fade-in 0.35s ease-out forwards;
+}
+
+/* ── LLM Run Indicators ── */
+.run-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 1.25rem;
+  vertical-align: middle;
+}
+
+.run-indicator-connecting span {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+  opacity: 0.55;
+  animation: run-breathe 1.5s ease-in-out infinite;
+}
+
+.run-indicator-waiting {
+  gap: 0.25rem;
+}
+
+.run-indicator-waiting span {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: var(--color-text-3);
+  animation: run-wave 1.25s ease-in-out infinite;
+}
+
+.run-indicator-waiting span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.run-indicator-waiting span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.run-indicator-generating {
+  position: relative;
+  width: 3.25rem;
+  height: 0.35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+
+.run-indicator-generating::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+  animation: run-shimmer 1.1s ease-in-out infinite;
+}
+
+.run-indicator-tool {
+  position: relative;
+}
+
+.run-indicator-tool span:first-child {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-top-color: var(--color-accent);
+  border-radius: 999px;
+  animation: run-spin 0.9s linear infinite;
+}
+
+.run-indicator-tool span:last-child {
+  position: absolute;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.run-indicator-fallback {
+  gap: 0.35rem;
+}
+
+.run-indicator-fallback span {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: var(--color-warning);
+  animation: run-swap 1s ease-in-out infinite;
+}
+
+.run-indicator-fallback span:nth-child(2) {
+  animation-delay: 0.5s;
+}
+
+@keyframes run-breathe {
+  0%, 100% { transform: scale(0.78); opacity: 0.35; }
+  50% { transform: scale(1.08); opacity: 0.9; }
+}
+
+@keyframes run-wave {
+  0%, 100% { transform: translateY(0); opacity: 0.35; }
+  50% { transform: translateY(-0.28rem); opacity: 0.95; }
+}
+
+@keyframes run-shimmer {
+  0% { transform: translateX(-120%); opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { transform: translateX(240%); opacity: 0.3; }
+}
+
+@keyframes run-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes run-swap {
+  0%, 100% { transform: scale(0.75); opacity: 0.35; }
+  50% { transform: scale(1.15); opacity: 1; }
 }
 
 /* ── Gradient Text ── */
@@ -182,13 +350,16 @@ body,
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
-  background: #0D0D0E;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(66, 133, 244, 0.08), transparent 42%),
+    radial-gradient(circle at 82% 76%, rgba(236, 72, 153, 0.07), transparent 44%),
+    linear-gradient(135deg, rgba(10, 12, 18, 0.9), rgba(14, 10, 16, 0.88));
 }
 
 .aura-sphere {
   position: absolute;
   filter: blur(120px);
-  opacity: 0.6;
+  opacity: 0.12;
   border-radius: 50%;
   animation: aura-move 25s infinite alternate ease-in-out;
 }
