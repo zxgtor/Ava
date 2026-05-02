@@ -142,7 +142,7 @@
     "prompt_edit_title": "翻译 / 润色",
     "prompt_edit_desc": "中英互译或改写",
     "prompt_edit_body": "请把下面这段内容翻译成英文，并让语气更自然：\n\n",
-    "input_placeholder": "输入消息…  (Enter 发送 / Shift+Enter 换行，支持拖拽粘贴文件)",
+    "input_placeholder": "今天我們一起創造點什麼？(輸入 '/' 調用插件)",
     "stop": "停止处理",
     "preview": "设计预览",
     "open_terminal": "在终端中打开",

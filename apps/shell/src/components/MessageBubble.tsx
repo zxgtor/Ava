@@ -183,7 +183,7 @@ function MessageBubbleImpl({
   }, [])
 
   return (
-    <div className="mx-auto w-full max-w-[56rem] px-6">
+    <div className="mx-auto w-full max-w-[56rem] px-14">
     <div className={`group relative flex py-3 animate-fade-in ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
         className={`absolute top-3 flex items-center justify-center w-8 h-8 text-sm font-medium rounded-full ${
@@ -192,7 +192,7 @@ function MessageBubbleImpl({
       >
         {isUser ? userInitial : assistantInitial}
       </div>
-      <div className={`flex flex-col max-w-[82%] md:max-w-[68%] min-w-0 ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col max-w-[85%] md:max-w-[75%] min-w-0 ${isUser ? 'items-end' : 'items-start'}`}>
         <div
           className={`relative px-4 py-2.5 rounded-2xl break-words text-sm leading-relaxed glass-bubble overflow-hidden w-fit ${
             isUser
@@ -274,7 +274,7 @@ function MessageBubbleImpl({
                 <button
                   type="button"
                   onClick={() => onDelete(message.id)}
-                  className="p-1 text-text-3 rounded cursor-pointer hover:text-error hover:bg-error/10"
+                  className="p-1 text-text-3 rounded cursor-pointer hover:text-accent hover:bg-accent/10"
                   title={t('sidebar.delete', 'Delete')}
                 >
                   <Trash2 size={12} />

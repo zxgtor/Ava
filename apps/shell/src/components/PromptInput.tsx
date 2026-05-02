@@ -318,7 +318,7 @@ export function PromptInput({
   return (
     <form
       onSubmit={handleFormSubmit}
-      className="mx-auto w-full max-w-[56rem] px-6 pt-0 pb-4 relative"
+      className="mx-auto w-full max-w-[56rem] px-14 pt-0 pb-4 relative"
       onDrop={handleDrop}
       onDragOver={e => e.preventDefault()}
     >
@@ -412,7 +412,7 @@ export function PromptInput({
       )}
 
       <div
-        className={`flex items-end gap-2 px-3 py-2 bg-surface border border-border-subtle rounded-2xl transition-colors focus-within:border-accent/60 ${
+        className={`flex items-end gap-2 px-4 py-3 bg-[#252525] border border-[#333333] rounded-[24px] shadow-[rgba(10,13,18,0.1)_0px_4px_6px_-1px,rgba(10,13,18,0.06)_0px_2px_4px_-2px] transition-all duration-300 focus-within:border-accent/40 focus-within:ring-1 focus-within:ring-accent/10 focus-within:shadow-[0_0_20px_-2px_rgba(108,159,255,0.25)] ${
           disabled ? 'opacity-60' : ''
         }`}
       >
@@ -477,7 +477,7 @@ export function PromptInput({
           placeholder={disabled ? (disabledReason ?? t('chat.no_provider_error', 'Please configure LLM')) : t('chat.input_placeholder', 'Type message...')}
           disabled={disabled}
           rows={1}
-          className="flex-1 bg-transparent resize-none outline-none text-sm text-text placeholder-text-3 py-2 px-1 max-h-[220px]"
+          className="flex-1 bg-transparent resize-none outline-none text-sm text-text placeholder-text-3 py-2 px-1 max-h-[220px] overflow-hidden hide-scrollbar"
         />
         {isStreaming ? (
           <button

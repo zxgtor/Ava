@@ -142,7 +142,7 @@
     "prompt_edit_title": "Translate / Polish",
     "prompt_edit_desc": "Translate or rewrite",
     "prompt_edit_body": "Please translate the following content into English and make it sound natural:\n\n",
-    "input_placeholder": "Type message... (Enter to send / Shift+Enter for new line, supports drag & drop)",
+    "input_placeholder": "What shall we build together today? (Type '/' for commands)",
     "stop": "Stop",
     "preview": "Preview",
     "open_terminal": "Open in Terminal",

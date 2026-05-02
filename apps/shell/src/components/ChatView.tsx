@@ -248,7 +248,7 @@ function ChatSessionBar({
                   <span>Open in mini window</span>
                 </button>
                 {onDelete && (
-                  <button onClick={onDelete} className="ava-menu-item text-red-400 hover:bg-red-500/10 hover:text-red-300">
+                  <button onClick={onDelete} className="ava-menu-item">
                     <Trash2 size={13} />
                     <span>{t('sidebar.delete', 'Delete')}</span>
                   </button>
@@ -890,6 +890,9 @@ export function ChatView() {
         onDelete={activeConversation ? handleDeleteConversation : undefined}
       />
 
+      {/* Top Blur Overlay */}
+      <div className="absolute top-10 left-0 right-0 h-8 z-20 pointer-events-none bg-gradient-to-b from-bg/80 via-bg/40 to-transparent backdrop-blur-md [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+
       {isDragging && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-bg/80 backdrop-blur-sm border-2 border-dashed border-accent m-4 rounded-3xl pointer-events-none transition-all animate-in fade-in zoom-in duration-200">
           <div className="w-20 h-20 bg-accent/10 rounded-full flex items-center justify-center text-accent mb-4">
@@ -937,23 +940,27 @@ export function ChatView() {
         )}
       </div>
 
-      <PromptInput
-        onSend={handleSend}
-        onStop={handleStop}
-        isStreaming={isStreaming}
-        disabled={!hasProvider}
-        disabledReason={!hasProvider ? t('chat.no_provider_error', 'Please configure and enable LLM in settings') : undefined}
-        commands={commands}
-        commandsLoading={commandsLoading}
-        onRefreshCommands={refreshCommands}
-        voiceEnabled={state.settings.voice?.enabled}
-        isRecording={isRecording}
-        onSttToggle={toggleStt}
-        sttText={sttText}
-        externalDroppedFiles={droppedFiles}
-        editDraft={editDraft ? { id: editDraft.messageId, text: editDraft.text } : undefined}
-        onCancelEditDraft={() => setEditDraft(null)}
-      />
+      {/* Bottom Blur Overlay */}
+      <div className="relative">
+        <div className="absolute -top-8 left-0 right-0 h-8 z-20 pointer-events-none bg-gradient-to-t from-bg/80 via-bg/40 to-transparent backdrop-blur-md [mask-image:linear-gradient(to_top,black,transparent)]" />
+        <PromptInput
+          onSend={handleSend}
+          onStop={handleStop}
+          isStreaming={isStreaming}
+          disabled={!hasProvider}
+          disabledReason={!hasProvider ? t('chat.no_provider_error', 'Please configure and enable LLM in settings') : undefined}
+          commands={commands}
+          commandsLoading={commandsLoading}
+          onRefreshCommands={refreshCommands}
+          voiceEnabled={state.settings.voice?.enabled}
+          isRecording={isRecording}
+          onSttToggle={toggleStt}
+          sttText={sttText}
+          externalDroppedFiles={droppedFiles}
+          editDraft={editDraft ? { id: editDraft.messageId, text: editDraft.text } : undefined}
+          onCancelEditDraft={() => setEditDraft(null)}
+        />
+      </div>
     </div>
   )
 }

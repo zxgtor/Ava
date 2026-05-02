@@ -130,7 +130,21 @@ export function ConversationSidebar() {
   const hasConversations = groups.some(group => group.conversations.length > 0)
 
   const toggleGroup = (id: string) => {
-    setCollapsedGroups(prev => ({ ...prev, [id]: !prev[id] }))
+    setCollapsedGroups(prev => {
+      const isCurrentlyCollapsed = prev[id]
+      // If we are expanding this group, collapse all others
+      if (isCurrentlyCollapsed) {
+        const next: Record<string, boolean> = {}
+        groups.forEach(g => {
+          next[g.id] = true // Collapse everyone
+        })
+        next[id] = false // Expand this one
+        return next
+      } else {
+        // If we are collapsing this group, just do it
+        return { ...prev, [id]: true }
+      }
+    })
   }
 
   const handleNewSession = () => {
@@ -486,8 +500,8 @@ export function ConversationSidebar() {
                                 <button onClick={() => {
                                   dispatch({ type: 'DELETE_CONVERSATION', id: conv.id })
                                   setMenuOpenId(null)
-                                }} className="ava-menu-item text-red-400 hover:bg-red-500/10 hover:text-red-300">
-                                  <Trash2 size={13} className="opacity-80" />
+                                }} className="ava-menu-item">
+                                  <Trash2 size={13} className="opacity-60" />
                                   <span>{t('sidebar.delete', 'Delete')}</span>
                                 </button>
                               </div>
