@@ -65,21 +65,29 @@ function RunIndicator({ phase }: { phase?: AssistantRunPhase }) {
 
 // ── Collapsible Thinking Block ──────────────────────────────────────
 
+/** Returns elapsed time in milliseconds. */
 function useElapsedTimer(active: boolean): number {
-  const [elapsed, setElapsed] = useState(0)
+  const [elapsedMs, setElapsedMs] = useState(0)
   const startRef = useRef(Date.now())
 
   useEffect(() => {
     if (!active) return
     startRef.current = Date.now()
-    setElapsed(0)
+    setElapsedMs(0)
     const interval = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startRef.current) / 1000))
-    }, 1000)
+      setElapsedMs(Date.now() - startRef.current)
+    }, 100)
     return () => window.clearInterval(interval)
   }, [active])
 
-  return elapsed
+  return elapsedMs
+}
+
+/** Format duration: <1s shows "320ms", ≥1s shows "3s". */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return `${Math.floor(ms / 1000)}s`
+}
 }
 
 function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
@@ -98,10 +106,10 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming:
 
   if (!content && !isStreaming) return null
 
-  const duration = isStreaming ? elapsed : finalDurationRef.current
+  const durationMs = isStreaming ? elapsed : finalDurationRef.current
   const label = isStreaming
-    ? `Thinking for ${duration}s`
-    : `Thought for ${duration}s`
+    ? `Thinking for ${formatDuration(durationMs)}`
+    : `Thought for ${formatDuration(durationMs)}`
 
   return (
     <div className="mb-2">
@@ -146,10 +154,10 @@ function CollapsibleToolCalls({ parts, isStreaming }: { parts: ContentPart[]; is
 
   if (toolCalls.length === 0) return null
 
-  const duration = allDone ? finalDurationRef.current : elapsed
+  const durationMs = allDone ? finalDurationRef.current : elapsed
   const label = allDone
-    ? `Worked for ${duration}s`
-    : `Working for ${duration}s`
+    ? `Worked for ${formatDuration(durationMs)}`
+    : `Working for ${formatDuration(durationMs)}`
 
   return (
     <div className="mb-2">
