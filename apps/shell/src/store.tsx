@@ -13,6 +13,7 @@ import type {
   CommandInvocation,
   ContentPart,
   Conversation,
+  InitiativeTrait,
   Message,
   ProjectBrief,
   Settings,
@@ -368,6 +369,10 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
       src.theme === 'nebula-clear'
         ? src.theme
         : merged.theme,
+    language:
+      src.language === 'en-US' || src.language === 'zh-CN' || src.language === 'auto'
+        ? src.language
+        : merged.language,
   }
 }
 

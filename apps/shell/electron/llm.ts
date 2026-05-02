@@ -99,7 +99,7 @@ export interface ToolCallAccumulator {
   argsText: string
 }
 
-interface StreamStepResult {
+export interface StreamStepResult {
   visibleText: string
   toolCalls: ToolCallCandidate[]
   model: string

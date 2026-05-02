@@ -32,7 +32,7 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
   }
 
   return (
-    <div className="relative group/code my-2 bg-[#0d1117] rounded-lg overflow-hidden border border-border-subtle">
+    <div className="relative group/code my-2 bg-[#0d1117] rounded-lg overflow-hidden border border-border-subtle max-w-full">
       <div className="flex items-center justify-between px-3 py-1.5 text-xs text-text-3 bg-surface-2/40 border-b border-border-subtle">
         <span className="font-mono">{language}</span>
         <button
@@ -45,7 +45,7 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
           <span>{copied ? '已复制' : '复制'}</span>
         </button>
       </div>
-      <pre className="px-4 py-3 text-[13px] leading-relaxed overflow-x-auto">
+      <pre className="px-4 py-3 text-[13px] leading-relaxed overflow-x-auto hide-scrollbar">
         <code className={className}>{children}</code>
       </pre>
     </div>
@@ -60,7 +60,7 @@ const COMPONENTS: Components = {
       return (
         <code
           {...rest}
-          className="px-1.5 py-0.5 text-[0.9em] bg-surface-2 text-accent rounded border border-border-subtle"
+          className="px-1.5 py-0.5 text-[0.9em] bg-surface-2 text-accent rounded border border-border-subtle break-all"
         >
           {children}
         </code>
@@ -118,7 +118,7 @@ const COMPONENTS: Components = {
 
 function MarkdownContentImpl({ content }: Props) {
   return (
-    <div className="markdown-body">
+    <div className="markdown-body w-fit">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}

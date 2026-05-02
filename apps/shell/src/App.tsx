@@ -115,7 +115,7 @@ export default function App() {
       const cleanup = window.ava.window.onThemeUpdate((newTheme) => {
         setLocalTheme(newTheme)
       })
-      return cleanup
+      return () => { cleanup() }
     }, [])
 
     return (

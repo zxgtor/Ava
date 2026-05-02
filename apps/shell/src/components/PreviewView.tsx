@@ -17,7 +17,7 @@ export function PreviewView() {
         setLastUpdate(new Date())
         setMsgCount(prev => prev + 1)
       })
-      return cleanup
+      return () => { cleanup() }
     } catch (err) {
       setError(String(err))
     }
@@ -43,8 +43,8 @@ export function PreviewView() {
   return (
     <div className="flex flex-col h-screen relative overflow-hidden text-white">
       {/* 沉浸式标题栏：强化拖拽逻辑 */}
-      <div 
-        className="h-11 shrink-0 flex items-center justify-between px-4 pr-[140px] border-b border-white/5 bg-surface/40 backdrop-blur-xl relative z-50" 
+      <div
+        className="h-11 shrink-0 flex items-center justify-between px-4 pr-[140px] border-b border-white/5 bg-surface/40 backdrop-blur-xl relative z-50"
         style={{ webkitAppRegion: 'drag' } as any}
       >
         <div className="flex items-center gap-3 relative z-[60]" style={{ webkitAppRegion: 'no-drag' } as any}>
@@ -53,7 +53,7 @@ export function PreviewView() {
              RECV: {msgCount}
            </span>
         </div>
-        
+
         <div className="flex items-center gap-2 relative z-[60]" style={{ webkitAppRegion: 'no-drag' } as any}>
           {lastUpdate && (
             <span className="text-[8px] text-white/20 uppercase tracking-tighter">
@@ -63,12 +63,12 @@ export function PreviewView() {
           <div className="w-1.5 h-1.5 rounded-full bg-accent shadow-[0_0_8px_rgba(59,130,246,0.8)] animate-pulse" />
         </div>
       </div>
-      
+
       {/* 渲染区域 */}
       <div className="flex-1 overflow-auto flex items-center justify-center p-8">
-        <div 
+        <div
           className="max-w-full max-h-full"
-          dangerouslySetInnerHTML={{ __html: content }} 
+          dangerouslySetInnerHTML={{ __html: content }}
         />
       </div>
 

@@ -138,9 +138,9 @@ function MessageBubbleImpl({
       >
         {isUser ? userInitial : assistantInitial}
       </div>
-      <div className={`flex flex-col max-w-[75%] min-w-0 ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col max-w-[85%] md:max-w-[75%] min-w-0 ${isUser ? 'items-end' : 'items-start'}`}>
         <div
-          className={`relative px-4 py-2.5 rounded-2xl break-words text-sm leading-relaxed glass-bubble ${
+          className={`relative px-4 py-2.5 rounded-2xl break-words text-sm leading-relaxed glass-bubble overflow-hidden w-fit ${
             isUser
               ? 'glass-bubble-user text-text rounded-br-sm'
               : isError

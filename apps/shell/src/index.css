@@ -131,6 +131,15 @@ body,
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
 
+/* Hide horizontal scrollbar in specific areas */
+.no-scrollbar-x {
+  overflow-x: hidden !important;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* ── Selection ── */
 ::selection {
   background: rgba(108, 159, 255, 0.3);

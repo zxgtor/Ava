@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { 
   Settings, Trash2, Edit2, Plus, ChevronRight, X,
-  MoreVertical, Pin, Archive, FolderPlus, FolderOpen
+  MoreVertical, Pin, Archive, FolderPlus, FolderOpen,
+  MessageSquare
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
@@ -142,31 +143,34 @@ export function ConversationSidebar() {
 
   return (
     <div className="flex flex-col h-full w-64 flex-shrink-0 bg-surface/60 backdrop-blur-3xl border-r border-border-subtle select-none text-[12px] custom-sidebar-scroll">
-      <div className="p-2 flex flex-col gap-2">
-        <button
-          type="button"
-          onClick={handleNew}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-text-2 bg-white/5 border border-white/5 rounded-md hover:bg-white/10 hover:text-text transition-colors"
-        >
-          <Plus size={14} className="opacity-50" />
-          <span className="font-medium text-text-2">{t('sidebar.new_chat')}</span>
-        </button>
-
-        {/* 视图切换 */}
-        <div className="flex bg-black/20 p-0.5 rounded-lg border border-white/5">
+      <div className="p-2 flex items-center justify-between gap-1">
+        <div className="flex flex-[2] items-center gap-1">
           <button 
             onClick={() => setShowArchived(false)}
-            className={`flex-1 py-1 rounded-md transition-all ${!showArchived ? 'bg-white/10 text-white shadow-sm' : 'text-text-3 hover:text-text-2'}`}
+            title={t('sidebar.active')}
+            className={`flex-1 flex items-center justify-center py-2 rounded-md transition-all ${!showArchived ? 'bg-accent/10 text-accent' : 'text-text-3 hover:text-text-2 hover:bg-white/5'}`}
           >
-            {t('sidebar.active', 'Active')}
+            <MessageSquare size={16} />
           </button>
           <button 
             onClick={() => setShowArchived(true)}
-            className={`flex-1 py-1 rounded-md transition-all ${showArchived ? 'bg-white/10 text-white shadow-sm' : 'text-text-3 hover:text-text-2'}`}
+            title={t('sidebar.archived')}
+            className={`flex-1 flex items-center justify-center py-2 rounded-md transition-all ${showArchived ? 'bg-accent/10 text-accent' : 'text-text-3 hover:text-text-2 hover:bg-white/5'}`}
           >
-            {t('sidebar.archived', 'Archived')}
+            <Archive size={16} />
           </button>
         </div>
+
+        <div className="w-[1px] h-4 bg-white/5 mx-1" />
+
+        <button
+          type="button"
+          onClick={handleNew}
+          title={t('sidebar.new_chat')}
+          className="flex-1 flex items-center justify-center py-2 rounded-md hover:bg-white/5 text-text-3 hover:text-white transition-all"
+        >
+          <Plus size={16} />
+        </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">

@@ -509,7 +509,7 @@ export function ChatView() {
         </div>
       )}
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar-x">
         {showEmpty ? (
           <EmptyState
             userName={state.settings.persona.userName}
