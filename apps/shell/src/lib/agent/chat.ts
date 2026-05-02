@@ -382,7 +382,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       if (streamId === options.streamId) options.onDelta(text)
     }),
   ]
-  if (options.onReasoningDelta) {
+  if (options.onReasoningDelta && typeof window.ava.llm.onReasoningChunk === 'function') {
     const cb = options.onReasoningDelta
     cleanups.push(window.ava.llm.onReasoningChunk(({ streamId, text }) => {
       if (streamId === options.streamId) cb(text)
