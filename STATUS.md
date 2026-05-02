@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-01 · P16.1 complete + animation-only LLM run indicators_
+_Last updated: 2026-05-02 · LLM Adapter refactoring + Win11 rounded corners_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -11,7 +11,7 @@ _Last updated: 2026-05-01 · P16.1 complete + animation-only LLM run indicators_
 
 - [x] 启动 Electron 窗口，系统边框，标题 "Ava"
 - [x] 跟 LM Studio / Ollama / vLLM / llama.cpp / OpenAI / Anthropic / Groq / OpenRouter / Google AI Studio / Azure OpenAI 聊天
-  - 绝大多数走 OpenAI `/v1/chat/completions` 协议；**Anthropic 走 `/v1/messages` adapter**（`electron/llm.ts` `streamAnthropic`）
+  - 绝大多数走 OpenAI `/v1/chat/completions` 协议；**Anthropic 走 `/v1/messages` adapter**（`electron/adapters/anthropic.ts`）
 - [x] 流式输出（SSE 解析在 main 进程里）
 - [x] 多 provider fallback（chain 顺序，失败降级）
 - [x] 设置里：provider 列表 / 启用开关 / baseUrl / apiKey / 默认模型 / 链顺序 / 连通性探测
@@ -54,7 +54,7 @@ _Last updated: 2026-05-01 · P16.1 complete + animation-only LLM run indicators_
   - ToolCallBubble running 状态脉冲动画 + aborted 删除线
   - 空 assistant 消息过滤（防止空气泡）
   - 侧边栏 active 对话左侧 accent 色条
-  - SettingsView 从 1069 行拆为 7 个 settings/ 子模块
+  - SettingsView 从 1069 行拆为 10 个 settings/ 子模块
 - [x] **P8.1 ava-core 内置插件**：
   - 6 个实用命令：code-explain / summarize / translate / rewrite / review / debug
   - 1 个 skill：response-style（回复风格指引）
@@ -152,9 +152,12 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `main.ts` | 启动窗口；注册 IPC handler（ping / paths / settings / conversations / llm stream / llm abort / llm probe） |
 | `preload.ts` | `contextBridge.exposeInMainWorld('ava', …)` 暴露 API |
 | `storage.ts` | `loadSettings/saveSettings/loadConversations/saveConversations`，原子写（`.tmp` → `rename`） |
-| `llm.ts` | Node 端 `streamChat`：按 providers 顺序 fetch SSE，失败降级。chunk 通过 `webContents.send('ava:llm:chunk', ...)` 推给 renderer。支持 abort |
-| `services/pluginManager.ts` | P3/P4 插件管理：扫描 dev/packaged 插件目录，安装 folder/zip/git，卸载/更新，解析 manifest、skills、commands、`.mcp.json`，输出 stdio MCP server、skill context、command 内容、warnings、permissions/source |
-| `services/toolAuditLog.ts` | P7 工具审计日志：记录 tool-call 的 task、provider、server/plugin、command invocation、参数、状态、结果预览 |
+| `llm.ts` | Node 端 LLM 核心：管理 tool-use 循环、system prompt 注入（skills/commands/hermes）、调度 adapter。支持 abort |
+| `adapters/` | [NEW] LLM 适配器：`base.ts` (接口) / `openai.ts` (标准协议) / `anthropic.ts` (消息協議) |
+| `services/pluginManager.ts` | P3/P4 插件管理：扫描、安装、卸载、解析 manifest/skills/commands |
+| `services/mcpSupervisor.ts` | [NEW] MCP 客户端管理：启动 stdio/sse 进程、tool 执行、崩溃重启 |
+| `services/toolAuditLog.ts` | P7 工具审计日志：记录 tool-call 参数、状态、结果预览 |
+| `services/dwmCorners.ts` | [NEW] Win11 窗口美化：通过 DWM API 实现无边框透明窗口的原生圆角 |
 
 ### Renderer `apps/shell/src/`
 
@@ -176,7 +179,8 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `components/ConversationSidebar.tsx` | 会话列表，按 updatedAt 倒序，active accent 色条，支持选中/重命名/删除 |
 | `components/PromptInput.tsx` | textarea 自增高（max 220px）+ Enter 发送 / Shift+Enter 换行 + streaming 时切 StopCircle + `/` 命令面板。禁用态显示 reason |
 | `components/EmptyState.tsx` | 首次进入：gradient "你好 {userName}" + 4 个快速 prompt chips |
-| `components/SettingsView.tsx` | Layout shell（~70 行），import settings/* 各 section |
+| `components/SettingsView.tsx` | Layout shell（根据 `settingsSection` 切子模块） |
+| `components/PreviewView.tsx` | [NEW] 设计预览画布：实时渲染 assistant 生成的 HTML/组件预览 |
 | `components/settings/shared.tsx` | Toggle / LabeledInput / ModelChips 共用组件 |
 | `components/settings/PersonaSection.tsx` | 用户 / 助手名字 |
 | `components/settings/ChainSection.tsx` | 主回退链排序管理 |

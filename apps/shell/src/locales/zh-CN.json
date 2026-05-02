@@ -168,6 +168,10 @@
     "send": "发送",
     "stop_recording": "停止录音",
     "voice_input": "语音输入",
-    "edit_resend": "编辑并重新发送"
+    "edit_resend": "编辑并重新发送",
+    "editing_resend": "正在编辑上一条消息。发送后会从这里重新生成。",
+    "cancel": "取消",
+    "copy": "复制",
+    "copied": "已复制"
   }
 }

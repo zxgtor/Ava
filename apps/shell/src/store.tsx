@@ -63,6 +63,7 @@ type Action =
   | { type: 'ABORT_RUNNING_PARTS'; conversationId: string; messageId: string }
   | { type: 'APPEND_DELTA'; conversationId: string; messageId: string; delta: string }
   | { type: 'DELETE_MESSAGE'; conversationId: string; messageId: string }
+  | { type: 'REPLACE_MESSAGES_FROM'; conversationId: string; fromMessageId: string; messages: Message[] }
   | { type: 'UPDATE_SETTINGS'; settings: Settings }
   | { type: 'SET_PROJECT_BRIEF'; conversationId: string; brief: ProjectBrief | null }
 
@@ -287,6 +288,23 @@ function reducer(state: AppState, action: Action): AppState {
                 messages: c.messages.filter(m => m.id !== action.messageId),
               },
         ),
+      }
+
+    case 'REPLACE_MESSAGES_FROM':
+      return {
+        ...state,
+        conversations: state.conversations.map(c => {
+          if (c.id !== action.conversationId) return c
+          const idx = c.messages.findIndex(m => m.id === action.fromMessageId)
+          if (idx < 0) {
+            return { ...c, updatedAt: Date.now(), messages: [...c.messages, ...action.messages] }
+          }
+          return {
+            ...c,
+            updatedAt: Date.now(),
+            messages: [...c.messages.slice(0, idx), ...action.messages],
+          }
+        }),
       }
 
     case 'UPDATE_SETTINGS':

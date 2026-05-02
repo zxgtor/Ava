@@ -168,6 +168,10 @@
     "send": "Send",
     "stop_recording": "Stop recording",
     "voice_input": "Voice input",
-    "edit_resend": "Edit and resend"
+    "edit_resend": "Edit and resend",
+    "editing_resend": "Editing previous message. Send to regenerate from here.",
+    "cancel": "Cancel",
+    "copy": "Copy",
+    "copied": "Copied"
   }
 }

@@ -314,6 +314,7 @@ export function ChatView() {
   const [sttText, setSttText] = useState<string | undefined>(undefined)
   const [isDragging, setIsDragging] = useState(false)
   const [droppedFiles, setDroppedFiles] = useState<File[]>([])
+  const [editDraft, setEditDraft] = useState<{ messageId: string; text: string } | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const hasProvider = useMemo(
@@ -339,6 +340,10 @@ export function ChatView() {
   useEffect(() => {
     refreshCommands()
   }, [refreshCommands])
+
+  useEffect(() => {
+    setEditDraft(null)
+  }, [activeConversation?.id])
 
   // Auto-scroll on new messages / streaming
   useEffect(() => {
@@ -396,7 +401,7 @@ export function ChatView() {
 
     const text = partsToText(lastAssistantMessage.content)
     
-    // 优先匹配 ``` 块内的内容，如果没有，则匹配标签本身
+    // 優先匹配 ``` 塊內的內容，如果沒有，則匹配標籤本身
     let htmlContent = ''
     const blockMatch = text.match(/```(?:html|svg)\s*([\s\S]*?)\s*```/i)
     if (blockMatch) {
@@ -407,7 +412,7 @@ export function ChatView() {
     }
     
     if (htmlContent) {
-      // 延迟一小会儿确保预览窗口已经 Ready
+      // 延遲一小會兒確保預覽窗口已經 Ready
       setTimeout(() => {
         window.ava.window.updatePreview(htmlContent)
       }, 500)
@@ -549,7 +554,7 @@ export function ChatView() {
           })
         }
 
-        // 🟢 流结束后，如果当前还是通用聊天状态，则尝试根据最新内容升级特性
+        // 🟢 流結束後，如果當前還是通用聊天狀態，則嘗試根據最新內容升級特性
         const currentTraits = activeConversation?.traits || ['chat']
         if (currentTraits.length === 0 || currentTraits[0] === 'chat') {
           const lastMsg = conversationSnapshot.messages[conversationSnapshot.messages.length - 1]
@@ -611,7 +616,7 @@ export function ChatView() {
         const title = content.length > 30 ? `${content.slice(0, 30)}…` : content
         dispatch({ type: 'RENAME_CONVERSATION', id: conversationId, title })
         
-        // 🟢 首次发送或当前为通用状态时，立即识别特性
+        // 🟢 首次發送或當前為通用狀態時，立即識別特性
         const currentTraits = conversation.traits || ['chat']
         if (currentTraits.length === 0 || currentTraits[0] === 'chat') {
           const initialTraits = detectTraitsFromText(content)
@@ -633,15 +638,82 @@ export function ChatView() {
         taskId,
       )
     },
-    [dispatch, driveStream],
+    [dispatch, driveStream, projectBrief],
+  )
+
+  const runEditedResend = useCallback(
+    async (messageId: string, content: string, attachments: string[] = [], conversation: Conversation) => {
+      const idx = conversation.messages.findIndex(m => m.id === messageId)
+      if (idx < 0) {
+        setEditDraft(null)
+        await runSend(content, attachments, conversation)
+        return
+      }
+      const original = conversation.messages[idx]
+      if (original.role !== 'user') {
+        setEditDraft(null)
+        await runSend(content, attachments, conversation)
+        return
+      }
+
+      const nextText = content.trim()
+      if (!nextText) return
+      setEditDraft(null)
+
+      const taskId = makeTaskId()
+      const editedUser = makeUserMessage(nextText, original.commandInvocation, taskId, attachments)
+      const projectContext = makeProjectContextMessage(taskId, conversation.folderPath, projectBrief)
+      const contextMsg = projectContext
+        ? {
+            id: `ctx_${taskId}`,
+            taskId,
+            role: 'system' as const,
+            content: projectContext,
+            createdAt: Date.now(),
+          }
+        : null
+      const placeholder = makeAssistantPlaceholder(taskId)
+      const conversationId = conversation.id
+
+      dispatch({
+        type: 'REPLACE_MESSAGES_FROM',
+        conversationId,
+        fromMessageId: messageId,
+        messages: [editedUser, placeholder],
+      })
+
+      if (idx === 0) {
+        const title = nextText.length > 30 ? `${nextText.slice(0, 30)}…` : nextText
+        dispatch({ type: 'RENAME_CONVERSATION', id: conversationId, title })
+        const traits = detectTraitsFromText(nextText)
+        dispatch({ type: 'SET_TRAITS', id: conversationId, traits })
+      }
+
+      await driveStream(
+        {
+          ...conversation,
+          messages: contextMsg
+            ? [...conversation.messages.slice(0, idx), contextMsg, editedUser]
+            : [...conversation.messages.slice(0, idx), editedUser],
+        },
+        conversationId,
+        placeholder.id,
+        taskId,
+      )
+    },
+    [dispatch, driveStream, projectBrief, runSend],
   )
 
   const handleSend = useCallback(
     (content: string, attachments?: string[], commandInvocation?: CommandInvocation) => {
       const conversation = activeConversation ?? createConversation()
+      if (editDraft && activeConversation) {
+        runEditedResend(editDraft.messageId, content, attachments ?? [], activeConversation)
+        return
+      }
       runSend(content, attachments ?? [], conversation, commandInvocation)
     },
-    [activeConversation, createConversation, runSend],
+    [activeConversation, createConversation, editDraft, runEditedResend, runSend],
   )
 
   const handleStop = useCallback(() => {
@@ -778,7 +850,7 @@ export function ChatView() {
   )
 
   const handleEditResend = useCallback(
-    async (messageId: string) => {
+    (messageId: string) => {
       if (!activeConversation || isStreaming) return
       const idx = activeConversation.messages.findIndex(m => m.id === messageId)
       if (idx < 0) return
@@ -786,55 +858,10 @@ export function ChatView() {
       if (message.role !== 'user') return
 
       const currentText = partsToText(message.content)
-      const nextText = window.prompt(t('chat.edit_resend', 'Edit and resend'), currentText)
-      if (!nextText?.trim() || nextText === currentText) return
-
-      const taskId = message.taskId ?? makeTaskId()
-      const editedUser = {
-        ...message,
-        taskId,
-        content: [{ type: 'text' as const, text: nextText.trim() }],
-        createdAt: Date.now(),
-      }
-      const conversationId = activeConversation.id
-
-      for (const stale of activeConversation.messages.slice(idx + 1)) {
-        dispatch({ type: 'DELETE_MESSAGE', conversationId, messageId: stale.id })
-      }
-      dispatch({
-        type: 'UPDATE_MESSAGE',
-        conversationId,
-        messageId,
-        patch: {
-          taskId,
-          content: editedUser.content,
-          createdAt: editedUser.createdAt,
-        },
-      })
-
-      if (idx === 0) {
-        const title = nextText.length > 30 ? `${nextText.slice(0, 30)}…` : nextText
-        dispatch({ type: 'RENAME_CONVERSATION', id: conversationId, title })
-        const traits = detectTraitsFromText(nextText)
-        dispatch({ type: 'SET_TRAITS', id: conversationId, traits })
-      }
-
-      const placeholder = makeAssistantPlaceholder(taskId)
-      dispatch({ type: 'ADD_MESSAGE', conversationId, message: placeholder })
-      await driveStream(
-        {
-          ...activeConversation,
-          messages: [
-            ...activeConversation.messages.slice(0, idx),
-            editedUser,
-          ],
-        },
-        conversationId,
-        placeholder.id,
-        taskId,
-      )
+      if (!currentText.trim()) return
+      setEditDraft({ messageId, text: currentText })
     },
-    [activeConversation, dispatch, driveStream, isStreaming, t],
+    [activeConversation, isStreaming],
   )
 
   const messages = (activeConversation?.messages ?? []).filter(m => {
@@ -881,7 +908,7 @@ export function ChatView() {
             disabled={!hasProvider}
           />
         ) : (
-          <div className="py-4">
+          <div className="pt-4 pb-0">
             {messages.map((m, i) => {
               const isLast = i === messages.length - 1
               const canRetry =
@@ -924,6 +951,8 @@ export function ChatView() {
         onSttToggle={toggleStt}
         sttText={sttText}
         externalDroppedFiles={droppedFiles}
+        editDraft={editDraft ? { id: editDraft.messageId, text: editDraft.text } : undefined}
+        onCancelEditDraft={() => setEditDraft(null)}
       />
     </div>
   )

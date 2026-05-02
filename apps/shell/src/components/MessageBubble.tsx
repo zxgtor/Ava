@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Edit2, RotateCw, Trash2 } from 'lucide-react'
+import { Check, Copy, Edit2, RotateCw, Trash2 } from 'lucide-react'
 import type { AssistantRunPhase, ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
 import { ToolCallBubble } from './ToolCallBubble'
@@ -113,6 +113,7 @@ function MessageBubbleImpl({
   const isAborted = Boolean(message.aborted)
 
   const [isPlaying, setIsPlaying] = useState(false)
+  const [copied, setCopied] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const hasAutoPlayed = useRef(false)
   const prevStreaming = useRef(message.streaming)
@@ -125,6 +126,13 @@ function MessageBubbleImpl({
   const textLen = textContent.length
   const hasAnyPart = message.content.length > 0
   const hasVisibleContent = textLen > 0 || hasAnyPart
+
+  const handleCopy = async () => {
+    if (!textContent.trim()) return
+    await navigator.clipboard.writeText(textContent)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
 
   const handlePlayTTS = async () => {
     if (!state.settings.voice?.enabled || !textContent.trim()) return
@@ -216,10 +224,20 @@ function MessageBubbleImpl({
             )}
           </div>
         </div>
-        <div className={`mt-1 flex items-center gap-1 px-1 ${isUser ? 'justify-end' : 'justify-start'}`}>
+        <div className={`mt-1 flex items-center gap-1 px-1 opacity-0 transition-opacity group-hover:opacity-100 ${isUser ? 'justify-end' : 'justify-start'}`}>
           <span className="text-[10px] text-text-3 opacity-60">{formatMessageTime(message.createdAt)}</span>
-          {(onDelete || onRetry || onCommandRetry || (isUser && onEditResend)) && !message.streaming && (
-            <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          {(!message.streaming && (!isUser || onDelete || onRetry || onCommandRetry || onEditResend)) && (
+            <div className="flex items-center gap-0.5">
+              {!isUser && textContent.trim() && (
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className="p-1 text-text-3 rounded cursor-pointer hover:text-accent hover:bg-accent/10"
+                  title={copied ? t('chat.copied', 'Copied') : t('chat.copy', 'Copy')}
+                >
+                  {copied ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+              )}
               {isUser && onEditResend && (
                 <button
                   type="button"

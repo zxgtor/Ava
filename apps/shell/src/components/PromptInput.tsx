@@ -21,6 +21,8 @@ interface Props {
   onSttToggle?: () => void
   sttText?: string
   externalDroppedFiles?: File[]
+  editDraft?: { id: string; text: string }
+  onCancelEditDraft?: () => void
 }
 
 interface Attachment {
@@ -68,6 +70,8 @@ export function PromptInput({
   onSttToggle,
   sttText,
   externalDroppedFiles,
+  editDraft,
+  onCancelEditDraft,
 }: Props) {
   const { t } = useTranslation()
   const [value, setValue] = useState('')
@@ -80,6 +84,17 @@ export function PromptInput({
       }
     }
   }, [externalDroppedFiles])
+
+  useEffect(() => {
+    if (!editDraft) return
+    setValue(editDraft.text)
+    setSelectedCommand(null)
+    setCommandsOpen(false)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(editDraft.text.length, editDraft.text.length)
+    })
+  }, [editDraft?.id])
 
   useEffect(() => {
     if (sttText) {
@@ -303,10 +318,26 @@ export function PromptInput({
   return (
     <form
       onSubmit={handleFormSubmit}
-      className="mx-auto w-full max-w-[56rem] px-6 pt-2 pb-4 relative"
+      className="mx-auto w-full max-w-[56rem] px-6 pt-0 pb-4 relative"
       onDrop={handleDrop}
       onDragOver={e => e.preventDefault()}
     >
+      {editDraft && (
+        <div className="mb-2 flex items-center justify-between rounded-xl border border-accent/20 bg-accent/10 px-3 py-2 text-xs text-accent">
+          <span>{t('chat.editing_resend', 'Editing previous message. Send to regenerate from here.')}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setValue('')
+              onCancelEditDraft?.()
+            }}
+            className="rounded-md px-2 py-1 text-text-3 hover:bg-white/10 hover:text-text"
+          >
+            {t('chat.cancel', 'Cancel')}
+          </button>
+        </div>
+      )}
+
       {commandsOpen && (
         <div className="absolute left-6 right-6 bottom-[5.25rem] z-50 max-h-80 overflow-y-auto rounded-2xl border border-white/10 bg-[#242426]/98 p-1 shadow-[0_20px_50px_rgba(0,0,0,0.75)] backdrop-blur-2xl">
           {commands.length === 0 ? (
