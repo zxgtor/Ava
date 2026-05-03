@@ -49,7 +49,7 @@ const TRAIT_PROMPTS: Record<string, string[]> = {
     'Use file.patch for precise edits to existing files when possible.',
     'Use project.detect and search.ripgrep to understand unfamiliar codebases before editing.',
     'When a task requires project initialization, dependency installation, build, test, git, node, npm, or python execution, use the available shell.run_command tool instead of only saying what you will run.',
-    'For frontend preview tasks, use devserver.start/status/stop for long-running servers and preview.open for local preview URLs.',
+    'For frontend preview tasks, use devserver.start/status/stop, preview.open, preview.console, and preview.screenshot to inspect runtime and visual results.',
     'Before final reporting on coding tasks, validate with project.validate or an equivalent build/test/typecheck command when available.',
     'Use shell.run_command with structured command and args, never as one combined shell string.',
     'Split large web/app tasks into small files or clear sections (for example index.html, styles.css, main.js) unless the user explicitly asks for one file.',

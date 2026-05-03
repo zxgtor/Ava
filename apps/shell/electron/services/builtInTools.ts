@@ -9,6 +9,7 @@ const MAX_OUTPUT_CHARS = 24_000
 const MAX_DEVSERVER_LOG_CHARS = 12_000
 const MAX_FILE_READ_CHARS = 80_000
 const MAX_DIR_ENTRIES = 500
+const DEFAULT_PREVIEW_WAIT_MS = 1_000
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 10 * 60_000
 const DEVSERVER_READY_TIMEOUT_MS = 20_000
@@ -291,6 +292,37 @@ const PREVIEW_TOOLS: McpToolDescriptor[] = [
       required: ['url'],
     },
   },
+  {
+    rawName: 'console',
+    name: 'preview.console',
+    description: 'Load a local preview URL and collect browser console errors/warnings plus page errors.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        url: { type: 'string', description: 'Local http://127.0.0.1 or http://localhost URL.' },
+        waitMs: { type: 'number', description: 'Milliseconds to wait after load before returning logs. Defaults to 1000.' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    rawName: 'screenshot',
+    name: 'preview.screenshot',
+    description: 'Capture a PNG screenshot of a local preview URL and save it to a project file path.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        url: { type: 'string', description: 'Local http://127.0.0.1 or http://localhost URL.' },
+        outputPath: { type: 'string', description: 'PNG output path inside the active project or allowed directories.' },
+        waitMs: { type: 'number', description: 'Milliseconds to wait after load before capture. Defaults to 1000.' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+      },
+      required: ['url', 'outputPath'],
+    },
+  },
 ]
 
 interface RunCommandArgs {
@@ -323,6 +355,20 @@ interface DevServerProcess {
   stderr: string
   exitCode?: number | null
   signal?: NodeJS.Signals | null
+}
+
+interface PreviewLogMessage {
+  level: string
+  text: string
+  timestamp: number
+}
+
+interface PreviewPageContent {
+  url: string
+  title: string
+  messages: PreviewLogMessage[]
+  errorCount: number
+  warningCount: number
 }
 
 interface DetectedProject {
@@ -365,6 +411,8 @@ class BuiltInTools {
       if (name === 'devserver.stop') return this.stopDevServer(rawArgs, context)
       if (name === 'devserver.status') return this.devServerStatus(rawArgs, context)
       if (name === 'preview.open') return this.openPreview(rawArgs)
+      if (name === 'preview.console') return this.previewConsole(rawArgs)
+      if (name === 'preview.screenshot') return this.previewScreenshot(rawArgs, context)
       return { ok: false, error: `unknown built-in tool: ${name}` }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -741,6 +789,47 @@ class BuiltInTools {
     return { ok: true, content: { url, opened: true } }
   }
 
+  private async previewConsole(rawArgs: Record<string, unknown>): Promise<CallToolResult | CallToolError> {
+    const parsed = parsePreviewUrl(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const waitMs = clampNumber(rawArgs.waitMs, 0, 10_000, DEFAULT_PREVIEW_WAIT_MS)
+    const loaded = await loadPreviewPage(parsed.url, { waitMs })
+    if (!loaded.ok) return loaded
+    const content = loaded.content as PreviewPageContent
+    return {
+      ok: true,
+      isError: content.messages.some(message => message.level === 'error' || message.level === 'pageerror'),
+      content,
+    }
+  }
+
+  private async previewScreenshot(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parsePreviewUrl(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const outputPath = typeof rawArgs.outputPath === 'string' ? rawArgs.outputPath.trim() : ''
+    if (!outputPath) return { ok: false, error: 'preview.screenshot requires "outputPath".' }
+    if (!outputPath.toLowerCase().endsWith('.png')) return { ok: false, error: 'preview.screenshot outputPath must end with .png.' }
+    const guard = validatePathAccess(outputPath, context)
+    if (guard) return { ok: false, error: guard }
+
+    const waitMs = clampNumber(rawArgs.waitMs, 0, 10_000, DEFAULT_PREVIEW_WAIT_MS)
+    const width = clampNumber(rawArgs.width, 320, 3840, 1440)
+    const height = clampNumber(rawArgs.height, 240, 2160, 900)
+    const loaded = await loadPreviewPage(parsed.url, { waitMs, width, height, screenshotPath: outputPath })
+    if (!loaded.ok) return loaded
+    const content = loaded.content as PreviewPageContent
+    return {
+      ok: true,
+      isError: content.messages.some(message => message.level === 'error' || message.level === 'pageerror'),
+      content: {
+        ...content,
+        screenshotPath: resolvePath(outputPath),
+        width,
+        height,
+      },
+    }
+  }
+
   abortAllCalls(): void {
     for (const item of this.active) {
       item.controller.abort()
@@ -881,6 +970,14 @@ function parseCwdArg(raw: Record<string, unknown>): { ok: true; cwd: string } | 
   const cwd = typeof raw.cwd === 'string' ? raw.cwd.trim() : ''
   if (!cwd) return { ok: false, error: 'Tool requires "cwd" as a string.' }
   return { ok: true, cwd }
+}
+
+function parsePreviewUrl(raw: Record<string, unknown>): { ok: true; url: string } | { ok: false; error: string } {
+  const url = typeof raw.url === 'string' ? raw.url.trim() : ''
+  if (!isLocalHttpUrl(url)) {
+    return { ok: false, error: 'Preview tools only support local http://127.0.0.1, http://localhost, or http://[::1] URLs.' }
+  }
+  return { ok: true, url }
 }
 
 function validateRunCommand(args: RunCommandArgs, context: RunContext): string | null {
@@ -1081,6 +1178,72 @@ function isLocalHttpUrl(raw: string): boolean {
   } catch {
     return false
   }
+}
+
+async function loadPreviewPage(
+  url: string,
+  options: { waitMs: number; width?: number; height?: number; screenshotPath?: string },
+): Promise<CallToolResult | CallToolError> {
+  try {
+    const electron = await import('electron')
+    const BrowserWindow = electron.BrowserWindow
+    if (!BrowserWindow) return { ok: false, error: 'preview tools require Electron BrowserWindow.' }
+
+    const messages: PreviewLogMessage[] = []
+    const win = new BrowserWindow({
+      width: options.width ?? 1280,
+      height: options.height ?? 800,
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+
+    try {
+      win.webContents.on('console-message', (_event, level, message) => {
+        messages.push({ level: consoleLevelName(level), text: message, timestamp: Date.now() })
+      })
+      win.webContents.on('render-process-gone', (_event, details) => {
+        messages.push({ level: 'error', text: `render-process-gone: ${details.reason}`, timestamp: Date.now() })
+      })
+      win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+        messages.push({ level: 'error', text: `did-fail-load ${errorCode}: ${errorDescription} (${validatedURL})`, timestamp: Date.now() })
+      })
+
+      await win.loadURL(url)
+      if (options.waitMs > 0) await new Promise(resolve => setTimeout(resolve, options.waitMs))
+
+      if (options.screenshotPath) {
+        await mkdir(dirname(resolvePath(options.screenshotPath)), { recursive: true })
+        const image = await win.webContents.capturePage()
+        await writeFile(options.screenshotPath, image.toPNG())
+      }
+
+      return {
+        ok: true,
+        content: {
+          url,
+          title: win.getTitle(),
+          messages,
+          errorCount: messages.filter(message => message.level === 'error' || message.level === 'pageerror').length,
+          warningCount: messages.filter(message => message.level === 'warning').length,
+        },
+      }
+    } finally {
+      if (!win.isDestroyed()) win.destroy()
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+function consoleLevelName(level: number): string {
+  if (level === 3) return 'error'
+  if (level === 2) return 'warning'
+  if (level === 1) return 'info'
+  return 'log'
 }
 
 function isAllowedCwd(cwd: string, context: RunContext): boolean {

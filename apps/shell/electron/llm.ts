@@ -309,7 +309,7 @@ export function buildToolPrompt(tools: McpToolDescriptor[]): string {
     'For focused edits to an existing file, prefer file.patch with exact oldText/newText before rewriting the whole file.',
     'For codebase exploration, use search.ripgrep and project.detect before guessing project structure.',
     'Before claiming coding work is complete, use project.validate or an equivalent shell.run_command validation when available.',
-    'For frontend or design preview work, use devserver.start/status/stop for long-running servers and preview.open for local preview URLs.',
+    'For frontend or design preview work, use devserver.start/status/stop for long-running servers, preview.open for local URLs, preview.console for runtime errors, and preview.screenshot for visual feedback.',
     'Do not use shell.run_command for a long-running dev server because it blocks the agent loop.',
     'Use git.status and git.diff for read-only change review; do not commit or push unless the latest user request explicitly asks.',
     'For code-agent work that needs commands, use shell.run_command with {"command":"npm","args":["..."],"cwd":"..."}; never claim you ran a command unless the tool call succeeded.',

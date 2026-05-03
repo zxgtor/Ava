@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-03 · Dev Server + Preview Tools_
+_Last updated: 2026-05-03 · Preview Console + Screenshot Tools_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -174,6 +174,10 @@ _Last updated: 2026-05-03 · Dev Server + Preview Tools_
   - `devserver.start` 记录进程 id、cwd、命令、URL、stdout/stderr 摘要，并自动从日志识别本地 URL
   - 新增 `preview.open`，只允许打开本地 `http://localhost / 127.0.0.1 / ::1` URL
   - `npm run test:builtins` 覆盖临时 Node dev server 的 start/status/open/stop
+- [x] **Preview console + screenshot tools**：
+  - 新增 `preview.console`，用隐藏 Electron `BrowserWindow` 加载本地 URL 并收集 console warnings/errors、page load errors
+  - 新增 `preview.screenshot`，将本地 URL 截图保存到项目内 PNG 路径，不把大图塞进 LLM 上下文
+  - 两个工具都只允许本地 URL；screenshot 输出路径必须在 project/allowed dirs 内
 
 ---
 
@@ -350,7 +354,7 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 主线 P1–P17.3 已落地。后续候选：
 
 - **P16 Plugin Marketplace 远端 Catalog 完善**：现在的 catalog 是静态 JSON，缺签名 / 版本兼容性 / 评分。
-- **Preview console/screenshot**：`preview.console / preview.screenshot`，让 Ava 能读取 console error、获得视觉反馈。
+- **Preview tool E2E**：当前 smoke test 在 Node 环境验证参数/边界；还需要 Electron E2E 覆盖真实 `preview.console / preview.screenshot` 截图流程。
 - **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call / auto-continue 流程缺自动化覆盖。
 - **Auto-update GitHub Release 流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
 

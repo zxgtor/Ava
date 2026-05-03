@@ -130,6 +130,18 @@ async function main() {
   const preview = await callOk('preview.open', { url: dev.content.url }, context)
   assert.equal(preview.content.url, dev.content.url)
 
+  const previewConsole = await builtInTools.callTool('preview.console', { url: dev.content.url, waitMs: 10 }, context)
+  if (!previewConsole.ok) {
+    assert.match(previewConsole.error, /Electron|BrowserWindow|require/i)
+  }
+
+  const blockedScreenshot = await builtInTools.callTool('preview.screenshot', {
+    url: dev.content.url,
+    outputPath: path.join(os.tmpdir(), 'outside.png'),
+  }, context)
+  assert.equal(blockedScreenshot.ok, false)
+  assert.match(blockedScreenshot.error, /outside the active project/)
+
   const devStop = await callOk('devserver.stop', { id: dev.content.id }, context)
   assert.equal(devStop.content.stopped, true)
 
