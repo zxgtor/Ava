@@ -22,6 +22,7 @@ Thumbs.db
 
 # User data (runtime, not source)
 .codex/
+.ava-unit-test-workspace/
 user-plugins/*
 !user-plugins/.gitkeep
 !user-plugins/README.md

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, FlaskConical, Play, RefreshCw, XCircle } from 'lucide-react'
 import { useStore } from '../store'
+import type { UnitTestSection } from '../types'
 
-type TargetKind = 'built-in' | 'mcp' | 'skill'
+type TargetKind = UnitTestSection
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed'
 
 interface TestTarget {
@@ -79,16 +80,16 @@ function statusIcon(status: TestStatus) {
 }
 
 export function UnitTestView() {
-  const { state, activeConversation } = useStore()
+  const { state } = useStore()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [devCwd, setDevCwd] = useState('')
   const [targets, setTargets] = useState<TestTarget[]>([])
-  const [kind, setKind] = useState<TargetKind>('built-in')
   const [selectedId, setSelectedId] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
 
-  const cwd = activeConversation?.folderPath || devCwd
+  const kind = state.unitTestSection
+  const cwd = devCwd
   const selected = targets.find(target => target.id === selectedId) ?? targets[0]
   const visibleTargets = useMemo(() => targets.filter(target => target.kind === kind), [kind, targets])
   const selectedState = selected ? tests[selected.id] : undefined
@@ -103,7 +104,7 @@ export function UnitTestView() {
         return
       }
 
-      const nextCwd = activeConversation?.folderPath || context.cwd
+      const nextCwd = context.cwd
       setDevCwd(context.cwd)
       const builtIns: TestTarget[] = context.builtInTools.map(tool => ({
         id: `built-in:${tool.name}`,
@@ -148,7 +149,7 @@ export function UnitTestView() {
     } finally {
       setLoading(false)
     }
-  }, [activeConversation?.folderPath, kind, state.settings.pluginStates])
+  }, [kind, state.settings.pluginStates])
 
   useEffect(() => {
     refresh()
@@ -286,16 +287,8 @@ export function UnitTestView() {
 
       <div className="grid flex-1 min-h-0 grid-cols-[280px_1fr]">
         <div className="min-h-0 border-r border-border-subtle">
-          <div className="flex gap-1 border-b border-border-subtle p-2">
-            {(['built-in', 'mcp', 'skill'] as TargetKind[]).map(item => (
-              <button
-                key={item}
-                onClick={() => setKind(item)}
-                className={`flex-1 rounded px-2 py-1.5 text-xs capitalize ${kind === item ? 'bg-white/[0.08] text-text' : 'text-text-3 hover:bg-white/[0.04]'}`}
-              >
-                {item}
-              </button>
-            ))}
+          <div className="border-b border-border-subtle px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-text-3">
+            {kind === 'built-in' ? 'Built-in Tools' : kind === 'mcp' ? 'MCP Tools' : 'Skills'}
           </div>
           <div className="h-full min-h-0 overflow-y-auto p-2">
             {loading ? (

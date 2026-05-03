@@ -28,6 +28,7 @@ import { applyWin11RoundedCorners } from './services/dwmCorners'
 
 const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
+const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 
 function defaultProjectFileContent(fileName: string): string | null {
   if (fileName === 'TASKS.md') {
@@ -42,6 +43,36 @@ function defaultProjectFileContent(fileName: string): string | null {
     ].join('\n')
   }
   return null
+}
+
+async function ensureUnitTestWorkspace(): Promise<string> {
+  const root = join(process.cwd(), UNIT_TEST_WORKSPACE_DIR)
+  await fs.mkdir(join(root, 'src'), { recursive: true })
+  await fs.writeFile(
+    join(root, 'package.json'),
+    JSON.stringify({
+      name: 'ava-unit-test-workspace',
+      version: '0.0.0',
+      private: true,
+      type: 'module',
+      scripts: {
+        test: 'node src/index.js',
+        build: 'node src/index.js',
+      },
+    }, null, 2),
+    'utf8',
+  )
+  await fs.writeFile(
+    join(root, 'src', 'index.js'),
+    'console.log("ava unit test workspace ok")\n',
+    'utf8',
+  )
+  await fs.writeFile(
+    join(root, 'README.md'),
+    '# Ava Unit Test Workspace\n\nThis folder is generated for safe dev tool-call tests.\n',
+    'utf8',
+  )
+  return root
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -221,11 +252,12 @@ function registerIpc(): void {
       }
     }
 
+    const testWorkspace = await ensureUnitTestWorkspace()
     const servers = mcpSupervisor.listServers()
     const plugins = await pluginManager.discover(states ?? {})
     return {
       isDev: true,
-      cwd: process.cwd(),
+      cwd: testWorkspace,
       builtInTools: builtInTools.listTools(),
       mcpTools: servers.flatMap(server =>
         (server.tools ?? []).map(tool => ({

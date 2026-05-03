@@ -97,7 +97,9 @@ test('Dev Unit Test pane can be opened', async () => {
   await expect(unitTestButton).toBeVisible();
   await unitTestButton.click();
   await expect(page.getByRole('heading', { name: 'Unit Test' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'built-in', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Built-in Tools', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'MCP Tools', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Skills', exact: true })).toBeVisible();
 });
 
 test('Preview built-in tools capture console and screenshot', async () => {

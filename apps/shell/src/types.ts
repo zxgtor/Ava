@@ -260,3 +260,4 @@ export interface Settings {
 // ── View mode ───────────────────────────────────────────────────────
 
 export type ViewMode = 'chat' | 'settings' | 'unit-test'
+export type UnitTestSection = 'built-in' | 'mcp' | 'skill'

@@ -5,12 +5,12 @@ import {
   ListFilter, Plus, User, Palette, GitBranch, Server, ClipboardList,
   Store, Puzzle, Mic, Info, Brain, ArrowLeft,
   CirclePlus, RefreshCw, MessageCircle, ArchiveRestore,
-  FlaskConical,
+  FlaskConical, Wrench,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
 import { getTraitConfig } from '../lib/agent/traits'
-import type { Conversation, InitiativeTrait } from '../types'
+import type { Conversation, InitiativeTrait, UnitTestSection } from '../types'
 
 function formatRelativeTime(dateMs: number) {
   const diff = Date.now() - dateMs
@@ -46,6 +46,12 @@ const SETTINGS_CATEGORIES = [
   { id: 'about', labelKey: 'settings.about', fallback: 'About', icon: Info },
 ]
 
+const UNIT_TEST_CATEGORIES: Array<{ id: UnitTestSection; label: string; icon: any }> = [
+  { id: 'built-in', label: 'Built-in Tools', icon: Wrench },
+  { id: 'mcp', label: 'MCP Tools', icon: Server },
+  { id: 'skill', label: 'Skills', icon: Puzzle },
+]
+
 export function ConversationSidebar() {
   const { t } = useTranslation()
   const { state, dispatch } = useStore()
@@ -57,6 +63,7 @@ export function ConversationSidebar() {
   const [groupSorts, setGroupSorts] = useState<Record<string, 'updated' | 'created'>>({})
   const [groupShowModes, setGroupShowModes] = useState<Record<string, 'active' | 'all'>>({})
   const [showUnitTest, setShowUnitTest] = useState(import.meta.env.DEV)
+  const initializedOpenGroupRef = useRef(false)
   const editInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -130,6 +137,15 @@ export function ConversationSidebar() {
   }, [groupShowModes, groupSorts, state.conversations, t])
 
   const hasConversations = groups.some(group => group.conversations.length > 0)
+
+  const lastWorkedGroupId = useMemo(() => {
+    if (groups.length === 0) return null
+    const active = state.conversations.find(conv => conv.id === state.activeConversationId)
+    const latest = active ?? [...state.conversations].sort((a, b) => b.updatedAt - a.updatedAt)[0]
+    if (!latest) return groups[0].id
+    const targetId = latest.pinned ? 'pinned' : `trait:${latest.traits?.[0] || 'chat'}`
+    return groups.some(group => group.id === targetId) ? targetId : groups[0].id
+  }, [groups, state.activeConversationId, state.conversations])
 
   const toggleGroup = (id: string) => {
     setCollapsedGroups(prev => {
@@ -236,6 +252,12 @@ export function ConversationSidebar() {
       .catch(() => setShowUnitTest(false))
   }, [])
 
+  useEffect(() => {
+    if (initializedOpenGroupRef.current || groups.length === 0 || !lastWorkedGroupId) return
+    initializedOpenGroupRef.current = true
+    setCollapsedGroups(Object.fromEntries(groups.map(group => [group.id, group.id !== lastWorkedGroupId])))
+  }, [groups, lastWorkedGroupId])
+
   if (state.viewMode === 'settings') {
     return (
       <div className="flex flex-col h-full w-64 flex-shrink-0 bg-surface/60 backdrop-blur-3xl border-r border-border-subtle select-none text-[12px] custom-sidebar-scroll">
@@ -264,6 +286,43 @@ export function ConversationSidebar() {
                 >
                   <Icon size={14} className={active ? 'text-accent' : 'text-text-3 group-hover:text-text-2'} />
                   <span className="truncate">{t(category.labelKey, category.fallback)}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (state.viewMode === 'unit-test') {
+    return (
+      <div className="flex flex-col h-full w-64 flex-shrink-0 bg-surface/60 backdrop-blur-3xl border-r border-border-subtle select-none text-[12px] custom-sidebar-scroll">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-1 pt-1.5 pb-2">
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'SET_VIEW', view: 'chat' })}
+            className="mb-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-text-3 transition-colors hover:bg-white/[0.04] hover:text-text"
+          >
+            <ArrowLeft size={14} />
+            <span>{t('settings.back', 'Back')}</span>
+          </button>
+          <div className="px-2 py-2 text-[11px] font-medium text-text-3">Unit Test</div>
+          <div className="space-y-0.5">
+            {UNIT_TEST_CATEGORIES.map(category => {
+              const Icon = category.icon
+              const active = state.unitTestSection === category.id
+              return (
+                <button
+                  key={category.id}
+                  type="button"
+                  onClick={() => dispatch({ type: 'SET_UNIT_TEST_SECTION', section: category.id })}
+                  className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                    active ? 'bg-white/[0.08] text-text' : 'text-text-2 hover:bg-white/[0.04] hover:text-text'
+                  }`}
+                >
+                  <Icon size={14} className={active ? 'text-accent' : 'text-text-3 group-hover:text-text-2'} />
+                  <span className="truncate">{category.label}</span>
                 </button>
               )
             })}
@@ -522,11 +581,7 @@ export function ConversationSidebar() {
           <button
             type="button"
             onClick={() => dispatch({ type: 'SET_VIEW', view: 'unit-test' })}
-            className={`mb-1 w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md transition-colors ${
-              state.viewMode === 'unit-test'
-                ? 'bg-white/[0.08] text-text'
-                : 'text-text-3 hover:bg-white/5 hover:text-text-2'
-            }`}
+            className="mb-1 w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md transition-colors text-text-3 hover:bg-white/5 hover:text-text-2"
           >
             <FlaskConical size={14} />
             <span className="font-medium">Unit Test</span>
