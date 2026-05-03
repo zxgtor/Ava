@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-03 · Built-in Tools Smoke Test + Status Cleanup_
+_Last updated: 2026-05-03 · Dev Server + Preview Tools_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -169,6 +169,11 @@ _Last updated: 2026-05-03 · Built-in Tools Smoke Test + Status Cleanup_
   - 覆盖 `project.detect/project.validate/search.ripgrep/shell.run_command/git.status`
   - 修复 Windows `.cmd` shim 执行方式，避免 `spawn EINVAL`
   - 修复 `search.ripgrep` 非交互模式等待 stdin 的问题，显式搜索 `.`
+- [x] **Dev server + preview tools**：
+  - 新增 `devserver.start / devserver.stop / devserver.status`，用于长期运行 Vite/Next/Node dev server，不阻塞 `shell.run_command`
+  - `devserver.start` 记录进程 id、cwd、命令、URL、stdout/stderr 摘要，并自动从日志识别本地 URL
+  - 新增 `preview.open`，只允许打开本地 `http://localhost / 127.0.0.1 / ::1` URL
+  - `npm run test:builtins` 覆盖临时 Node dev server 的 start/status/open/stop
 
 ---
 
@@ -345,8 +350,7 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 主线 P1–P17.3 已落地。后续候选：
 
 - **P16 Plugin Marketplace 远端 Catalog 完善**：现在的 catalog 是静态 JSON，缺签名 / 版本兼容性 / 评分。
-- **Dev server tools**：`devserver.start / stop / status`，管理长期运行的 Vite/Next dev server，不用 `shell.run_command` 挂住。
-- **Preview tools**：`preview.open / console / screenshot`，让 Ava 能打开页面、读取 console error、获得视觉反馈。
+- **Preview console/screenshot**：`preview.console / preview.screenshot`，让 Ava 能读取 console error、获得视觉反馈。
 - **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call / auto-continue 流程缺自动化覆盖。
 - **Auto-update GitHub Release 流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
 

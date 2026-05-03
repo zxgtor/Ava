@@ -106,6 +106,33 @@ async function main() {
 
   await callOk('git.status', { cwd: root }, context)
 
+  const serverFile = path.join(tmp, 'dev-server.js')
+  fs.writeFileSync(serverFile, [
+    'const http = require("node:http");',
+    'const server = http.createServer((_req, res) => res.end("ok"));',
+    'server.listen(0, "127.0.0.1", () => {',
+    '  const address = server.address();',
+    '  console.log(`Local: http://127.0.0.1:${address.port}/`);',
+    '});',
+    'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
+  ].join('\n'), 'utf8')
+  const dev = await callOk('devserver.start', {
+    command: 'node',
+    args: [serverFile],
+    cwd: tmp,
+  }, context)
+  assert.equal(dev.content.status, 'running')
+  assert.match(dev.content.url, /^http:\/\/127\.0\.0\.1:\d+\//)
+
+  const devStatus = await callOk('devserver.status', { id: dev.content.id }, context)
+  assert.equal(devStatus.content.status, 'running')
+
+  const preview = await callOk('preview.open', { url: dev.content.url }, context)
+  assert.equal(preview.content.url, dev.content.url)
+
+  const devStop = await callOk('devserver.stop', { id: dev.content.id }, context)
+  assert.equal(devStop.content.stopped, true)
+
   const blocked = await builtInTools.callTool('file.read_text', { path: path.join(os.tmpdir(), 'outside.txt') }, { activeFolderPath: tmp })
   assert.equal(blocked.ok, false)
   assert.match(blocked.error, /outside the active project/)

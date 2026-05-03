@@ -6,10 +6,12 @@ import { resolve as resolvePath, basename, dirname } from 'node:path'
 import type { McpToolDescriptor, CallToolError, CallToolResult } from './mcpSupervisor'
 
 const MAX_OUTPUT_CHARS = 24_000
+const MAX_DEVSERVER_LOG_CHARS = 12_000
 const MAX_FILE_READ_CHARS = 80_000
 const MAX_DIR_ENTRIES = 500
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 10 * 60_000
+const DEVSERVER_READY_TIMEOUT_MS = 20_000
 
 const COMMAND_ALLOWLIST = new Set([
   'npm',
@@ -30,6 +32,8 @@ const COMMAND_ALLOWLIST = new Set([
   'pwsh',
   'pwsh.exe',
 ])
+
+const DEVSERVER_COMMAND_ALLOWLIST = new Set(['npm', 'npx', 'pnpm', 'yarn', 'node'])
 
 const DANGEROUS_ARG_RE =
   /\b(rm\s+-rf|remove-item|del\s+\/s|rmdir\s+\/s|format|diskpart|shutdown|restart-computer|stop-computer|set-executionpolicy|invoke-expression|iex)\b|[;&|`$<>]/i
@@ -231,6 +235,64 @@ const CODING_TOOLS: McpToolDescriptor[] = [
   },
 ]
 
+const PREVIEW_TOOLS: McpToolDescriptor[] = [
+  {
+    rawName: 'start',
+    name: 'devserver.start',
+    description: 'Start a long-running development server for the active project without blocking the agent loop.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string' },
+        command: { type: 'string', description: 'Executable name, for example npm, pnpm, yarn, node.' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Command arguments, for example ["run", "dev", "--", "--host", "127.0.0.1"].' },
+        expectedUrl: { type: 'string', description: 'Optional URL if known, for example http://127.0.0.1:5173/.' },
+      },
+      required: ['cwd', 'command', 'args'],
+    },
+  },
+  {
+    rawName: 'stop',
+    name: 'devserver.stop',
+    description: 'Stop a development server started by devserver.start.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string' },
+        id: { type: 'string', description: 'Optional server id returned by devserver.start.' },
+      },
+    },
+  },
+  {
+    rawName: 'status',
+    name: 'devserver.status',
+    description: 'Return status and recent logs for development servers started by devserver.start.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string' },
+        id: { type: 'string' },
+      },
+    },
+  },
+  {
+    rawName: 'open',
+    name: 'preview.open',
+    description: 'Open a local preview URL in the system browser.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        url: { type: 'string', description: 'Local http://127.0.0.1 or http://localhost URL.' },
+      },
+      required: ['url'],
+    },
+  },
+]
+
 interface RunCommandArgs {
   command: string
   args: string[]
@@ -248,6 +310,21 @@ interface ActiveProcess {
   controller: AbortController
 }
 
+interface DevServerProcess {
+  id: string
+  cwd: string
+  command: string
+  args: string[]
+  child: ChildProcessWithoutNullStreams
+  startedAt: number
+  status: 'starting' | 'running' | 'exited'
+  url?: string
+  stdout: string
+  stderr: string
+  exitCode?: number | null
+  signal?: NodeJS.Signals | null
+}
+
 interface DetectedProject {
   cwd: string
   types: string[]
@@ -259,9 +336,10 @@ interface DetectedProject {
 
 class BuiltInTools {
   private active = new Set<ActiveProcess>()
+  private devServers = new Map<string, DevServerProcess>()
 
   listTools(): McpToolDescriptor[] {
-    return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS]
+    return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS, ...PREVIEW_TOOLS]
   }
 
   resolveTool(name: string): { serverId: string; rawName: string } | null {
@@ -283,6 +361,10 @@ class BuiltInTools {
       if (name === 'search.ripgrep') return this.ripgrep(rawArgs, context)
       if (name === 'git.status') return this.gitStatus(rawArgs, context)
       if (name === 'git.diff') return this.gitDiff(rawArgs, context)
+      if (name === 'devserver.start') return this.startDevServer(rawArgs, context)
+      if (name === 'devserver.stop') return this.stopDevServer(rawArgs, context)
+      if (name === 'devserver.status') return this.devServerStatus(rawArgs, context)
+      if (name === 'preview.open') return this.openPreview(rawArgs)
       return { ok: false, error: `unknown built-in tool: ${name}` }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -547,6 +629,118 @@ class BuiltInTools {
     })
   }
 
+  private async startDevServer(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseRunCommandArgs(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const guard = validateDevServerCommand(parsed.args, context)
+    if (guard) return { ok: false, error: guard }
+
+    const cwd = resolvePath(parsed.args.cwd)
+    const existing = this.findDevServer({ cwd })
+    if (existing && existing.status !== 'exited') {
+      return { ok: true, content: devServerView(existing, 'already_running') }
+    }
+
+    const resolvedCommand = resolveCommand(parsed.args.command)
+    const spawnTarget = spawnTargetForCommand(resolvedCommand, parsed.args.args)
+    const child = spawn(spawnTarget.command, spawnTarget.args, {
+      cwd,
+      shell: false,
+      windowsHide: true,
+      env: { ...process.env, BROWSER: 'none' },
+    })
+    const server: DevServerProcess = {
+      id: `dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      cwd,
+      command: parsed.args.command,
+      args: parsed.args.args,
+      child,
+      startedAt: Date.now(),
+      status: 'starting',
+      url: typeof rawArgs.expectedUrl === 'string' ? rawArgs.expectedUrl : undefined,
+      stdout: '',
+      stderr: '',
+    }
+    this.devServers.set(server.id, server)
+
+    const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
+      const text = chunk.toString('utf8')
+      if (!server.url) server.url = extractLocalUrl(text)
+      if (server.url) server.status = 'running'
+      if (kind === 'stdout') server.stdout = appendRolling(server.stdout, text, MAX_DEVSERVER_LOG_CHARS)
+      else server.stderr = appendRolling(server.stderr, text, MAX_DEVSERVER_LOG_CHARS)
+    }
+
+    child.stdout.on('data', chunk => append('stdout', chunk))
+    child.stderr.on('data', chunk => append('stderr', chunk))
+    child.on('error', err => {
+      server.status = 'exited'
+      server.stderr = appendRolling(server.stderr, err.message, MAX_DEVSERVER_LOG_CHARS)
+    })
+    child.on('close', (code, signal) => {
+      server.status = 'exited'
+      server.exitCode = code
+      server.signal = signal
+    })
+
+    await waitForDevServerReady(server)
+    return {
+      ok: true,
+      isError: server.status === 'exited',
+      content: devServerView(server, server.status === 'exited' ? 'exited_before_ready' : 'started'),
+    }
+  }
+
+  private async stopDevServer(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const server = this.findDevServerFromArgs(rawArgs, context)
+    if (!server.ok) return server
+    if (!server.server) return { ok: true, content: { stopped: false, message: 'No matching dev server.' } }
+    try {
+      server.server.child.kill()
+    } catch {
+      // noop
+    }
+    server.server.status = 'exited'
+    this.devServers.delete(server.server.id)
+    return { ok: true, content: { stopped: true, id: server.server.id, cwd: server.server.cwd } }
+  }
+
+  private async devServerStatus(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const server = this.findDevServerFromArgs(rawArgs, context)
+    if (!server.ok) return server
+    if (server.server) return { ok: true, content: devServerView(server.server, 'status') }
+    const cwd = typeof rawArgs.cwd === 'string' ? resolvePath(rawArgs.cwd) : undefined
+    return {
+      ok: true,
+      content: {
+        servers: Array.from(this.devServers.values())
+          .filter(item => !cwd || normalizePath(item.cwd) === normalizePath(cwd))
+          .map(item => devServerView(item, 'status')),
+      },
+    }
+  }
+
+  private async openPreview(rawArgs: Record<string, unknown>): Promise<CallToolResult | CallToolError> {
+    const url = typeof rawArgs.url === 'string' ? rawArgs.url.trim() : ''
+    if (!isLocalHttpUrl(url)) {
+      return { ok: false, error: 'preview.open only supports local http://127.0.0.1, http://localhost, or http://[::1] URLs.' }
+    }
+    try {
+      const electron = await import('electron')
+      await electron.shell.openExternal(url)
+    } catch {
+      return {
+        ok: true,
+        content: {
+          url,
+          opened: false,
+          message: 'Preview URL validated. Open it manually if running outside Electron.',
+        },
+      }
+    }
+    return { ok: true, content: { url, opened: true } }
+  }
+
   abortAllCalls(): void {
     for (const item of this.active) {
       item.controller.abort()
@@ -557,6 +751,25 @@ class BuiltInTools {
       }
     }
     this.active.clear()
+  }
+
+  private findDevServerFromArgs(
+    rawArgs: Record<string, unknown>,
+    context: RunContext,
+  ): { ok: true; server: DevServerProcess | null } | CallToolError {
+    const id = typeof rawArgs.id === 'string' ? rawArgs.id.trim() : ''
+    if (id) return { ok: true, server: this.devServers.get(id) ?? null }
+    if (typeof rawArgs.cwd !== 'string' || !rawArgs.cwd.trim()) return { ok: true, server: null }
+    const guard = validateDirectoryAccess(rawArgs.cwd, context)
+    if (guard) return { ok: false, error: guard }
+    return { ok: true, server: this.findDevServer({ cwd: resolvePath(rawArgs.cwd) }) }
+  }
+
+  private findDevServer(input: { cwd: string }): DevServerProcess | null {
+    const cwd = normalizePath(input.cwd)
+    return Array.from(this.devServers.values()).find(server =>
+      normalizePath(server.cwd) === cwd && server.status !== 'exited',
+    ) ?? null
   }
 
   private runCommand(args: RunCommandArgs): Promise<CallToolResult | CallToolError> {
@@ -692,6 +905,25 @@ function validateRunCommand(args: RunCommandArgs, context: RunContext): string |
   return null
 }
 
+function validateDevServerCommand(args: RunCommandArgs, context: RunContext): string | null {
+  const commandName = normalizeCommandName(args.command)
+  if (!DEVSERVER_COMMAND_ALLOWLIST.has(commandName)) {
+    return `Command "${args.command}" is not allowed for devserver.start. Allowed commands: ${Array.from(DEVSERVER_COMMAND_ALLOWLIST).join(', ')}.`
+  }
+  if (!existsSync(resolvePath(args.cwd))) {
+    return `Working directory does not exist: ${args.cwd}`
+  }
+  if (!isAllowedCwd(args.cwd, context)) {
+    return `Working directory "${args.cwd}" is outside the active project or allowed directories.`
+  }
+  for (const arg of args.args) {
+    if (DANGEROUS_ARG_RE.test(arg)) {
+      return `Blocked potentially dangerous dev server argument: ${arg}`
+    }
+  }
+  return null
+}
+
 function validatePathAccess(path: string, context: RunContext): string | null {
   if (!isAllowedCwd(path, context)) {
     return `Path "${path}" is outside the active project or allowed directories.`
@@ -804,6 +1036,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isRipgrepNoMatch(content: unknown): boolean {
   return isRecord(content) && content.exitCode === 1 && typeof content.stdout === 'string' && content.stdout.length === 0
+}
+
+function appendRolling(current: string, text: string, maxChars: number): string {
+  const next = current + text
+  return next.length > maxChars ? next.slice(next.length - maxChars) : next
+}
+
+function extractLocalUrl(text: string): string | undefined {
+  const match = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/[^\s]*)?/i)
+  return match?.[0]
+}
+
+async function waitForDevServerReady(server: DevServerProcess): Promise<void> {
+  const deadline = Date.now() + DEVSERVER_READY_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (server.status === 'exited' || server.url) return
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
+
+function devServerView(server: DevServerProcess, event: string): Record<string, unknown> {
+  return {
+    event,
+    id: server.id,
+    cwd: server.cwd,
+    command: server.command,
+    args: server.args,
+    status: server.status,
+    url: server.url,
+    pid: server.child.pid,
+    uptimeMs: Math.max(0, Date.now() - server.startedAt),
+    exitCode: server.exitCode,
+    signal: server.signal,
+    stdout: server.stdout,
+    stderr: server.stderr,
+  }
+}
+
+function isLocalHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname)
+  } catch {
+    return false
+  }
 }
 
 function isAllowedCwd(cwd: string, context: RunContext): boolean {
