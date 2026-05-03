@@ -603,6 +603,21 @@ export function ChatView() {
               },
             })
           }
+          if (result.stopReason) {
+            const error =
+              result.stopReason === 'output_limit'
+                ? 'Stopped: output token limit reached. Ava should continue from the current file state instead of treating this as complete.'
+                : result.stopReason === 'server_disconnected'
+                  ? 'Stopped: model server disconnected before the stream completed.'
+                  : 'Stopped: tool loop limit reached. Ava could not finish all tool rounds safely.'
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { streaming: false, error, runPhase: 'error' },
+            })
+            return
+          }
           dispatch({
             type: 'UPDATE_MESSAGE',
             conversationId,
@@ -993,10 +1008,28 @@ export function ChatView() {
       })()
       const taskId = target.taskId ?? previousUser?.taskId ?? makeTaskId()
       const placeholder = makeAssistantPlaceholder(taskId)
+      const retryMessages = msgs.slice(0, idx)
+      if (target.error?.includes('output token limit')) {
+        retryMessages.push({
+          id: `ctx_${taskId}_continue_after_output_limit`,
+          taskId,
+          role: 'system',
+          content: [{
+            type: 'text',
+            text: [
+              'The previous assistant attempt stopped because the output token limit was reached.',
+              'Continue the same task from the existing project/file state.',
+              'Do not restart from scratch and do not repeat already-written code.',
+              'Inspect existing files if needed, then complete the next smallest remaining step.',
+            ].join(' '),
+          }],
+          createdAt: Date.now(),
+        })
+      }
       dispatch({ type: 'ADD_MESSAGE', conversationId, message: placeholder })
 
       await driveStream(
-        { ...activeConversation, messages: msgs.slice(0, idx) },
+        { ...activeConversation, messages: retryMessages },
         conversationId,
         placeholder.id,
         taskId,

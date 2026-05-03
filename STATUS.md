@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-02 · P17 Task Intake + Context Budget UX_
+_Last updated: 2026-05-02 · P17 Built-in Agent Tools_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -146,6 +146,18 @@ _Last updated: 2026-05-02 · P17 Task Intake + Context Budget UX_
   - assistant 回复 hover 显示 copy 按钮，消息时间改为 hover 才显示
 - [x] **Project file bootstrap**：
   - `ava:fs:readFile` 读取缺失的 `TASKS.md` 时自动创建默认任务清单，避免 ENOENT 打断项目状态同步
+- [x] **P17.1 Built-in Agent Tools**：
+  - 新增 Ava built-in tools，不依赖 MCP 即可完成基础 code-agent workflow
+  - `shell.run_command`：受控执行 `npm / npx / pnpm / yarn / node / git / python / py / vite / tsc / powershell / pwsh`
+  - `file.read_text / file.write_text / file.list_dir / file.create_dir / file.stat`：内置文件读写/目录/状态工具
+  - 所有 built-in tools 限制在当前 project folder 或 filesystem allowed dirs 内
+  - shell 工具只接受结构化 `command + args + cwd`，不接受自由 shell 字符串；带危险参数拦截、timeout、Stop abort
+- [x] **P17.2 Coding failure handling**：
+  - OpenAI-compatible stream 读取 `finish_reason`，识别 `length/max_tokens` 为 output limit
+  - stream 没有 `[DONE]` 且无 finish reason 时标记 server disconnected
+  - tool loop 超限标记为 `tool_loop_limit`
+  - UI 不再把这些情况当成功完成，显示明确错误；Retry 会要求 Ava 从现有文件状态继续，不从头生成
+  - Code/Design prompt 改为 file-first；初始化、安装、构建、测试时要求调用 `shell.run_command`，不能只写“我将执行”
 
 ---
 
@@ -175,11 +187,12 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `main.ts` | 启动窗口；注册 IPC handler（ping / paths / settings / conversations / llm stream / llm abort / llm probe） |
 | `preload.ts` | `contextBridge.exposeInMainWorld('ava', …)` 暴露 API |
 | `storage.ts` | `loadSettings/saveSettings/loadConversations/saveConversations`，原子写（`.tmp` → `rename`） |
-| `llm.ts` | Node 端 LLM 核心：管理 tool-use 循环、system prompt 注入（skills/commands/hermes）、调度 adapter。支持 abort、reasoning 回调 |
+| `llm.ts` | Node 端 LLM 核心：管理 tool-use 循环、system prompt 注入（skills/commands/hermes/built-in tools）、调度 adapter。支持 abort、reasoning 回调、stopReason 分类 |
 | `adapters/` | [NEW] LLM 适配器：`base.ts` (接口) / `openai.ts` (标准协议) / `anthropic.ts` (消息協議)。支持推理内容提取 |
 | `services/pluginManager.ts` | P3/P4 插件管理：扫描、安装、卸载、解析 manifest/skills/commands |
 | `services/mcpSupervisor.ts` | [NEW] MCP 客户端管理：启动 stdio/sse 进程、tool 执行、崩溃重启 |
 | `services/toolAuditLog.ts` | P7 工具审计日志：记录 tool-call 参数、状态、结果预览 |
+| `services/builtInTools.ts` | P17.1 内置 agent tools：`shell.run_command` + `file.*`，带 cwd/allowedDirs 安全边界、命令 allowlist、危险参数拦截、timeout/abort |
 | `services/dwmCorners.ts` | [NEW] Win11 窗口美化：通过 DWM API 实现无边框透明窗口的原生圆角 |
 
 ### Renderer `apps/shell/src/`

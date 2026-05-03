@@ -8,6 +8,7 @@ import { WebContents } from 'electron'
 import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
 import { pluginManager, type PluginSkill, type PluginState } from './services/pluginManager'
 import { previewValue, toolAuditLog, type ToolAuditCommandInvocation } from './services/toolAuditLog'
+import { builtInTools } from './services/builtInTools'
 import { OpenAiAdapter } from './adapters/openai'
 import { AnthropicAdapter } from './adapters/anthropic'
 import { LlmAdapter } from './adapters/base'
@@ -73,6 +74,7 @@ export interface StreamChatArgs {
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
+  activeFolderPath?: string
   activeCommandInvocation?: ToolAuditCommandInvocation
   temperature?: number
   toolFormatMap?: Record<string, ToolCallFormat>
@@ -96,6 +98,7 @@ export interface StreamChatResult {
   toolCallsIssued: number
   loopRounds: number
   detectedToolFormat: ToolCallFormat
+  stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected'
 }
 
 export interface ToolCallCandidate {
@@ -115,6 +118,7 @@ export interface StreamStepResult {
   toolCalls: ToolCallCandidate[]
   model: string
   detectedToolFormat: ToolCallFormat
+  finishReason?: string
   hiddenReasoningChars?: number
   hiddenReasoningExceeded?: boolean
 }
@@ -244,6 +248,18 @@ function shouldExposeTools(currentTask: string, activeCommandInvocation?: ToolAu
   return TOOL_INTENT_RE.test(currentTask)
 }
 
+function allowedFilesystemDirs(): string[] {
+  return mcpSupervisor
+    .listServers()
+    .flatMap(server => server.allowedDirs ?? [])
+    .filter(dir => typeof dir === 'string' && dir.trim().length > 0)
+}
+
+function listAvailableTools(currentTask: string, activeCommandInvocation?: ToolAuditCommandInvocation): McpToolDescriptor[] {
+  if (!shouldExposeTools(currentTask, activeCommandInvocation)) return []
+  return [...builtInTools.listTools(), ...mcpSupervisor.listAllTools()]
+}
+
 function chooseReasoningMode(
   provider: ModelProvider,
   currentTask: string,
@@ -289,6 +305,8 @@ export function buildToolPrompt(tools: McpToolDescriptor[]): string {
     ...toolLines,
     'Only call a tool when the latest user request requires external state, filesystem access, or an explicit action.',
     'For conceptual questions, instructions, or explanations, answer directly without a tool call.',
+    'For file work, prefer built-in file.read_text, file.write_text, file.list_dir, file.create_dir, and file.stat when available.',
+    'For code-agent work that needs commands, use shell.run_command with {"command":"npm","args":["..."],"cwd":"..."}; never claim you ran a command unless the tool call succeeded.',
     'To call a tool, respond with exactly one or more blocks like:',
     `<tool_call>{"name":"${exampleName}","arguments":{"path":"D:\\\\example.txt"}}</tool_call>`,
     'Use tool names exactly as listed above.',
@@ -529,9 +547,7 @@ async function runToolLoop(
 ): Promise<Omit<StreamChatResult, 'provider' | 'attempts' | 'fallbackUsed'>> {
   const model = provider.defaultModel
   const currentTask = latestUserRequest(args.messages)
-  const tools = shouldExposeTools(currentTask, args.activeCommandInvocation)
-    ? mcpSupervisor.listAllTools()
-    : []
+  const tools = listAvailableTools(currentTask, args.activeCommandInvocation)
   const effectiveProvider: ModelProvider = {
     ...provider,
     reasoningMode: chooseReasoningMode(provider, currentTask, tools.length > 0),
@@ -600,6 +616,9 @@ async function runToolLoop(
       parts.push({ type: 'text', text: step.visibleText })
     }
 
+    const outputLimitReached = step.finishReason === 'length' || step.finishReason === 'max_tokens'
+    const serverDisconnected = step.finishReason === 'stream_disconnected'
+
     if (step.hiddenReasoningExceeded && !step.visibleText && step.toolCalls.length === 0) {
       const finalizeProvider: ModelProvider = { ...effectiveProvider, reasoningMode: 'off' }
       const finalizeMessages = withFinalizePrompt(workingMessages)
@@ -662,6 +681,8 @@ async function runToolLoop(
         toolCallsIssued,
         loopRounds: round + 1,
         detectedToolFormat,
+        ...(outputLimitReached ? { stopReason: 'output_limit' as const } : {}),
+        ...(serverDisconnected ? { stopReason: 'server_disconnected' as const } : {}),
       }
     }
 
@@ -677,8 +698,9 @@ async function runToolLoop(
 
       const partIndex = parts.length
       const staleReason = validateToolAgainstCurrentTask(toolCall, currentTask)
-      const resolvedTool = mcpSupervisor.resolveTool(toolCall.name)
-      const serverRuntime = resolvedTool ? mcpSupervisor.getServer(resolvedTool.serverId) : null
+      const builtInTool = builtInTools.resolveTool(toolCall.name)
+      const resolvedTool = builtInTool ?? mcpSupervisor.resolveTool(toolCall.name)
+      const serverRuntime = resolvedTool && !builtInTool ? mcpSupervisor.getServer(resolvedTool.serverId) : null
       const startedAt = Date.now()
       const toolPart: ToolCallPart = {
         type: 'tool_call',
@@ -722,10 +744,15 @@ async function runToolLoop(
         continue
       }
 
-      const result = await mcpSupervisor.callTool({
-        namespacedName: toolCall.name,
-        rawArgs: toolCall.args,
-      })
+      const result = builtInTool
+        ? await builtInTools.callTool(toolCall.name, toolCall.args, {
+            activeFolderPath: args.activeFolderPath,
+            allowedDirs: allowedFilesystemDirs(),
+          })
+        : await mcpSupervisor.callTool({
+            namespacedName: toolCall.name,
+            rawArgs: toolCall.args,
+          })
 
       const patch: Partial<ToolCallPart> = {
         endedAt: Date.now(),
@@ -788,6 +815,7 @@ async function runToolLoop(
     toolCallsIssued,
     loopRounds: MAX_TOOL_LOOP,
     detectedToolFormat,
+    stopReason: 'tool_loop_limit',
   }
 }
 
@@ -896,6 +924,7 @@ export function abortStream(streamId: string): boolean {
   if (!active) return false
   active.aborted = true
   active.controller.abort()
+  builtInTools.abortAllCalls()
   mcpSupervisor.abortAllCalls()
   activeStreams.delete(streamId)
   return true

@@ -43,14 +43,22 @@ function isImageUrl(url: string): boolean {
 const TRAIT_PROMPTS: Record<string, string[]> = {
   code: [
     'You are in Code mode.',
-    'Prioritize working, runnable code. Use markdown code blocks with language tags.',
+    'Prioritize working, runnable code and completing the requested file changes.',
+    'For non-trivial code generation, write or edit files with tools instead of dumping large code blocks into chat.',
+    'Use built-in file tools for project files: file.read_text, file.write_text, file.list_dir, file.create_dir, and file.stat.',
+    'When a task requires project initialization, dependency installation, build, test, git, node, npm, or python execution, use the available shell.run_command tool instead of only saying what you will run.',
+    'Use shell.run_command with structured command and args, never as one combined shell string.',
+    'Split large web/app tasks into small files or clear sections (for example index.html, styles.css, main.js) unless the user explicitly asks for one file.',
+    'After writing files, inspect the file tail or run an available validation command before claiming the task is complete.',
+    'If output is interrupted or token-limited, continue from the existing file state rather than restarting from scratch.',
     'Explain technical trade-offs briefly. Prefer concise implementations over verbose explanations.',
     'When debugging, show the fix first, then explain why.',
   ],
   design: [
     'You are in Design mode.',
     'Think visually. Describe layouts, colors, and typography precisely.',
-    'When generating UI, provide complete HTML/CSS. Use modern design patterns.',
+    'When generating UI, prefer creating/editing project files over emitting a long single chat answer.',
+    'For larger UI/site work, split structure, styling, and behavior into manageable files or sections.',
     'Suggest visual improvements proactively.',
   ],
   business: [
@@ -385,6 +393,7 @@ export interface SendResult {
   model: string
   fallbackUsed: boolean
   detectedToolFormat: 'openai' | 'hermes' | 'none'
+  stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected'
 }
 
 export interface SendError {
@@ -461,6 +470,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       messages,
       providers,
       activeTaskId: options.activeTaskId,
+      activeFolderPath: options.folderPath,
       activeCommandInvocation: latestCommandInvocation(options.conversation),
       temperature,
       toolFormatMap: options.settings.modelToolFormatMap,
@@ -479,6 +489,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       model: reply.result.model,
       fallbackUsed: reply.result.fallbackUsed,
       detectedToolFormat: reply.result.detectedToolFormat,
+      stopReason: reply.result.stopReason,
     }
   } finally {
     cleanups.forEach(fn => fn())

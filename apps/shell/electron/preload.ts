@@ -56,6 +56,7 @@ interface StreamChatArgs {
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
+  activeFolderPath?: string
   activeCommandInvocation?: ToolAuditCommandInvocation
   temperature?: number
   toolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
@@ -88,6 +89,7 @@ interface StreamChatOk {
     toolCallsIssued: number
     loopRounds: number
     detectedToolFormat: 'openai' | 'hermes' | 'none'
+    stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected'
   }
 }
 

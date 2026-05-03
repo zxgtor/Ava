@@ -110,11 +110,15 @@ export class OpenAiAdapter extends LlmAdapter {
     let sawHiddenReasoning = false
     let hiddenReasoningChars = 0
     let hiddenReasoningExceeded = false
+    let finishReason: string | undefined
     const hiddenReasoningBudgetChars = args.hiddenReasoningBudgetChars ?? 4_000
 
     const processPayload = (payload: Record<string, unknown>) => {
       finalPayload = payload
       const deltaObj = Array.isArray(payload.choices) ? payload.choices[0] as Record<string, unknown> | undefined : undefined
+      if (typeof deltaObj?.finish_reason === 'string') {
+        finishReason = deltaObj.finish_reason
+      }
       const delta = deltaObj?.delta
       if (delta && typeof delta === 'object') {
         const deltaRecord = delta as Record<string, unknown>
@@ -210,12 +214,16 @@ export class OpenAiAdapter extends LlmAdapter {
     if (!streamChunks && visibleText) {
       onChunk(visibleText)
     }
+    if (!sawDone && !finishReason) {
+      finishReason = 'stream_disconnected'
+    }
 
     return {
       visibleText,
       toolCalls,
       model,
       detectedToolFormat: detected,
+      finishReason,
       hiddenReasoningChars,
       hiddenReasoningExceeded,
     }
