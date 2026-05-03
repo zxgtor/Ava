@@ -209,6 +209,44 @@ function registerIpc(): void {
     return true
   })
 
+  ipcMain.handle('ava:dev:unitTestContext', async (_e, states: Record<string, PluginState> | undefined) => {
+    const devToolsEnabled = is.dev || process.env.AVA_E2E === '1'
+    if (!devToolsEnabled) {
+      return {
+        isDev: false,
+        cwd: process.cwd(),
+        builtInTools: [],
+        mcpTools: [],
+        skills: [],
+      }
+    }
+
+    const servers = mcpSupervisor.listServers()
+    const plugins = await pluginManager.discover(states ?? {})
+    return {
+      isDev: true,
+      cwd: process.cwd(),
+      builtInTools: builtInTools.listTools(),
+      mcpTools: servers.flatMap(server =>
+        (server.tools ?? []).map(tool => ({
+          ...tool,
+          serverId: server.id,
+          serverName: server.name,
+          serverStatus: server.status,
+        })),
+      ),
+      skills: plugins.flatMap(plugin =>
+        plugin.skills.map(skill => ({
+          ...skill,
+          pluginId: plugin.id,
+          pluginName: plugin.manifest?.name ?? plugin.id,
+          enabled: plugin.enabled,
+          valid: plugin.valid,
+        })),
+      ),
+    }
+  })
+
   // ── Tool audit log ──────────────────────────
   ipcMain.handle('ava:toolAudit:list', async (_e, limit?: number) =>
     toolAuditLog.list(limit),

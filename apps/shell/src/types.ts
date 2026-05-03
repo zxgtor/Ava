@@ -259,4 +259,4 @@ export interface Settings {
 
 // ── View mode ───────────────────────────────────────────────────────
 
-export type ViewMode = 'chat' | 'settings'
+export type ViewMode = 'chat' | 'settings' | 'unit-test'

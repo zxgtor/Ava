@@ -21,6 +21,7 @@ Thumbs.db
 .env.local
 
 # User data (runtime, not source)
+.codex/
 user-plugins/*
 !user-plugins/.gitkeep
 !user-plugins/README.md

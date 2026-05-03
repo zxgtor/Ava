@@ -5,6 +5,7 @@ import {
   ListFilter, Plus, User, Palette, GitBranch, Server, ClipboardList,
   Store, Puzzle, Mic, Info, Brain, ArrowLeft,
   CirclePlus, RefreshCw, MessageCircle, ArchiveRestore,
+  FlaskConical,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
@@ -55,6 +56,7 @@ export function ConversationSidebar() {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [groupSorts, setGroupSorts] = useState<Record<string, 'updated' | 'created'>>({})
   const [groupShowModes, setGroupShowModes] = useState<Record<string, 'active' | 'all'>>({})
+  const [showUnitTest, setShowUnitTest] = useState(import.meta.env.DEV)
   const editInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -226,6 +228,13 @@ export function ConversationSidebar() {
       editInputRef.current.select()
     }
   }, [editingId])
+
+  useEffect(() => {
+    if (import.meta.env.DEV) return
+    window.ava.dev.unitTestContext({})
+      .then(context => setShowUnitTest(context.isDev))
+      .catch(() => setShowUnitTest(false))
+  }, [])
 
   if (state.viewMode === 'settings') {
     return (
@@ -509,6 +518,20 @@ export function ConversationSidebar() {
       </div>
 
       <div className="p-1.5">
+        {showUnitTest && (
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'SET_VIEW', view: 'unit-test' })}
+            className={`mb-1 w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md transition-colors ${
+              state.viewMode === 'unit-test'
+                ? 'bg-white/[0.08] text-text'
+                : 'text-text-3 hover:bg-white/5 hover:text-text-2'
+            }`}
+          >
+            <FlaskConical size={14} />
+            <span className="font-medium">Unit Test</span>
+          </button>
+        )}
         <button
           type="button"
           onClick={() => dispatch({ type: 'SET_VIEW', view: 'settings' })}

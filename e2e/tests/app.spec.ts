@@ -87,6 +87,19 @@ test('Settings pane can be opened', async () => {
   await expect(settingsHeading).toBeVisible();
 });
 
+test('Dev Unit Test pane can be opened', async () => {
+  const backButton = page.getByRole('button', { name: 'Back', exact: true });
+  await expect(backButton).toBeVisible();
+  await backButton.click();
+  await expect(page.getByRole('button', { name: /New session|新对话/i })).toBeVisible();
+
+  const unitTestButton = page.getByRole('button', { name: /Unit Test/i });
+  await expect(unitTestButton).toBeVisible();
+  await unitTestButton.click();
+  await expect(page.getByRole('heading', { name: 'Unit Test' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'built-in', exact: true })).toBeVisible();
+});
+
 test('Preview built-in tools capture console and screenshot', async () => {
   const consoleResult = await app.evaluate(async ({}, url) => {
     const tools = (globalThis as any).__avaBuiltInTools;

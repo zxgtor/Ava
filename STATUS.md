@@ -199,6 +199,12 @@ _Last updated: 2026-05-03 · Project Map + Local LLM Planning_
   - 如果模型纠正后仍输出裸命令，Ava 显示 `raw_command_no_tool` 错误，不会静默完成
   - `shell.run_command` 兼容 `dir/ls`，会安全转成目录读取；常见开发命令 allowlist 增加 `bun/deno/uv/pip/pytest`
   - Tool prompt 示例优先展示 built-in `project.map`，避免本地模型误以为要直接打印 shell 命令
+- [x] **Dev Unit Test page**：
+  - dev/e2e 模式侧栏 Settings 上方显示 `Unit Test`
+  - 页面列出 built-in tools、MCP tools、plugin skills
+  - 每个 built-in tool 有默认 LLM request，可编辑后重跑
+  - 测试通过真实 `ava.llm.stream`，由 LLM 生成 tool_call，再根据 tool result 显示 pass/fail
+  - MCP/Skill 也可用同一页面做手动/半自动 smoke test
 
 ---
 

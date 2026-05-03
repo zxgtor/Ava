@@ -141,6 +141,23 @@ interface McpToolDescriptor {
   inputSchema?: unknown
 }
 
+interface UnitTestContext {
+  isDev: boolean
+  cwd: string
+  builtInTools: McpToolDescriptor[]
+  mcpTools: Array<McpToolDescriptor & {
+    serverId: string
+    serverName: string
+    serverStatus: McpServerRuntime['status']
+  }>
+  skills: Array<PluginCapabilityView & {
+    pluginId: string
+    pluginName: string
+    enabled: boolean
+    valid: boolean
+  }>
+}
+
 interface McpServerRuntime {
   id: string
   name: string
@@ -315,6 +332,11 @@ const ava = {
     listServers: (): Promise<McpServerRuntime[]> => ipcRenderer.invoke('ava:mcp:listServers'),
     restart: (serverId: string): Promise<boolean> => ipcRenderer.invoke('ava:mcp:restart', serverId),
     onStatus: (handler: (payload: McpServerRuntime) => void) => on<McpServerRuntime>('ava:mcp:status', handler),
+  },
+
+  dev: {
+    unitTestContext: (states: Record<string, PluginState>): Promise<UnitTestContext> =>
+      ipcRenderer.invoke('ava:dev:unitTestContext', states),
   },
 
   toolAudit: {
