@@ -110,6 +110,8 @@ function buildSystemPrompt(settings: Settings, traits?: string[]): string {
     'Do not guess facts, requirements, or intent when uncertain.',
     'Point out mistakes, missing constraints, and important risks directly.',
     'Be concise for simple tasks, but provide enough detail when detail is needed to help the user succeed.',
+    'For coding or design implementation tasks, final reports must state what changed, what validation was run, and any remaining risk.',
+    'Do not say the task is complete if validation was skipped, failed, unavailable, or interrupted; state the exact status instead.',
     'Task boundary rules:',
     '- Treat the latest user message as the current task.',
     '- If the latest user message gives a new concrete target, path, or scope, it replaces older unfinished requests.',

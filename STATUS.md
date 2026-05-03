@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-02 · P17 Built-in Agent Tools_
+_Last updated: 2026-05-02 · P17 Auto-Continue + Built-in Agent Tools_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -158,6 +158,11 @@ _Last updated: 2026-05-02 · P17 Built-in Agent Tools_
   - tool loop 超限标记为 `tool_loop_limit`
   - UI 不再把这些情况当成功完成，显示明确错误；Retry 会要求 Ava 从现有文件状态继续，不从头生成
   - Code/Design prompt 改为 file-first；初始化、安装、构建、测试时要求调用 `shell.run_command`，不能只写“我将执行”
+- [x] **P17.3 Auto-continue + final report discipline**：
+  - `output_limit / server_disconnected / tool_loop_limit` 后自动在同一个 assistant 回复内续跑，最多 3 轮
+  - 自动续跑使用隐藏 system message，要求从当前文件状态继续，不重启、不重复已完成工作
+  - 达到自动续跑上限才显示错误，并保留当前文件状态
+  - coding/design 最终报告必须说明改动、验证结果、剩余风险；未验证/失败/中断时不能声称完成
 
 ---
 

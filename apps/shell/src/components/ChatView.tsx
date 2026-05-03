@@ -11,6 +11,7 @@ import { MessageBubble } from './MessageBubble'
 import { PromptInput } from './PromptInput'
 import {
   makeAssistantPlaceholder,
+  makeMessageId,
   makeStreamId,
   makeTaskId,
   makeUserMessage,
@@ -21,7 +22,7 @@ import {
 import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
-import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, PluginCommand } from '../types'
+import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand } from '../types'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -48,6 +49,7 @@ interface PendingTaskIntake {
 
 const TASK_INTAKE_INTENT_RE = /\b(build|create|make|generate|implement|fix|debug|refactor|modify|update|edit|write|add|remove|delete|site|app|component|page|feature|bug|code|html|css|javascript|typescript|react|three\.?js|3d)\b|创建|生成|实现|修复|调试|重构|修改|更新|添加|删除|网站|应用|组件|页面|功能|代码|三维|3d/i
 const CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run|执行|开始|继续|确认|可以|好的|好|没问题|就这样)\b/i
+const MAX_AUTO_CONTINUE_ROUNDS = 3
 
 function shouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
   if (commandInvocation) return true
@@ -71,6 +73,57 @@ function makeTaskIntakeText(content: string, conversation: Conversation): string
     '',
     '如果理解正确，请回复「确认」或「开始」。如果有误，请直接补充修正。',
   ].join('\n')
+}
+
+function appendLocalDelta(parts: ContentPart[], delta: string): ContentPart[] {
+  const last = parts[parts.length - 1]
+  if (last?.type === 'text') {
+    return [...parts.slice(0, -1), { type: 'text', text: last.text + delta }]
+  }
+  return [...parts, { type: 'text', text: delta }]
+}
+
+function updateLocalToolPart(parts: ContentPart[], partIndex: number, partId: string | undefined, patch: Record<string, unknown>): ContentPart[] {
+  return parts.map((part, idx) => {
+    const isTarget = partId ? part.type === 'tool_call' && part.id === partId : idx === partIndex
+    return isTarget && part.type === 'tool_call' ? { ...part, ...patch } : part
+  })
+}
+
+function makeContinuationMessages(taskId: string, parts: ContentPart[], stopReason: string, round: number): Message[] {
+  const assistant: Message = {
+    id: makeMessageId(),
+    taskId,
+    role: 'assistant',
+    content: parts,
+    createdAt: Date.now(),
+  }
+  const instruction: Message = {
+    id: makeMessageId(),
+    taskId,
+    role: 'system',
+    content: [{
+      type: 'text',
+      text: [
+        `Automatic continuation round ${round}.`,
+        `Previous attempt stopped because: ${stopReason}.`,
+        'Continue the same task from the existing project/file state.',
+        'Do not restart from scratch and do not repeat completed work.',
+        'Inspect files or run project.detect/search.ripgrep if needed, then complete the next smallest remaining step.',
+        'Before final reporting on a coding/design task, validate with project.validate or an equivalent command when available.',
+        'Final report must state changed files, validation result, and any unverified risk. If validation was not possible, say why.',
+      ].join('\n'),
+    }],
+    createdAt: Date.now(),
+  }
+  return [assistant, instruction]
+}
+
+function stopReasonText(stopReason: string): string {
+  if (stopReason === 'output_limit') return 'output token limit reached'
+  if (stopReason === 'server_disconnected') return 'model server disconnected'
+  if (stopReason === 'tool_loop_limit') return 'tool loop limit reached'
+  return stopReason
 }
 
 function ChatSessionBar({
@@ -531,113 +584,136 @@ export function ChatView() {
       activeTaskId: string,
     ) => {
       const id = makeStreamId()
-      setStreamId(id)
       setIsStreaming(true)
+      let currentSnapshot = conversationSnapshot
+      let accumulatedParts: ContentPart[] = []
+      let continuationRound = 0
 
       try {
-        const result = await sendChat({
-          conversation: conversationSnapshot,
-          settings: state.settings,
-          projectBrief,
-          folderPath: conversationSnapshot.folderPath,
-          streamId: id,
-          activeTaskId,
-          onStatus: ({ taskId, phase }) => {
-            if (taskId && taskId !== activeTaskId) return
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { runPhase: phase },
-            })
-          },
-          onDelta: delta => {
-            dispatch({
-              type: 'APPEND_DELTA',
-              conversationId,
-              messageId: placeholderId,
-              delta,
-            })
-          },
-          onReasoningDelta: delta => {
-            dispatch({
-              type: 'APPEND_REASONING_DELTA',
-              conversationId,
-              messageId: placeholderId,
-              delta,
-            })
-          },
-          onPart: ({ taskId, part }) => {
-            if (taskId && taskId !== activeTaskId) return
-            dispatch({
-              type: 'ADD_PART',
-              conversationId,
-              messageId: placeholderId,
-              part: part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? activeTaskId } : part,
-            })
-          },
-          onPartUpdate: ({ taskId, partIndex, partId, patch }) => {
-            if (taskId && taskId !== activeTaskId) return
-            dispatch({
-              type: 'UPDATE_PART',
-              conversationId,
-              messageId: placeholderId,
-              partIndex,
-              partId,
-              patch,
-            })
-          },
-        })
+        while (true) {
+          const streamId = continuationRound === 0 ? id : makeStreamId()
+          setStreamId(streamId)
+          const result = await sendChat({
+            conversation: currentSnapshot,
+            settings: state.settings,
+            projectBrief,
+            folderPath: currentSnapshot.folderPath,
+            streamId,
+            activeTaskId,
+            onStatus: ({ taskId, phase }) => {
+              if (taskId && taskId !== activeTaskId) return
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { runPhase: phase },
+              })
+            },
+            onDelta: delta => {
+              accumulatedParts = appendLocalDelta(accumulatedParts, delta)
+              dispatch({
+                type: 'APPEND_DELTA',
+                conversationId,
+                messageId: placeholderId,
+                delta,
+              })
+            },
+            onReasoningDelta: delta => {
+              dispatch({
+                type: 'APPEND_REASONING_DELTA',
+                conversationId,
+                messageId: placeholderId,
+                delta,
+              })
+            },
+            onPart: ({ taskId, part }) => {
+              if (taskId && taskId !== activeTaskId) return
+              const nextPart = part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? activeTaskId } : part
+              accumulatedParts = [...accumulatedParts, nextPart]
+              dispatch({
+                type: 'ADD_PART',
+                conversationId,
+                messageId: placeholderId,
+                part: nextPart,
+              })
+            },
+            onPartUpdate: ({ taskId, partIndex, partId, patch }) => {
+              if (taskId && taskId !== activeTaskId) return
+              accumulatedParts = updateLocalToolPart(accumulatedParts, partIndex, partId, patch)
+              dispatch({
+                type: 'UPDATE_PART',
+                conversationId,
+                messageId: placeholderId,
+                partIndex,
+                partId,
+                patch,
+              })
+            },
+          })
 
-        if (result.ok) {
-          if (result.detectedToolFormat !== 'none') {
-            const key = `${result.providerId}:${result.model}`
-            dispatch({
-              type: 'UPDATE_SETTINGS',
-              settings: {
-                ...state.settings,
-                modelToolFormatMap: {
-                  ...state.settings.modelToolFormatMap,
-                  [key]: result.detectedToolFormat,
+          if (result.ok) {
+            if (result.detectedToolFormat !== 'none') {
+              const key = `${result.providerId}:${result.model}`
+              dispatch({
+                type: 'UPDATE_SETTINGS',
+                settings: {
+                  ...state.settings,
+                  modelToolFormatMap: {
+                    ...state.settings.modelToolFormatMap,
+                    [key]: result.detectedToolFormat,
+                  },
                 },
-              },
-            })
-          }
-          if (result.stopReason) {
-            const error =
-              result.stopReason === 'output_limit'
-                ? 'Stopped: output token limit reached. Ava should continue from the current file state instead of treating this as complete.'
-                : result.stopReason === 'server_disconnected'
-                  ? 'Stopped: model server disconnected before the stream completed.'
-                  : 'Stopped: tool loop limit reached. Ava could not finish all tool rounds safely.'
+              })
+            }
+            if (result.stopReason) {
+              if (continuationRound < MAX_AUTO_CONTINUE_ROUNDS) {
+                continuationRound += 1
+                currentSnapshot = {
+                  ...conversationSnapshot,
+                  messages: [
+                    ...currentSnapshot.messages,
+                    ...makeContinuationMessages(activeTaskId, accumulatedParts, stopReasonText(result.stopReason), continuationRound),
+                  ],
+                }
+                continue
+              }
+
+              const error =
+                result.stopReason === 'output_limit'
+                  ? `Stopped: output token limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s). Ava preserved current file state but could not safely finish.`
+                  : result.stopReason === 'server_disconnected'
+                    ? `Stopped: model server disconnected after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
+                    : `Stopped: tool loop limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { streaming: false, error, runPhase: 'error' },
+              })
+              return
+            }
             dispatch({
               type: 'UPDATE_MESSAGE',
               conversationId,
               messageId: placeholderId,
-              patch: { streaming: false, error, runPhase: 'error' },
+              patch: { streaming: false, runPhase: 'completed' },
             })
-            return
+          } else if (result.error === 'aborted') {
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { streaming: false, aborted: true, runPhase: 'aborted' },
+            })
+          } else {
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { streaming: false, error: result.error, runPhase: 'error' },
+            })
           }
-          dispatch({
-            type: 'UPDATE_MESSAGE',
-            conversationId,
-            messageId: placeholderId,
-            patch: { streaming: false, runPhase: 'completed' },
-          })
-        } else if (result.error === 'aborted') {
-          dispatch({
-            type: 'UPDATE_MESSAGE',
-            conversationId,
-            messageId: placeholderId,
-            patch: { streaming: false, aborted: true, runPhase: 'aborted' },
-          })
-        } else {
-          dispatch({
-            type: 'UPDATE_MESSAGE',
-            conversationId,
-            messageId: placeholderId,
-            patch: { streaming: false, error: result.error, runPhase: 'error' },
-          })
+          break
         }
 
         // After the initial message, classification changes are suggestions.
