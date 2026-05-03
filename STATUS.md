@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-03 · Preview Console + Screenshot Tools_
+_Last updated: 2026-05-03 · Preview Tools E2E_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -178,6 +178,10 @@ _Last updated: 2026-05-03 · Preview Console + Screenshot Tools_
   - 新增 `preview.console`，用隐藏 Electron `BrowserWindow` 加载本地 URL 并收集 console warnings/errors、page load errors
   - 新增 `preview.screenshot`，将本地 URL 截图保存到项目内 PNG 路径，不把大图塞进 LLM 上下文
   - 两个工具都只允许本地 URL；screenshot 输出路径必须在 project/allowed dirs 内
+- [x] **Preview tools Electron E2E**：
+  - Playwright 启动真实 Electron app，并通过 `AVA_E2E=1` main-process hook 调用 built-in tools
+  - 覆盖 `preview.console` 捕获页面 `console.error`
+  - 覆盖 `preview.screenshot` 生成 PNG 文件并检查文件大小
 
 ---
 
@@ -354,7 +358,7 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 主线 P1–P17.3 已落地。后续候选：
 
 - **P16 Plugin Marketplace 远端 Catalog 完善**：现在的 catalog 是静态 JSON，缺签名 / 版本兼容性 / 评分。
-- **Preview tool E2E**：当前 smoke test 在 Node 环境验证参数/边界；还需要 Electron E2E 覆盖真实 `preview.console / preview.screenshot` 截图流程。
+- **Preview runtime polish**：后续可增加 `preview.accessibility`、截图缩略图 UI、以及失败截图自动附加到最终报告。
 - **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call / auto-continue 流程缺自动化覆盖。
 - **Auto-update GitHub Release 流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
 

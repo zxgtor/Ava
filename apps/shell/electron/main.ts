@@ -23,6 +23,7 @@ import {
 import { mcpSupervisor, type McpServerConfig } from './services/mcpSupervisor'
 import { pluginManager, type PluginState } from './services/pluginManager'
 import { toolAuditLog } from './services/toolAuditLog'
+import { builtInTools } from './services/builtInTools'
 import { applyWin11RoundedCorners } from './services/dwmCorners'
 
 const execAsync = promisify(exec)
@@ -162,6 +163,12 @@ function createMainWindow(): void {
 }
 
 function registerIpc(): void {
+  if (process.env.AVA_E2E === '1') {
+    ;(globalThis as typeof globalThis & {
+      __avaBuiltInTools?: typeof builtInTools
+    }).__avaBuiltInTools = builtInTools
+  }
+
   // ── smoke test ──────────────────────────────
   ipcMain.handle('ava:ping', () => 'pong')
   ipcMain.handle('ava:paths:userData', () => getUserDataPath())
