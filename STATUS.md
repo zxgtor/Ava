@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-02 · P17 Auto-Continue + Built-in Agent Tools_
+_Last updated: 2026-05-03 · Built-in Tools Smoke Test + Status Cleanup_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -163,6 +163,12 @@ _Last updated: 2026-05-02 · P17 Auto-Continue + Built-in Agent Tools_
   - 自动续跑使用隐藏 system message，要求从当前文件状态继续，不重启、不重复已完成工作
   - 达到自动续跑上限才显示错误，并保留当前文件状态
   - coding/design 最终报告必须说明改动、验证结果、剩余风险；未验证/失败/中断时不能声称完成
+- [x] **Built-in tools smoke test**：
+  - 新增 `npm run test:builtins`，直接 smoke-test `builtInTools.ts`
+  - 覆盖 `file.create_dir/read_text/write_text/list_dir/stat/patch`
+  - 覆盖 `project.detect/project.validate/search.ripgrep/shell.run_command/git.status`
+  - 修复 Windows `.cmd` shim 执行方式，避免 `spawn EINVAL`
+  - 修复 `search.ripgrep` 非交互模式等待 stdin 的问题，显式搜索 `.`
 
 ---
 
@@ -334,28 +340,14 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ---
 
-## P1.5 进度
-
-| 项目 | 状态 | 备注 |
-|---|---|---|
-| Markdown 渲染 | ✅ 已做 | `MarkdownContent.tsx` — react-markdown + remark-gfm + rehype-highlight |
-| 会话列表侧边栏 | ✅ 已做 | `ConversationSidebar.tsx` — updatedAt 倒序 + 选中/重命名/删除 |
-| Anthropic adapter | ✅ 已做 | `electron/llm.ts` `streamAnthropic` + `anthropicMessagesEndpoint` |
-| 流式中断反馈 | ⏸ 未做 | 中断后消息标 `aborted: true`，气泡给灰色边（1h） |
-| 失败消息重试 | ⏸ 未做 | error 气泡右下加"重试"按钮（2h） |
-| 持久化迁移 / 版本号 | ⏳ P2 一起做 | P2 会 bump settings.version 1→2 并清旧数据，顺便把迁移机制加进去 |
-| ChatHeader 搜索框 | ⏸ 延后 | 延到 P4 或之后 |
-
----
-
 ## 下一步 — 后续候选
 
-主线 P1–P15 已落地（P12 跳号）。后续候选：
+主线 P1–P17.3 已落地。后续候选：
 
 - **P16 Plugin Marketplace 远端 Catalog 完善**：现在的 catalog 是静态 JSON，缺签名 / 版本兼容性 / 评分。
-- **MCP HTTP/SSE server 支持**：当前只支持 stdio；P3 已知问题里登记的 `http` / `sse` 还是 unsupported。
-- **Theme 主题完工**：当前 commit 是 UI overhaul 第一波，`cyber-zen` 主题视觉是否定稿待确认。
-- **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call 流程缺自动化覆盖。
+- **Dev server tools**：`devserver.start / stop / status`，管理长期运行的 Vite/Next dev server，不用 `shell.run_command` 挂住。
+- **Preview tools**：`preview.open / console / screenshot`，让 Ava 能打开页面、读取 console error、获得视觉反馈。
+- **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call / auto-continue 流程缺自动化覆盖。
 - **Auto-update GitHub Release 流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
 
 ---

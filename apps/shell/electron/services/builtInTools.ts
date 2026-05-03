@@ -491,7 +491,7 @@ class BuiltInTools {
     if (typeof rawArgs.glob === 'string' && rawArgs.glob.trim()) {
       args.push('--glob', rawArgs.glob.trim())
     }
-    args.push(query)
+    args.push(query, '.')
 
     const result = await this.runCommand({
       command: 'rg',
@@ -570,12 +570,13 @@ class BuiltInTools {
       let truncated = false
       let settled = false
 
-      const child = spawn(resolveCommand(args.command), args.args, {
+      const resolvedCommand = resolveCommand(args.command)
+      const spawnTarget = spawnTargetForCommand(resolvedCommand, args.args)
+      const child = spawn(spawnTarget.command, spawnTarget.args, {
         cwd: resolvePath(args.cwd),
         shell: false,
         windowsHide: true,
         env: process.env,
-        signal: controller.signal,
       })
       const active: ActiveProcess = { child, controller }
       this.active.add(active)
@@ -833,6 +834,21 @@ function resolveCommand(command: string): string {
   if (name.endsWith('.exe') || name.endsWith('.cmd')) return command
   if (['npm', 'npx', 'pnpm', 'yarn'].includes(name)) return `${command}.cmd`
   return command
+}
+
+function spawnTargetForCommand(command: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform !== 'win32') return { command, args }
+  const name = normalizeCommandName(command)
+  if (!name.endsWith('.cmd') && !name.endsWith('.bat')) return { command, args }
+  return {
+    command: 'cmd.exe',
+    args: ['/d', '/s', '/c', [command, ...args.map(quoteWindowsCmdArg)].join(' ')],
+  }
+}
+
+function quoteWindowsCmdArg(value: string): string {
+  if (!/\s/.test(value)) return value
+  return `"${value.replace(/"/g, '\\"')}"`
 }
 
 function clampTimeout(timeoutMs?: number): number {

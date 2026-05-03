@@ -13,6 +13,7 @@
     "build": "npm run build --workspace=@ava/shell",
     "start": "npm run start --workspace=@ava/shell",
     "typecheck": "npm run typecheck --workspace=@ava/shell",
+    "test:builtins": "node scripts/smoke-built-in-tools.js",
     "pack": "npm run pack --workspace=@ava/shell",
     "dist": "npm run dist --workspace=@ava/shell",
     "test:e2e": "playwright test"
