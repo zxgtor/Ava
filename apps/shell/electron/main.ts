@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 
 import { autoUpdater } from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 
 import {
@@ -27,6 +27,21 @@ import { applyWin11RoundedCorners } from './services/dwmCorners'
 
 const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
+
+function defaultProjectFileContent(fileName: string): string | null {
+  if (fileName === 'TASKS.md') {
+    return [
+      '# Tasks',
+      '',
+      '- [ ] Initial Research',
+      '- [ ] Brainstorming',
+      '- [ ] Draft Implementation',
+      '- [ ] Review & Refine',
+      '',
+    ].join('\n')
+  }
+  return null
+}
 
 let mainWindow: BrowserWindow | null = null
 let previewWindow: BrowserWindow | null = null
@@ -273,7 +288,19 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('ava:fs:readFile', async (_e, path: string) => {
-    return fs.readFile(path, 'utf8')
+    try {
+      return await fs.readFile(path, 'utf8')
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err ? (err as { code?: unknown }).code : undefined
+      if (code === 'ENOENT') {
+        const defaultContent = defaultProjectFileContent(basename(path))
+        if (defaultContent !== null) {
+          await fs.writeFile(path, defaultContent, 'utf8')
+          return defaultContent
+        }
+      }
+      throw err
+    }
   })
 
   ipcMain.handle('ava:fs:listDir', async (_e, path: string) => {

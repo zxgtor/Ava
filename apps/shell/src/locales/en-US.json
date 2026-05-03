@@ -172,6 +172,12 @@
     "editing_resend": "Editing previous message. Send to regenerate from here.",
     "cancel": "Cancel",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "move_to_trait": "Looks like {{trait}}",
+    "move": "Move",
+    "dismiss": "Dismiss",
+    "context_window": "Context window:",
+    "context_full": "{{percent}}% full",
+    "context_compacts": "Ava automatically compacts its context"
   }
 }

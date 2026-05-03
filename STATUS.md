@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-02 · Chat Pipeline Refactor + Thinking Model UI_
+_Last updated: 2026-05-02 · P17 Task Intake + Context Budget UX_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -127,8 +127,25 @@ _Last updated: 2026-05-02 · Chat Pipeline Refactor + Thinking Model UI_
   - **架构固化**：Project Context (brief/folder) 和 Traits 注入逻辑从 `ChatView.tsx` 彻底移入 `chat.ts` 的 `conversationToLlmMessages`
   - **推理模型支持**：`reasoning_content` 全链路打通 (Adapter → IPC → Store)；新增 `ThinkingBlock` 组件，支持毫秒级计时与自动折叠
   - **Trait-Aware Prompts**：支持 `code / design / business / idea / video / mastery` 6 种模式，自动注入差异化 System Prompt 并调整 Temperature
-  - **Token Budget**：实现 6000 tokens 历史上下文预算，带 CJK 字符加权估算 (~1 token/char)
+  - **Trait-Aware Context Budget**：上下文预算按 session 类型动态调整：chat 6k、code 16k、design/business/video/idea/profile 8k、mastery 10k、intelligence/laboratory/forge 12k
   - **UI 增强**：工具调用气泡 (`CollapsibleToolCalls`) 增加计时器，与推理块统一视觉语言
+- [x] **P17.0 Task Intake（任务理解确认）**：
+  - coding / 文件修改 / 多步骤任务会先生成“理解确认”消息，用户回复「确认」或「开始」后才执行
+  - 编辑上一条用户请求后也会重新走 Task Intake，避免直接生成代码
+  - 确认后复用原始用户消息执行，不重复插入用户请求
+  - 如果用户补充修正而不是确认，会取消 pending intake 并按新请求处理
+- [x] **Context Window Indicator**：
+  - 输入框右侧显示 Codex 风格 context percent 圆环
+  - hover 显示 context window 百分比、used/budget tokens，以及自动压缩说明
+  - 圆环和实际 compaction 使用同一套 trait-aware budget
+- [x] **Session UX fixes**：
+  - Session actions 的 Rename 改为顶部标题内联编辑，修复 popup 内 rename 不工作
+  - 隐藏未实现菜单项：Open side chat / Fork / Add automation / Mini window
+  - 会话类型变化不再自动移动，改为 title 旁显示 “Looks like X · Move” 建议，用户确认后才移动
+  - 左侧栏恢复单组展开行为；窗口按钮 hover 区域对齐顶部栏高度
+  - assistant 回复 hover 显示 copy 按钮，消息时间改为 hover 才显示
+- [x] **Project file bootstrap**：
+  - `ava:fs:readFile` 读取缺失的 `TASKS.md` 时自动创建默认任务清单，避免 ENOENT 打断项目状态同步
 
 ---
 

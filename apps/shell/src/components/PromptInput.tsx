@@ -6,6 +6,7 @@ import {
   ShieldCheck, Wrench, FileSearch, PenLine, ListChecks,
 } from 'lucide-react'
 import type { CommandInvocation, PluginCommand } from '../types'
+import type { ContextUsageEstimate } from '../lib/agent/chat'
 
 interface Props {
   onSend: (content: string, attachments?: string[], commandInvocation?: CommandInvocation) => void
@@ -21,6 +22,7 @@ interface Props {
   onSttToggle?: () => void
   sttText?: string
   externalDroppedFiles?: File[]
+  contextUsage?: ContextUsageEstimate
   editDraft?: { id: string; text: string }
   onCancelEditDraft?: () => void
 }
@@ -56,6 +58,61 @@ function getCommandSourceLabel(command: PluginCommand) {
   return command.bundled || command.sourceKind === 'bundled' ? 'Default' : 'User'
 }
 
+function formatCompactTokens(tokens: number): string {
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}k`
+  return String(tokens)
+}
+
+function ContextMeter({ usage }: { usage?: ContextUsageEstimate }) {
+  const { t } = useTranslation()
+  if (!usage) return null
+  const radius = 7
+  const circumference = 2 * Math.PI * radius
+  const progress = Math.min(100, Math.max(0, usage.percent))
+  const offset = circumference * (1 - progress / 100)
+  const color =
+    progress >= 90 ? 'text-error' :
+      progress >= 70 ? 'text-warning' :
+        'text-text-3'
+
+  return (
+    <div className="group/context relative flex shrink-0 items-center">
+      <button
+        type="button"
+        className={`flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs transition-colors hover:bg-white/[0.06] ${color}`}
+        aria-label={`Context window ${usage.percent}% full`}
+      >
+        <svg width="18" height="18" viewBox="0 0 18 18">
+          <circle cx="9" cy="9" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2" />
+          <circle
+            cx="9"
+            cy="9"
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            transform="rotate(-90 9 9)"
+          />
+        </svg>
+        <span>{usage.percent}%</span>
+      </button>
+      <div className="pointer-events-none absolute bottom-9 right-0 z-[80] hidden w-44 rounded-lg border border-white/10 bg-[#2b2b2d] px-3 py-2 text-center text-[11px] text-text-2 shadow-[0_18px_45px_rgba(0,0,0,0.55)] group-hover/context:block">
+        <div>{t('chat.context_window', 'Context window:')}</div>
+        <div>{t('chat.context_full', '{{percent}}% full', { percent: usage.percent })}</div>
+        <div className="mt-1 font-semibold text-text">
+          {formatCompactTokens(usage.usedTokens)} / {formatCompactTokens(usage.budgetTokens)} tokens used
+        </div>
+        <div className="mt-2 font-semibold text-text">
+          {t('chat.context_compacts', 'Ava automatically compacts its context')}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function PromptInput({
   onSend,
   onStop,
@@ -70,6 +127,7 @@ export function PromptInput({
   onSttToggle,
   sttText,
   externalDroppedFiles,
+  contextUsage,
   editDraft,
   onCancelEditDraft,
 }: Props) {
@@ -479,6 +537,7 @@ export function PromptInput({
           rows={1}
           className="flex-1 bg-transparent resize-none outline-none text-sm text-text placeholder-text-3 py-2 px-1 max-h-[220px] overflow-hidden hide-scrollbar"
         />
+        <ContextMeter usage={contextUsage} />
         {isStreaming ? (
           <button
             type="button"

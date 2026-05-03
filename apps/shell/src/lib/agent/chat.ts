@@ -11,7 +11,7 @@ export function partsToText(parts: ContentPart[]): string {
 }
 
 /** Rough token estimate: ~4 chars per token for English, ~2 for CJK. */
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   // Count CJK characters (they use ~1 token each instead of ~0.25)
   const cjk = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length
   const rest = text.length - cjk
@@ -186,13 +186,24 @@ interface LlmMessage {
   toolCallId?: string
 }
 
-/**
- * Default context budget: 6000 tokens.
- * This is conservative for local 7B models (typically 4K-8K context).
- * Cloud models can handle much more, but keeping it tight reduces cost and latency.
- * The budget does NOT include the latest user message or system prompts — those are always included.
- */
-const DEFAULT_CONTEXT_BUDGET = 6000
+const CONTEXT_BUDGET_BY_TRAIT: Record<string, number> = {
+  chat: 6000,
+  code: 16000,
+  design: 8000,
+  business: 8000,
+  video: 8000,
+  mastery: 10000,
+  intelligence: 12000,
+  laboratory: 12000,
+  forge: 12000,
+  idea: 8000,
+  profile: 8000,
+}
+
+export function contextBudgetForTraits(traits?: string[]): number {
+  const trait = traits?.[0] || 'chat'
+  return CONTEXT_BUDGET_BY_TRAIT[trait] ?? CONTEXT_BUDGET_BY_TRAIT.chat
+}
 
 function conversationToLlmMessages(
   conversation: Conversation,
@@ -256,7 +267,8 @@ function conversationToLlmMessages(
   // ── 3. Build history messages within the token budget ──
   const mandatoryTokens = mandatory.reduce((sum, m) => sum + estimateMessageTokens(m), 0)
   const activeTokens = activeMessages.reduce((sum, m) => sum + estimateMessageTokens(m), 0)
-  let remainingBudget = DEFAULT_CONTEXT_BUDGET - mandatoryTokens - activeTokens
+  const contextBudget = contextBudgetForTraits(conversation.traits)
+  let remainingBudget = contextBudget - mandatoryTokens - activeTokens
 
   const historyMessages: LlmMessage[] = []
 
@@ -322,6 +334,30 @@ function conversationToLlmMessages(
   }
 
   return [...mandatory, ...historyMessages, ...activeMessages]
+}
+
+export interface ContextUsageEstimate {
+  usedTokens: number
+  budgetTokens: number
+  percent: number
+  messageCount: number
+}
+
+export function estimateContextUsage(
+  conversation: Conversation,
+  settings: Settings,
+  projectBrief?: ProjectBrief,
+  folderPath?: string,
+): ContextUsageEstimate {
+  const messages = conversationToLlmMessages(conversation, settings, projectBrief, folderPath)
+  const usedTokens = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)
+  const budgetTokens = contextBudgetForTraits(conversation.traits)
+  return {
+    usedTokens,
+    budgetTokens,
+    percent: Math.min(100, Math.round((usedTokens / budgetTokens) * 100)),
+    messageCount: conversation.messages.length,
+  }
 }
 
 // ── Public API ──────────────────────────────────────────────────────

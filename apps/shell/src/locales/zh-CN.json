@@ -172,6 +172,12 @@
     "editing_resend": "正在编辑上一条消息。发送后会从这里重新生成。",
     "cancel": "取消",
     "copy": "复制",
-    "copied": "已复制"
+    "copied": "已复制",
+    "move_to_trait": "看起来像 {{trait}}",
+    "move": "移动",
+    "dismiss": "忽略",
+    "context_window": "上下文窗口：",
+    "context_full": "已使用 {{percent}}%",
+    "context_compacts": "Ava 会自动压缩上下文"
   }
 }

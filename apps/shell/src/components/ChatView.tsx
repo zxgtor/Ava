@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { useTranslation } from 'react-i18next'
 import {
   Upload, FolderOpen, Terminal, Code, LayoutPanelLeft, MoreHorizontal,
-  FolderPlus, Archive, Trash2, X, Pin, Edit2, Copy, PanelRightOpen,
-  GitFork, Clock3, MonitorUp, HardDrive, FileText,
+  FolderPlus, Archive, Trash2, X, Pin, Edit2, Copy,
+  HardDrive, FileText,
 } from 'lucide-react'
 import { useStore } from '../store'
 import { EmptyState } from './EmptyState'
@@ -15,12 +15,13 @@ import {
   makeTaskId,
   makeUserMessage,
   partsToText,
+  estimateContextUsage,
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
-import type { CommandInvocation, ContentPart, Conversation, PluginCommand } from '../types'
+import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, PluginCommand } from '../types'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -37,19 +38,63 @@ function lastStreamingAssistant(conversation: Conversation): string | null {
   return null
 }
 
+interface PendingTaskIntake {
+  conversationId: string
+  taskId: string
+  content: string
+  attachments: string[]
+  commandInvocation?: CommandInvocation
+}
+
+const TASK_INTAKE_INTENT_RE = /\b(build|create|make|generate|implement|fix|debug|refactor|modify|update|edit|write|add|remove|delete|site|app|component|page|feature|bug|code|html|css|javascript|typescript|react|three\.?js|3d)\b|创建|生成|实现|修复|调试|重构|修改|更新|添加|删除|网站|应用|组件|页面|功能|代码|三维|3d/i
+const CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run|执行|开始|继续|确认|可以|好的|好|没问题|就这样)\b/i
+
+function shouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
+  if (commandInvocation) return true
+  return TASK_INTAKE_INTENT_RE.test(content)
+}
+
+function isTaskConfirmation(content: string): boolean {
+  return CONFIRM_TASK_RE.test(content.trim())
+}
+
+function makeTaskIntakeText(content: string, conversation: Conversation): string {
+  const folder = conversation.folderPath || '(未关联工作目录)'
+  const firstLine = content.trim().split('\n')[0]
+  return [
+    '我先确认一下我的理解：',
+    '',
+    `目标：${firstLine.length > 160 ? `${firstLine.slice(0, 160)}…` : firstLine}`,
+    `工作目录：${folder}`,
+    '',
+    '我会先整理任务边界，再优先写入/修改文件，避免在聊天里一次性输出大段代码。完成前会检查文件状态，不能确认完成时不会给最终报告。',
+    '',
+    '如果理解正确，请回复「确认」或「开始」。如果有误，请直接补充修正。',
+  ].join('\n')
+}
+
 function ChatSessionBar({
   conversation,
+  suggestedTrait,
+  onAcceptTraitSuggestion,
+  onDismissTraitSuggestion,
   onOpenPreview,
   onDelete,
 }: {
   conversation: Conversation | null
+  suggestedTrait?: InitiativeTrait
+  onAcceptTraitSuggestion?: () => void
+  onDismissTraitSuggestion?: () => void
   onOpenPreview: () => void
   onDelete?: () => void
 }) {
   const { t } = useTranslation()
   const { dispatch } = useStore()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [renameTitle, setRenameTitle] = useState('')
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const renameInputRef = useRef<HTMLInputElement | null>(null)
   const folderPath = conversation?.folderPath
   const title = conversation?.title || t('sidebar.new_chat', 'New session')
   const primaryTrait = conversation?.traits?.[0] || 'chat'
@@ -80,13 +125,18 @@ function ChatSessionBar({
     await copyText(markdown)
   }
 
-  const handleRename = () => {
+  const startRename = () => {
     if (!conversation) return
-    const nextTitle = window.prompt(t('sidebar.rename', 'Rename'), conversation.title)
-    if (nextTitle?.trim()) {
-      dispatch({ type: 'RENAME_CONVERSATION', id: conversation.id, title: nextTitle.trim() })
-    }
+    setRenameTitle(conversation.title)
+    setRenaming(true)
     setMenuOpen(false)
+  }
+
+  const saveRename = () => {
+    if (conversation && renameTitle.trim()) {
+      dispatch({ type: 'RENAME_CONVERSATION', id: conversation.id, title: renameTitle.trim() })
+    }
+    setRenaming(false)
   }
 
   const handlePin = () => {
@@ -104,6 +154,12 @@ function ChatSessionBar({
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  useEffect(() => {
+    if (!renaming) return
+    renameInputRef.current?.focus()
+    renameInputRef.current?.select()
+  }, [renaming])
 
   const handleLinkFolder = async () => {
     if (!conversation) return
@@ -129,7 +185,41 @@ function ChatSessionBar({
   return (
     <div className="relative z-50 flex h-10 shrink-0 items-center justify-between bg-bg/20 px-4 backdrop-blur-xl">
       <div className="flex min-w-0 items-center gap-1.5">
-        <div className="truncate text-[13px] font-semibold text-text">{title}</div>
+        {renaming ? (
+          <input
+            ref={renameInputRef}
+            value={renameTitle}
+            onChange={e => setRenameTitle(e.target.value)}
+            onBlur={saveRename}
+            onKeyDown={e => {
+              if (e.key === 'Enter') saveRename()
+              if (e.key === 'Escape') setRenaming(false)
+            }}
+            className="min-w-0 rounded-md border border-accent/40 bg-black/30 px-2 py-1 text-[13px] font-semibold text-text outline-none"
+          />
+        ) : (
+          <div className="truncate text-[13px] font-semibold text-text">{title}</div>
+        )}
+        {suggestedTrait && (
+          <div className="ml-1 flex shrink-0 items-center gap-1 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-[11px] text-accent">
+            <span>{t('chat.move_to_trait', 'Looks like {{trait}}', { trait: t(`traits.${suggestedTrait}`, suggestedTrait) })}</span>
+            <button
+              type="button"
+              onClick={onAcceptTraitSuggestion}
+              className="rounded px-1 font-medium hover:bg-accent/15"
+            >
+              {t('chat.move', 'Move')}
+            </button>
+            <button
+              type="button"
+              onClick={onDismissTraitSuggestion}
+              className="rounded px-1 text-text-3 hover:bg-white/10 hover:text-text"
+              aria-label={t('chat.dismiss', 'Dismiss')}
+            >
+              ×
+            </button>
+          </div>
+        )}
         {conversation && (
           <div className="relative shrink-0" ref={menuRef}>
             <button
@@ -148,7 +238,15 @@ function ChatSessionBar({
                   <span>{conversation.pinned ? t('sidebar.unpin', 'Unpin chat') : t('sidebar.pin', 'Pin chat')}</span>
                   <span className="ava-menu-shortcut">Ctrl+Alt+P</span>
                 </button>
-                <button onClick={handleRename} className="ava-menu-item">
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    startRename()
+                  }}
+                  className="ava-menu-item"
+                >
                   <Edit2 size={13} className="text-text-3" />
                   <span>{t('sidebar.rename', 'Rename chat')}</span>
                   <span className="ava-menu-shortcut">Ctrl+Alt+R</span>
@@ -187,25 +285,6 @@ function ChatSessionBar({
 
                 <div className="ava-menu-separator" />
 
-                <button disabled className="ava-menu-item ava-menu-item-disabled">
-                  <PanelRightOpen size={13} className="text-text-3" />
-                  <span>Open side chat</span>
-                </button>
-                <button disabled className="ava-menu-item ava-menu-item-disabled">
-                  <GitFork size={13} className="text-text-3" />
-                  <span>Fork into local</span>
-                </button>
-                <button disabled className="ava-menu-item ava-menu-item-disabled">
-                  <GitFork size={13} className="text-text-3" />
-                  <span>Fork into new worktree</span>
-                </button>
-                <button disabled className="ava-menu-item ava-menu-item-disabled">
-                  <Clock3 size={13} className="text-text-3" />
-                  <span>Add automation...</span>
-                </button>
-
-                <div className="ava-menu-separator" />
-
                 {folderPath ? (
                   <button onClick={handleUnlinkFolder} className="ava-menu-item">
                     <X size={13} className="text-text-3" />
@@ -217,10 +296,6 @@ function ChatSessionBar({
                     <span>{t('sidebar.link_folder', 'Link folder')}</span>
                   </button>
                 )}
-                <button disabled className="ava-menu-item ava-menu-item-disabled">
-                  <MonitorUp size={13} className="text-text-3" />
-                  <span>Open in mini window</span>
-                </button>
                 {onDelete && (
                   <button onClick={onDelete} className="ava-menu-item">
                     <Trash2 size={13} />
@@ -289,6 +364,9 @@ export function ChatView() {
   const [isDragging, setIsDragging] = useState(false)
   const [droppedFiles, setDroppedFiles] = useState<File[]>([])
   const [editDraft, setEditDraft] = useState<{ messageId: string; text: string } | null>(null)
+  const [traitSuggestion, setTraitSuggestion] = useState<{ conversationId: string; trait: InitiativeTrait } | null>(null)
+  const [dismissedTraitSuggestions, setDismissedTraitSuggestions] = useState<Record<string, InitiativeTrait>>({})
+  const [pendingTaskIntake, setPendingTaskIntake] = useState<PendingTaskIntake | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const hasProvider = useMemo(
@@ -298,6 +376,16 @@ export function ChatView() {
 
   const userInitial = (state.settings.persona.userName || 'U').slice(0, 1).toUpperCase()
   const assistantInitial = (state.settings.persona.assistantName || 'A').slice(0, 1).toUpperCase()
+  const projectBrief = state.projectBriefs[activeConversation?.id ?? '']
+  const contextUsage = useMemo(() => {
+    if (!activeConversation) return undefined
+    return estimateContextUsage(
+      activeConversation,
+      state.settings,
+      projectBrief,
+      activeConversation.folderPath,
+    )
+  }, [activeConversation, projectBrief, state.settings])
 
   const refreshCommands = useCallback(async () => {
     setCommandsLoading(true)
@@ -317,6 +405,8 @@ export function ChatView() {
 
   useEffect(() => {
     setEditDraft(null)
+    setTraitSuggestion(null)
+    setPendingTaskIntake(null)
   }, [activeConversation?.id])
 
   // Auto-scroll on new messages / streaming
@@ -325,9 +415,6 @@ export function ChatView() {
     if (!el) return
     el.scrollTop = el.scrollHeight
   }, [activeConversation?.messages, isStreaming])
-
-  // Project Status & Context (Level 3)
-  const projectBrief = state.projectBriefs[activeConversation?.id ?? '']
 
   const syncProjectContext = useCallback(async () => {
     if (!activeConversation) return
@@ -538,14 +625,21 @@ export function ChatView() {
           })
         }
 
-        // 🟢 流結束後，如果當前還是通用聊天狀態，則嘗試根據最新內容升級特性
-        const currentTraits = activeConversation?.traits || ['chat']
-        if (currentTraits.length === 0 || currentTraits[0] === 'chat') {
+        // After the initial message, classification changes are suggestions.
+        // Category is user-owned organization, so never move sessions silently.
+        const currentTraits = conversationSnapshot.traits || ['chat']
+        if (conversationSnapshot.messages.length > 1) {
           const lastMsg = conversationSnapshot.messages[conversationSnapshot.messages.length - 1]
           const combinedText = partsToText(lastMsg.content)
           const newTraits = detectTraitsFromText(combinedText)
-          if (newTraits.length > 0 && newTraits[0] !== 'chat') {
-            dispatch({ type: 'SET_TRAITS', id: conversationId, traits: newTraits })
+          const suggested = newTraits[0] as InitiativeTrait | undefined
+          if (
+            suggested &&
+            suggested !== 'chat' &&
+            suggested !== currentTraits[0] &&
+            dismissedTraitSuggestions[conversationId] !== suggested
+          ) {
+            setTraitSuggestion({ conversationId, trait: suggested })
           }
         }
 
@@ -571,7 +665,7 @@ export function ChatView() {
         setStreamId(null)
       }
     },
-    [dispatch, state.settings],
+    [dismissedTraitSuggestions, dispatch, state.settings],
   )
 
   const runSend = useCallback(
@@ -633,8 +727,35 @@ export function ChatView() {
 
       const taskId = makeTaskId()
       const editedUser = makeUserMessage(nextText, original.commandInvocation, taskId, attachments)
-      const placeholder = makeAssistantPlaceholder(taskId)
       const conversationId = conversation.id
+
+      if (shouldRequireTaskIntake(nextText, original.commandInvocation)) {
+        const intakeMsg = makeAssistantPlaceholder(taskId)
+        dispatch({
+          type: 'REPLACE_MESSAGES_FROM',
+          conversationId,
+          fromMessageId: messageId,
+          messages: [
+            editedUser,
+            {
+              ...intakeMsg,
+              content: [{ type: 'text', text: makeTaskIntakeText(nextText, conversation) }],
+              streaming: false,
+              runPhase: 'completed',
+            },
+          ],
+        })
+        setPendingTaskIntake({
+          conversationId,
+          taskId,
+          content: nextText,
+          attachments,
+          commandInvocation: original.commandInvocation,
+        })
+        return
+      }
+
+      const placeholder = makeAssistantPlaceholder(taskId)
 
       dispatch({
         type: 'REPLACE_MESSAGES_FROM',
@@ -670,9 +791,81 @@ export function ChatView() {
         runEditedResend(editDraft.messageId, content, attachments ?? [], activeConversation)
         return
       }
+
+      if (
+        pendingTaskIntake &&
+        pendingTaskIntake.conversationId === conversation.id &&
+        isTaskConfirmation(content)
+      ) {
+        const pending = pendingTaskIntake
+        const placeholder = makeAssistantPlaceholder(pending.taskId)
+        const confirmationContext = {
+          id: `ctx_${pending.taskId}_confirmed`,
+          taskId: pending.taskId,
+          role: 'system' as const,
+          content: [{ type: 'text' as const, text: 'User confirmed the task intake. Execute the original request now.' }],
+          createdAt: Date.now(),
+        }
+        setPendingTaskIntake(null)
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        driveStream(
+          { ...conversation, messages: [...conversation.messages, confirmationContext] },
+          conversation.id,
+          placeholder.id,
+          pending.taskId,
+        )
+        return
+      }
+
+      if (!pendingTaskIntake && shouldRequireTaskIntake(content, commandInvocation)) {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const intakeMsg = makeAssistantPlaceholder(taskId)
+        const intakeText = makeTaskIntakeText(content, conversation)
+        const conversationId = conversation.id
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId, message: userMsg })
+        dispatch({
+          type: 'ADD_MESSAGE',
+          conversationId,
+          message: {
+            ...intakeMsg,
+            content: [{ type: 'text', text: intakeText }],
+            streaming: false,
+            runPhase: 'completed',
+          },
+        })
+
+        if (conversation.messages.length === 0) {
+          const title = content.length > 30 ? `${content.slice(0, 30)}…` : content
+          dispatch({ type: 'RENAME_CONVERSATION', id: conversationId, title })
+          const initialTraits = detectTraitsFromText(content)
+          if (initialTraits.length > 0 && initialTraits[0] !== 'chat') {
+            dispatch({ type: 'SET_TRAITS', id: conversationId, traits: initialTraits })
+          }
+        }
+
+        setPendingTaskIntake({
+          conversationId,
+          taskId,
+          content,
+          attachments: attachments ?? [],
+          commandInvocation,
+        })
+        return
+      }
+
+      if (
+        pendingTaskIntake &&
+        pendingTaskIntake.conversationId === conversation.id &&
+        !isTaskConfirmation(content)
+      ) {
+        setPendingTaskIntake(null)
+      }
+
       runSend(content, attachments ?? [], conversation, commandInvocation)
     },
-    [activeConversation, createConversation, editDraft, runEditedResend, runSend],
+    [activeConversation, createConversation, dispatch, driveStream, editDraft, pendingTaskIntake, runEditedResend, runSend],
   )
 
   const handleStop = useCallback(() => {
@@ -734,6 +927,22 @@ export function ChatView() {
   const handleToggleSidebar = useCallback(() => {
     dispatch({ type: 'SET_SIDEBAR', open: !state.sidebarOpen })
   }, [dispatch, state.sidebarOpen])
+
+  const activeTraitSuggestion = traitSuggestion && traitSuggestion.conversationId === activeConversation?.id
+    ? traitSuggestion.trait
+    : undefined
+
+  const acceptTraitSuggestion = useCallback(() => {
+    if (!activeConversation || !activeTraitSuggestion) return
+    dispatch({ type: 'SET_TRAITS', id: activeConversation.id, traits: [activeTraitSuggestion] })
+    setTraitSuggestion(null)
+  }, [activeConversation, activeTraitSuggestion, dispatch])
+
+  const dismissTraitSuggestion = useCallback(() => {
+    if (!activeConversation || !activeTraitSuggestion) return
+    setDismissedTraitSuggestions(prev => ({ ...prev, [activeConversation.id]: activeTraitSuggestion }))
+    setTraitSuggestion(null)
+  }, [activeConversation, activeTraitSuggestion])
 
   const handleDragOver = (e: DragEvent) => {
     e.preventDefault()
@@ -845,6 +1054,9 @@ export function ChatView() {
     >
       <ChatSessionBar
         conversation={activeConversation}
+        suggestedTrait={activeTraitSuggestion}
+        onAcceptTraitSuggestion={acceptTraitSuggestion}
+        onDismissTraitSuggestion={dismissTraitSuggestion}
         onOpenPreview={handleOpenPreview}
         onDelete={activeConversation ? handleDeleteConversation : undefined}
       />
@@ -916,6 +1128,7 @@ export function ChatView() {
           onSttToggle={toggleStt}
           sttText={sttText}
           externalDroppedFiles={droppedFiles}
+          contextUsage={contextUsage}
           editDraft={editDraft ? { id: editDraft.messageId, text: editDraft.text } : undefined}
           onCancelEditDraft={() => setEditDraft(null)}
         />
