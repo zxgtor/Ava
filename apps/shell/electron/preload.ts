@@ -89,7 +89,7 @@ interface StreamChatOk {
     toolCallsIssued: number
     loopRounds: number
     detectedToolFormat: 'openai' | 'hermes' | 'none'
-    stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected'
+    stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected' | 'raw_command_no_tool'
   }
 }
 

@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-03 · Preview Tools E2E_
+_Last updated: 2026-05-03 · Project Map + Local LLM Planning_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -182,6 +182,23 @@ _Last updated: 2026-05-03 · Preview Tools E2E_
   - Playwright 启动真实 Electron app，并通过 `AVA_E2E=1` main-process hook 调用 built-in tools
   - 覆盖 `preview.console` 捕获页面 `console.error`
   - 覆盖 `preview.screenshot` 生成 PNG 文件并检查文件大小
+- [x] **Local LLM small-step planning**：
+  - Task Intake 对 3D/site/app/large coding/design 请求生成小步执行计划和完成标准
+  - 确认执行后注入 plan system prompt，要求本地模型一次只推进最小下一步
+  - 大任务计划固定包含：project.map、依赖确认、分批写文件、devserver、preview.console、preview.screenshot、修复、project.validate、最终报告
+  - System/tool prompt 明确禁止把大型 app/site/3D 项目一次性输出成巨大聊天答案
+- [x] **Project map tool**：
+  - 新增 `project.map`，生成压缩项目图，不读取全项目内容
+  - 输出 tree summary、key files、entry/style/component/config candidates、ignored dirs、suggestedReads
+  - 默认排除 `.git/node_modules/dist/out/build/.next/coverage` 等大目录，限制深度和文件数量
+  - Prompt 改为陌生 codebase / 大任务先用 `project.map`，再按需读取相关文件
+- [x] **Raw command correction**：
+  - 如果模型在工具可用时只输出 `dir / npm / git / node ...` 这类裸命令，tool loop 不再当作完成
+  - 会自动追加纠正 system prompt，要求改用 `project.map / file.list_dir / shell.run_command / devserver.start`
+  - 工具回合先缓冲可见文本；确认不是裸命令后才显示，避免前端出现一行 `dir` 后停止
+  - 如果模型纠正后仍输出裸命令，Ava 显示 `raw_command_no_tool` 错误，不会静默完成
+  - `shell.run_command` 兼容 `dir/ls`，会安全转成目录读取；常见开发命令 allowlist 增加 `bun/deno/uv/pip/pytest`
+  - Tool prompt 示例优先展示 built-in `project.map`，避免本地模型误以为要直接打印 shell 命令
 
 ---
 

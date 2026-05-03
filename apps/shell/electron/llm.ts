@@ -98,7 +98,7 @@ export interface StreamChatResult {
   toolCallsIssued: number
   loopRounds: number
   detectedToolFormat: ToolCallFormat
-  stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected'
+  stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected' | 'raw_command_no_tool'
 }
 
 export interface ToolCallCandidate {
@@ -141,6 +141,8 @@ const REASONING_INTENT_RE =
   /\b(debug|diagnose|trace|root cause|why|architecture|architect|design|plan|strategy|refactor|migrate|compare|tradeoff|risk|review|analyze|complex|investigate|fix|implement)\b|为什么|原因|诊断|排查|调试|架构|设计|计划|方案|重构|迁移|比较|权衡|风险|审查|分析|复杂|调查|修复|实现/i
 const SIMPLE_CHAT_RE =
   /\b(what is|how to|do you know|explain|summarize|translate|tell me|can this|does this|support)\b|是什么|怎么|如何|解释|总结|翻译|支持吗|知道/i
+const RAW_COMMAND_ONLY_RE =
+  /^(?:dir|ls|npm|npx|pnpm|yarn|bun|bunx|node|git|python|python3|py|pip|pip3|pytest|rg|dotnet|vite|tsc|deno|uv|uvx|powershell|pwsh)(?:\s+[^\r\n]+)?$/i
 
 export function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
@@ -291,12 +293,48 @@ function withFinalizePrompt(messages: LlmMessage[]): LlmMessage[] {
   return [instruction, ...messages]
 }
 
+function looksLikeRawCommandInsteadOfTool(text: string): boolean {
+  const cleaned = text.trim().replace(/^```(?:\w+)?\s*|\s*```$/g, '').trim()
+  if (!cleaned || cleaned.length > 240 || cleaned.includes('\n\n')) return false
+  const lines = cleaned.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  return lines.length > 0 && lines.length <= 3 && lines.every(line => RAW_COMMAND_ONLY_RE.test(line))
+}
+
+function withToolCallCorrectionPrompt(messages: LlmMessage[], rawText: string): LlmMessage[] {
+  return [
+    ...messages,
+    {
+      role: 'assistant',
+      content: rawText,
+    },
+    {
+      role: 'system',
+      content: [
+        'The previous assistant output was a raw shell command or command-like text, not a tool call.',
+        'Do not print commands such as "dir" as plain text.',
+        'Call the appropriate available tool now.',
+        'For checking project structure, prefer project.map or file.list_dir.',
+        'For one-shot commands, use shell.run_command with structured command, args, and cwd.',
+        'For long-running dev servers, use devserver.start.',
+      ].join(' '),
+    },
+  ]
+}
+
+function rawCommandNoToolText(rawText: string): string {
+  const command = rawText.trim().split(/\r?\n/)[0]?.trim() || '(empty command)'
+  return `Stopped: the model output a raw command instead of calling a tool: ${command}. Ava did not execute it. Please retry; Ava will require a tool call such as project.map, file.list_dir, shell.run_command, or devserver.start.`
+}
+
 export function buildToolPrompt(tools: McpToolDescriptor[]): string {
   const toolLines = tools.map(tool => {
     const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema) : '{}'
     return `- ${tool.name}: ${tool.description ?? 'No description'} | args schema: ${schema}`
   })
-  const exampleTool = tools.find(tool => tool.name === 'filesystem.read_text_file')
+  const exampleTool = tools.find(tool => tool.name === 'project.map')
+    ?? tools.find(tool => tool.name === 'file.list_dir')
+    ?? tools.find(tool => tool.name === 'shell.run_command')
+    ?? tools.find(tool => tool.name === 'filesystem.read_text_file')
     ?? tools.find(tool => tool.name.startsWith('filesystem.') && /read/i.test(tool.name))
     ?? tools[0]
   const exampleName = exampleTool?.name ?? 'filesystem.read_text_file'
@@ -307,12 +345,15 @@ export function buildToolPrompt(tools: McpToolDescriptor[]): string {
     'For conceptual questions, instructions, or explanations, answer directly without a tool call.',
     'For file work, prefer built-in file.read_text, file.write_text, file.list_dir, file.create_dir, and file.stat when available.',
     'For focused edits to an existing file, prefer file.patch with exact oldText/newText before rewriting the whole file.',
-    'For codebase exploration, use search.ripgrep and project.detect before guessing project structure.',
+    'For codebase exploration, use project.map first for a compact project picture, then search.ripgrep/project.detect/read files as needed.',
     'Before claiming coding work is complete, use project.validate or an equivalent shell.run_command validation when available.',
     'For frontend or design preview work, use devserver.start/status/stop for long-running servers, preview.open for local URLs, preview.console for runtime errors, and preview.screenshot for visual feedback.',
     'Do not use shell.run_command for a long-running dev server because it blocks the agent loop.',
     'Use git.status and git.diff for read-only change review; do not commit or push unless the latest user request explicitly asks.',
     'For code-agent work that needs commands, use shell.run_command with {"command":"npm","args":["..."],"cwd":"..."}; never claim you ran a command unless the tool call succeeded.',
+    'For large local-model tasks, execute one small plan step at a time and use files, project.map/project.detect, devserver, preview, and validation tools as durable progress state.',
+    'Do not generate a whole app/site/3D project as one huge chat answer.',
+    'Never output a bare command like "dir", "npm install", or "npm run dev" as plain assistant text. Use a tool call instead.',
     'To call a tool, respond with exactly one or more blocks like:',
     `<tool_call>{"name":"${exampleName}","arguments":{"path":"D:\\\\example.txt"}}</tool_call>`,
     'Use tool names exactly as listed above.',
@@ -575,10 +616,12 @@ async function runToolLoop(
   let detectedToolFormat: ToolCallFormat = initialHint ?? 'none'
   let toolCallsIssued = 0
   let sawFirstToken = false
+  let rawCommandCorrectionIssued = false
 
   for (let round = 0; round < MAX_TOOL_LOOP; round += 1) {
     if (controller.signal.aborted) throw new Error('aborted')
     sendRunStatus(webContents, args, provider, model, round === 0 ? 'waiting_first_token' : 'generating')
+    let bufferedVisibleText = ''
 
     const stepMessages =
       effectiveInitialHint === 'hermes'
@@ -600,6 +643,10 @@ async function runToolLoop(
           sawFirstToken = true
           sendRunStatus(webContents, args, provider, model, 'generating')
         }
+        if (tools.length > 0) {
+          bufferedVisibleText += text
+          return
+        }
         if (!webContents.isDestroyed()) {
           webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
         }
@@ -617,13 +664,45 @@ async function runToolLoop(
       detectedToolFormat = 'none'
     }
 
+    const outputLimitReached = step.finishReason === 'length' || step.finishReason === 'max_tokens'
+    const serverDisconnected = step.finishReason === 'stream_disconnected'
+    const rawCommandOnly =
+      tools.length > 0 &&
+      step.toolCalls.length === 0 &&
+      Boolean(step.visibleText) &&
+      looksLikeRawCommandInsteadOfTool(step.visibleText)
+
+    if (rawCommandOnly) {
+      if (!rawCommandCorrectionIssued) {
+        rawCommandCorrectionIssued = true
+        workingMessages.splice(0, workingMessages.length, ...withToolCallCorrectionPrompt(workingMessages, step.visibleText))
+        continue
+      }
+
+      const failText = rawCommandNoToolText(step.visibleText)
+      fullContent += failText
+      parts.push({ type: 'text', text: failText })
+      if (!webContents.isDestroyed()) {
+        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: failText })
+      }
+      return {
+        fullContent,
+        parts,
+        model,
+        toolCallsIssued,
+        loopRounds: round + 1,
+        detectedToolFormat,
+        stopReason: 'raw_command_no_tool',
+      }
+    }
+
     if (step.visibleText) {
       fullContent += step.visibleText
       parts.push({ type: 'text', text: step.visibleText })
+      if (tools.length > 0 && bufferedVisibleText && !webContents.isDestroyed()) {
+        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: step.visibleText })
+      }
     }
-
-    const outputLimitReached = step.finishReason === 'length' || step.finishReason === 'max_tokens'
-    const serverDisconnected = step.finishReason === 'stream_disconnected'
 
     if (step.hiddenReasoningExceeded && !step.visibleText && step.toolCalls.length === 0) {
       const finalizeProvider: ModelProvider = { ...effectiveProvider, reasoningMode: 'off' }

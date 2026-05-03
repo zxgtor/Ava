@@ -47,8 +47,9 @@ const TRAIT_PROMPTS: Record<string, string[]> = {
     'For non-trivial code generation, write or edit files with tools instead of dumping large code blocks into chat.',
     'Use built-in file tools for project files: file.read_text, file.write_text, file.list_dir, file.create_dir, and file.stat.',
     'Use file.patch for precise edits to existing files when possible.',
-    'Use project.detect and search.ripgrep to understand unfamiliar codebases before editing.',
+    'Use project.map first to get a compact project picture, then project.detect, search.ripgrep, and file reads for targeted context.',
     'When a task requires project initialization, dependency installation, build, test, git, node, npm, or python execution, use the available shell.run_command tool instead of only saying what you will run.',
+    'Never output raw commands such as dir, npm install, or npm run dev as plain text; call the appropriate tool.',
     'For frontend preview tasks, use devserver.start/status/stop, preview.open, preview.console, and preview.screenshot to inspect runtime and visual results.',
     'Before final reporting on coding tasks, validate with project.validate or an equivalent build/test/typecheck command when available.',
     'Use shell.run_command with structured command and args, never as one combined shell string.',
@@ -113,6 +114,8 @@ function buildSystemPrompt(settings: Settings, traits?: string[]): string {
     'Be concise for simple tasks, but provide enough detail when detail is needed to help the user succeed.',
     'For coding or design implementation tasks, final reports must state what changed, what validation was run, and any remaining risk.',
     'Do not say the task is complete if validation was skipped, failed, unavailable, or interrupted; state the exact status instead.',
+    'For large coding/design tasks on local models, work in small planned steps: inspect, edit a small batch, validate/preview, repair, then continue.',
+    'Do not attempt to solve large app/site/3D tasks in one giant response; use tools and project files as durable state.',
     'Task boundary rules:',
     '- Treat the latest user message as the current task.',
     '- If the latest user message gives a new concrete target, path, or scope, it replaces older unfinished requests.',
@@ -399,7 +402,7 @@ export interface SendResult {
   model: string
   fallbackUsed: boolean
   detectedToolFormat: 'openai' | 'hermes' | 'none'
-  stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected'
+  stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected' | 'raw_command_no_tool'
 }
 
 export interface SendError {

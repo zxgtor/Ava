@@ -48,6 +48,7 @@ interface PendingTaskIntake {
 }
 
 const TASK_INTAKE_INTENT_RE = /\b(build|create|make|generate|implement|fix|debug|refactor|modify|update|edit|write|add|remove|delete|site|app|component|page|feature|bug|code|html|css|javascript|typescript|react|three\.?js|3d)\b|创建|生成|实现|修复|调试|重构|修改|更新|添加|删除|网站|应用|组件|页面|功能|代码|三维|3d/i
+const LARGE_TASK_INTENT_RE = /\b(3d|three\.?js|animation|animated|site|website|landing page|app|full app|project|professional|production ready|complete|responsive|dashboard|frontend|ui|ux|migrate|refactor|implement feature|create|build|generate)\b|三维|动画|网站|站点|落地页|应用|完整|专业|响应式|前端|界面|迁移|重构|项目/i
 const CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run|执行|开始|继续|确认|可以|好的|好|没问题|就这样)\b/i
 const MAX_AUTO_CONTINUE_ROUNDS = 3
 
@@ -63,15 +64,74 @@ function isTaskConfirmation(content: string): boolean {
 function makeTaskIntakeText(content: string, conversation: Conversation): string {
   const folder = conversation.folderPath || '(未关联工作目录)'
   const firstLine = content.trim().split('\n')[0]
+  const isLargeTask = LARGE_TASK_INTENT_RE.test(content) || content.length > 300
+  const plan = isLargeTask
+    ? [
+        '小步执行计划（为本地模型小上下文优化）：',
+        '1. 用 project.map 获取压缩项目图，确认目录、入口、配置和关键文件。',
+        '2. 初始化或补齐最小项目结构，不一次性生成过大的代码块。',
+        '3. 安装/确认必要依赖。',
+        '4. 分批写入核心文件：入口、样式、组件/3D 场景。',
+        '5. 启动 dev server，并用 preview.console 检查运行错误。',
+        '6. 用 preview.screenshot 截图检查视觉结果。',
+        '7. 根据 console/screenshot 反馈修复问题，必要时重复检查。',
+        '8. 运行 project.validate 或等价 build/typecheck。',
+        '9. 最终报告文件改动、验证结果、剩余风险。',
+      ]
+    : [
+        '执行计划：',
+        '1. 检查相关文件/项目状态。',
+        '2. 做最小必要修改。',
+        '3. 运行可用验证。',
+        '4. 汇报改动、验证结果、剩余风险。',
+      ]
   return [
     '我先确认一下我的理解：',
     '',
     `目标：${firstLine.length > 160 ? `${firstLine.slice(0, 160)}…` : firstLine}`,
     `工作目录：${folder}`,
     '',
-    '我会先整理任务边界，再优先写入/修改文件，避免在聊天里一次性输出大段代码。完成前会检查文件状态，不能确认完成时不会给最终报告。',
+    ...plan,
+    '',
+    '完成标准：',
+    '- 必须写入/修改实际项目文件，不能只在聊天里输出代码。',
+    '- 需要预览的前端/3D任务必须检查 console；可截图时保存 screenshot。',
+    '- 能验证就必须验证；不能验证时必须说明原因。',
+    '- 没有通过验证或未完成时，不能声称完成。',
     '',
     '如果理解正确，请回复「确认」或「开始」。如果有误，请直接补充修正。',
+  ].join('\n')
+}
+
+function makeConfirmedTaskPlanPrompt(content: string, conversation: Conversation): string {
+  const folder = conversation.folderPath || '(no active folder)'
+  const isLargeTask = LARGE_TASK_INTENT_RE.test(content) || content.length > 300
+  return [
+    'User confirmed the task plan. Execute it now.',
+    `Task: ${content}`,
+    `Working directory: ${folder}`,
+    isLargeTask
+      ? [
+          'This is a large task for a local LLM with limited context.',
+          'Use small steps. Do not try to complete the whole project in one giant response.',
+          'Keep each tool round focused on the next smallest step.',
+          'Recommended step order:',
+          '1. project.map for compact project picture, then project.detect/file reads as needed.',
+          'Do not print raw commands such as "dir"; call project.map or file.list_dir for directory inspection.',
+          '2. initialize or inspect project structure.',
+          '3. install/confirm dependencies.',
+          '4. write files in small batches.',
+          '5. devserver.start and preview.console.',
+          '6. preview.screenshot for visual feedback.',
+          '7. repair any console/build/visual issues.',
+          '8. project.validate or equivalent build/typecheck.',
+          '9. final report with changed files, validation result, and remaining risks.',
+        ].join('\n')
+      : [
+          'Use the smallest safe workflow: inspect, edit, validate, report.',
+        ].join('\n'),
+    'If interrupted, continue from existing file state. Never restart from scratch unless explicitly asked.',
+    'Do not mark the task complete unless validation/checks support that conclusion.',
   ].join('\n')
 }
 
@@ -123,6 +183,7 @@ function stopReasonText(stopReason: string): string {
   if (stopReason === 'output_limit') return 'output token limit reached'
   if (stopReason === 'server_disconnected') return 'model server disconnected'
   if (stopReason === 'tool_loop_limit') return 'tool loop limit reached'
+  if (stopReason === 'raw_command_no_tool') return 'model output raw command instead of tool call'
   return stopReason
 }
 
@@ -666,7 +727,7 @@ export function ChatView() {
               })
             }
             if (result.stopReason) {
-              if (continuationRound < MAX_AUTO_CONTINUE_ROUNDS) {
+              if (result.stopReason !== 'raw_command_no_tool' && continuationRound < MAX_AUTO_CONTINUE_ROUNDS) {
                 continuationRound += 1
                 currentSnapshot = {
                   ...conversationSnapshot,
@@ -683,7 +744,9 @@ export function ChatView() {
                   ? `Stopped: output token limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s). Ava preserved current file state but could not safely finish.`
                   : result.stopReason === 'server_disconnected'
                     ? `Stopped: model server disconnected after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
-                    : `Stopped: tool loop limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
+                    : result.stopReason === 'raw_command_no_tool'
+                      ? 'Stopped: model output a raw command instead of calling a tool. Ava did not execute the plain text command; please retry or switch to a model/profile that follows tool-call format.'
+                      : `Stopped: tool loop limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
               dispatch({
                 type: 'UPDATE_MESSAGE',
                 conversationId,
@@ -894,7 +957,7 @@ export function ChatView() {
           id: `ctx_${pending.taskId}_confirmed`,
           taskId: pending.taskId,
           role: 'system' as const,
-          content: [{ type: 'text' as const, text: 'User confirmed the task intake. Execute the original request now.' }],
+          content: [{ type: 'text' as const, text: makeConfirmedTaskPlanPrompt(pending.content, conversation) }],
           createdAt: Date.now(),
         }
         setPendingTaskIntake(null)

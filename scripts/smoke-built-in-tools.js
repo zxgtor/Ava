@@ -82,10 +82,27 @@ async function main() {
       react: '^19.0.0',
     },
   }, null, 2), 'utf8')
+  fs.writeFileSync(path.join(tmp, 'index.html'), '<div id="root"></div>', 'utf8')
+  fs.mkdirSync(path.join(tmp, 'src/components'), { recursive: true })
+  fs.writeFileSync(path.join(tmp, 'src/main.tsx'), 'import "./style.css";', 'utf8')
+  fs.writeFileSync(path.join(tmp, 'src/App.tsx'), 'export function App() { return null }', 'utf8')
+  fs.writeFileSync(path.join(tmp, 'src/components/Hero.tsx'), 'export function Hero() { return null }', 'utf8')
+  fs.writeFileSync(path.join(tmp, 'src/style.css'), 'body { margin: 0; }', 'utf8')
 
   const detected = await callOk('project.detect', { cwd: tmp }, context)
   assert.equal(detected.content.types.includes('node'), true)
   assert.equal(detected.content.packageManager, 'npm')
+
+  const mapped = await callOk('project.map', { cwd: tmp, maxDepth: 4, maxFiles: 100 }, context)
+  assert.equal(mapped.content.entryCandidates.includes('src/main.tsx'), true)
+  assert.equal(mapped.content.styleCandidates.includes('src/style.css'), true)
+  assert.equal(mapped.content.entryCandidates.includes('src/App.tsx'), true)
+  assert.equal(mapped.content.componentCandidates.includes('src/components/Hero.tsx'), true)
+  assert.equal(mapped.content.suggestedReads.includes('package.json'), true)
+
+  const listedByAlias = await callOk('shell.run_command', { command: 'dir', args: [], cwd: tmp }, context)
+  assert.equal(listedByAlias.content.commandAlias, 'dir')
+  assert.equal(listedByAlias.content.entries.some(entry => entry.name === 'package.json'), true)
 
   await callOk('project.validate', { cwd: tmp, level: 'quick', timeoutMs: 30_000 }, context)
 

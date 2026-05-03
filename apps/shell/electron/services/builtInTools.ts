@@ -9,6 +9,8 @@ const MAX_OUTPUT_CHARS = 24_000
 const MAX_DEVSERVER_LOG_CHARS = 12_000
 const MAX_FILE_READ_CHARS = 80_000
 const MAX_DIR_ENTRIES = 500
+const PROJECT_MAP_DEFAULT_MAX_FILES = 250
+const PROJECT_MAP_DEFAULT_DEPTH = 4
 const DEFAULT_PREVIEW_WAIT_MS = 1_000
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 10 * 60_000
@@ -19,22 +21,42 @@ const COMMAND_ALLOWLIST = new Set([
   'npx',
   'pnpm',
   'yarn',
+  'bun',
+  'bunx',
   'node',
   'git',
   'rg',
   'python',
   'python3',
   'py',
+  'pip',
+  'pip3',
+  'pytest',
   'dotnet',
   'tsc',
   'vite',
+  'deno',
+  'uv',
+  'uvx',
   'powershell',
   'powershell.exe',
   'pwsh',
   'pwsh.exe',
 ])
 
-const DEVSERVER_COMMAND_ALLOWLIST = new Set(['npm', 'npx', 'pnpm', 'yarn', 'node'])
+const DEVSERVER_COMMAND_ALLOWLIST = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'bunx', 'node'])
+const PROJECT_MAP_IGNORED_DIRS = new Set([
+  '.git',
+  '.next',
+  '.turbo',
+  '.vite',
+  'coverage',
+  'dist',
+  'build',
+  'out',
+  'node_modules',
+  'vendor',
+])
 
 const DANGEROUS_ARG_RE =
   /\b(rm\s+-rf|remove-item|del\s+\/s|rmdir\s+\/s|format|diskpart|shutdown|restart-computer|stop-computer|set-executionpolicy|invoke-expression|iex)\b|[;&|`$<>]/i
@@ -155,6 +177,21 @@ const CODING_TOOLS: McpToolDescriptor[] = [
       additionalProperties: false,
       properties: {
         cwd: { type: 'string', description: 'Project directory to inspect.' },
+      },
+      required: ['cwd'],
+    },
+  },
+  {
+    rawName: 'map',
+    name: 'project.map',
+    description: 'Build a compact project map: file tree summary, key files, likely entry points, scripts, dependencies, and suggested files to read next.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string', description: 'Project directory to map.' },
+        maxDepth: { type: 'number', description: 'Directory depth limit. Defaults to 4.' },
+        maxFiles: { type: 'number', description: 'File count limit. Defaults to 250.' },
       },
       required: ['cwd'],
     },
@@ -380,6 +417,27 @@ interface DetectedProject {
   files: string[]
 }
 
+interface ProjectMapFile {
+  path: string
+  type: 'file' | 'directory'
+  role?: string
+  size?: number
+}
+
+interface ProjectMap {
+  cwd: string
+  detected: DetectedProject
+  tree: ProjectMapFile[]
+  keyFiles: ProjectMapFile[]
+  entryCandidates: string[]
+  styleCandidates: string[]
+  componentCandidates: string[]
+  configFiles: string[]
+  ignoredDirs: string[]
+  truncated: boolean
+  suggestedReads: string[]
+}
+
 class BuiltInTools {
   private active = new Set<ActiveProcess>()
   private devServers = new Map<string, DevServerProcess>()
@@ -403,6 +461,7 @@ class BuiltInTools {
       if (name === 'file.stat') return this.statPath(rawArgs, context)
       if (name === 'file.patch') return this.patchFile(rawArgs, context)
       if (name === 'project.detect') return this.detectProject(rawArgs, context)
+      if (name === 'project.map') return this.mapProject(rawArgs, context)
       if (name === 'project.validate') return this.validateProject(rawArgs, context)
       if (name === 'search.ripgrep') return this.ripgrep(rawArgs, context)
       if (name === 'git.status') return this.gitStatus(rawArgs, context)
@@ -423,10 +482,41 @@ class BuiltInTools {
     const parsed = parseRunCommandArgs(rawArgs)
     if (!parsed.ok) return { ok: false, error: parsed.error }
 
+    const shellAliasResult = await this.runShellAliasAsTool(parsed.args, context)
+    if (shellAliasResult) return shellAliasResult
+
     const safetyError = validateRunCommand(parsed.args, context)
     if (safetyError) return { ok: false, error: safetyError }
 
     return this.runCommand(parsed.args)
+  }
+
+  private async runShellAliasAsTool(args: RunCommandArgs, context: RunContext): Promise<CallToolResult | CallToolError | null> {
+    const commandName = normalizeCommandName(args.command)
+    if (commandName !== 'dir' && commandName !== 'ls') return null
+    if (!isAllowedCwd(args.cwd, context)) {
+      return { ok: false, error: `Working directory "${args.cwd}" is outside the active project or allowed directories.` }
+    }
+
+    const targetArg = args.args.find(arg => arg && !arg.startsWith('-') && !arg.startsWith('/'))
+    const targetPath = targetArg ? resolvePath(args.cwd, targetArg) : args.cwd
+    const guard = validateDirectoryAccess(targetPath, context)
+    if (guard) return { ok: false, error: guard }
+
+    const entries = await readdir(targetPath, { withFileTypes: true })
+    return {
+      ok: true,
+      content: {
+        commandAlias: args.command,
+        path: resolvePath(targetPath),
+        entries: entries.slice(0, MAX_DIR_ENTRIES).map(entry => ({
+          name: entry.name,
+          type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other',
+        })),
+        truncated: entries.length > MAX_DIR_ENTRIES,
+        count: entries.length,
+      },
+    }
   }
 
   private async readText(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
@@ -559,6 +649,18 @@ class BuiltInTools {
 
     const detected = await detectProject(parsed.cwd)
     return { ok: true, content: detected }
+  }
+
+  private async mapProject(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseCwdArg(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const guard = validateDirectoryAccess(parsed.cwd, context)
+    if (guard) return { ok: false, error: guard }
+
+    const maxDepth = clampNumber(rawArgs.maxDepth, 1, 8, PROJECT_MAP_DEFAULT_DEPTH)
+    const maxFiles = clampNumber(rawArgs.maxFiles, 20, 1000, PROJECT_MAP_DEFAULT_MAX_FILES)
+    const mapped = await mapProject(parsed.cwd, { maxDepth, maxFiles })
+    return { ok: true, content: mapped }
   }
 
   private async validateProject(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
@@ -1083,6 +1185,134 @@ async function detectProject(cwd: string): Promise<DetectedProject> {
     reason: validationReason(command),
   }))
   return detected
+}
+
+async function mapProject(
+  cwd: string,
+  options: { maxDepth: number; maxFiles: number },
+): Promise<ProjectMap> {
+  const root = resolvePath(cwd)
+  const detected = await detectProject(root)
+  const tree: ProjectMapFile[] = []
+  const ignoredDirs = new Set<string>()
+  let visitedFiles = 0
+  let truncated = false
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > options.maxDepth || visitedFiles >= options.maxFiles) {
+      truncated = true
+      return
+    }
+
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    entries.sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+
+    for (const entry of entries) {
+      if (visitedFiles >= options.maxFiles) {
+        truncated = true
+        return
+      }
+      if (entry.isDirectory() && PROJECT_MAP_IGNORED_DIRS.has(entry.name)) {
+        ignoredDirs.add(relativeProjectPath(root, resolvePath(dir, entry.name)))
+        continue
+      }
+      const abs = resolvePath(dir, entry.name)
+      const rel = relativeProjectPath(root, abs)
+      if (!rel) continue
+
+      if (entry.isDirectory()) {
+        tree.push({ path: rel, type: 'directory', role: classifyProjectPath(rel, true) })
+        await walk(abs, depth + 1)
+        continue
+      }
+
+      if (!entry.isFile()) continue
+      visitedFiles += 1
+      const info = await stat(abs).catch(() => null)
+      tree.push({
+        path: rel,
+        type: 'file',
+        role: classifyProjectPath(rel, false),
+        ...(info ? { size: info.size } : {}),
+      })
+    }
+  }
+
+  await walk(root, 1)
+
+  const files = tree.filter(item => item.type === 'file')
+  const keyFiles = files.filter(item => Boolean(item.role))
+  const entryCandidates = files.filter(item => item.role === 'entry').map(item => item.path)
+  const styleCandidates = files.filter(item => item.role === 'style').map(item => item.path)
+  const componentCandidates = files.filter(item => item.role === 'component').map(item => item.path).slice(0, 40)
+  const configFiles = files.filter(item => item.role === 'config').map(item => item.path)
+  const suggestedReads = Array.from(new Set([
+    'package.json',
+    ...configFiles,
+    ...entryCandidates,
+    ...styleCandidates.slice(0, 8),
+    ...componentCandidates.slice(0, 12),
+  ].filter(path => files.some(file => file.path === path))))
+
+  return {
+    cwd: root,
+    detected,
+    tree,
+    keyFiles,
+    entryCandidates,
+    styleCandidates,
+    componentCandidates,
+    configFiles,
+    ignoredDirs: Array.from(ignoredDirs),
+    truncated,
+    suggestedReads,
+  }
+}
+
+function relativeProjectPath(root: string, abs: string): string {
+  const normalizedRoot = normalizePath(root)
+  const normalizedAbs = normalizePath(abs)
+  if (normalizedAbs === normalizedRoot) return ''
+  if (!normalizedAbs.startsWith(`${normalizedRoot}\\`)) return abs
+  return abs.slice(resolvePath(root).length + 1).replace(/\\/g, '/')
+}
+
+function classifyProjectPath(path: string, isDirectory: boolean): string | undefined {
+  const lower = path.toLowerCase()
+  const name = lower.split('/').pop() ?? lower
+  if (isDirectory) {
+    if (['src', 'app', 'pages', 'routes'].includes(name)) return 'source-root'
+    if (['components', 'ui'].includes(name)) return 'components-dir'
+    if (['styles', 'css'].includes(name)) return 'styles-dir'
+    if (['public', 'assets', 'static'].includes(name)) return 'assets-dir'
+    return undefined
+  }
+
+  if (
+    name === 'package.json' ||
+    name.startsWith('vite.config.') ||
+    name.startsWith('next.config.') ||
+    name.startsWith('tsconfig') ||
+    name.startsWith('tailwind.config.') ||
+    name.startsWith('postcss.config.') ||
+    name === 'index.html'
+  ) return 'config'
+
+  if (/^src\/(main|index)\.(tsx|ts|jsx|js)$/.test(lower) || /^src\/app\.(tsx|ts|jsx|js)$/.test(lower)) return 'entry'
+  if (/\.(css|scss|sass|less)$/.test(lower)) return 'style'
+  if (/\.(tsx|jsx)$/.test(lower) && /(^|\/)(components|pages|routes|app|src)\//.test(lower)) return 'component'
+  if (/\.(glsl|vert|frag|wgsl)$/.test(lower)) return 'shader'
+  if (/\.(png|jpg|jpeg|gif|webp|svg|ico|glb|gltf|obj|fbx)$/.test(lower)) return 'asset'
+  return undefined
 }
 
 function validationCommands(project: DetectedProject, level: 'quick' | 'full', timeoutMs: number): RunCommandArgs[] {
