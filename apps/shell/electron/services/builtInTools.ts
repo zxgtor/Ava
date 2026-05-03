@@ -18,9 +18,11 @@ const COMMAND_ALLOWLIST = new Set([
   'yarn',
   'node',
   'git',
+  'rg',
   'python',
   'python3',
   'py',
+  'dotnet',
   'tsc',
   'vite',
   'powershell',
@@ -138,6 +140,97 @@ const FILE_TOOLS: McpToolDescriptor[] = [
   },
 ]
 
+const CODING_TOOLS: McpToolDescriptor[] = [
+  {
+    rawName: 'detect',
+    name: 'project.detect',
+    description: 'Detect project type, package manager, scripts, and recommended validation commands for a coding task.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string', description: 'Project directory to inspect.' },
+      },
+      required: ['cwd'],
+    },
+  },
+  {
+    rawName: 'validate',
+    name: 'project.validate',
+    description: 'Run the safest detected validation commands for the project, such as typecheck/build/test.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string', description: 'Project directory to validate.' },
+        level: { type: 'string', enum: ['quick', 'full'], description: 'quick runs typecheck/build; full may also run tests.' },
+        timeoutMs: { type: 'number' },
+      },
+      required: ['cwd'],
+    },
+  },
+  {
+    rawName: 'ripgrep',
+    name: 'search.ripgrep',
+    description: 'Search text in project files with ripgrep. Results are scoped to the active project or allowed directories.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string' },
+        query: { type: 'string' },
+        glob: { type: 'string', description: 'Optional file glob, for example **/*.ts.' },
+        maxMatches: { type: 'number' },
+      },
+      required: ['cwd', 'query'],
+    },
+  },
+  {
+    rawName: 'patch',
+    name: 'file.patch',
+    description: 'Patch a text file by replacing exact oldText with newText. Safer than overwriting the whole file for focused edits.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        path: { type: 'string' },
+        oldText: { type: 'string' },
+        newText: { type: 'string' },
+        expectedReplacements: { type: 'number', description: 'Defaults to 1.' },
+      },
+      required: ['path', 'oldText', 'newText'],
+    },
+  },
+  {
+    rawName: 'status',
+    name: 'git.status',
+    description: 'Read-only git status for the active project.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string' },
+      },
+      required: ['cwd'],
+    },
+  },
+  {
+    rawName: 'diff',
+    name: 'git.diff',
+    description: 'Read-only git diff for the active project. Output is truncated for context safety.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string' },
+        path: { type: 'string', description: 'Optional project-relative path.' },
+        staged: { type: 'boolean' },
+      },
+      required: ['cwd'],
+    },
+  },
+]
+
 interface RunCommandArgs {
   command: string
   args: string[]
@@ -155,11 +248,20 @@ interface ActiveProcess {
   controller: AbortController
 }
 
+interface DetectedProject {
+  cwd: string
+  types: string[]
+  packageManager?: string
+  scripts?: Record<string, string>
+  validationCommands: Array<{ command: string; args: string[]; reason: string }>
+  files: string[]
+}
+
 class BuiltInTools {
   private active = new Set<ActiveProcess>()
 
   listTools(): McpToolDescriptor[] {
-    return [SHELL_TOOL, ...FILE_TOOLS]
+    return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS]
   }
 
   resolveTool(name: string): { serverId: string; rawName: string } | null {
@@ -175,6 +277,12 @@ class BuiltInTools {
       if (name === 'file.list_dir') return this.listDir(rawArgs, context)
       if (name === 'file.create_dir') return this.createDir(rawArgs, context)
       if (name === 'file.stat') return this.statPath(rawArgs, context)
+      if (name === 'file.patch') return this.patchFile(rawArgs, context)
+      if (name === 'project.detect') return this.detectProject(rawArgs, context)
+      if (name === 'project.validate') return this.validateProject(rawArgs, context)
+      if (name === 'search.ripgrep') return this.ripgrep(rawArgs, context)
+      if (name === 'git.status') return this.gitStatus(rawArgs, context)
+      if (name === 'git.diff') return this.gitDiff(rawArgs, context)
       return { ok: false, error: `unknown built-in tool: ${name}` }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -279,6 +387,164 @@ class BuiltInTools {
         modifiedAt: info.mtime.toISOString(),
       },
     }
+  }
+
+  private async patchFile(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parsePathArg(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const oldText = typeof rawArgs.oldText === 'string' ? rawArgs.oldText : null
+    const newText = typeof rawArgs.newText === 'string' ? rawArgs.newText : null
+    if (oldText === null) return { ok: false, error: 'file.patch requires "oldText" as a string.' }
+    if (newText === null) return { ok: false, error: 'file.patch requires "newText" as a string.' }
+    if (!oldText) return { ok: false, error: 'file.patch oldText cannot be empty.' }
+    const guard = validatePathAccess(parsed.path, context)
+    if (guard) return { ok: false, error: guard }
+
+    const expected = clampNumber(rawArgs.expectedReplacements, 1, 1000, 1)
+    const content = await readFile(parsed.path, 'utf8')
+    const count = content.split(oldText).length - 1
+    if (count !== expected) {
+      return {
+        ok: false,
+        error: `file.patch expected ${expected} replacement(s), found ${count}. Read the file and use a more precise oldText.`,
+      }
+    }
+    const next = content.split(oldText).join(newText)
+    await writeFile(parsed.path, next, 'utf8')
+    return {
+      ok: true,
+      content: {
+        path: resolvePath(parsed.path),
+        replacements: count,
+        bytes: Buffer.byteLength(next, 'utf8'),
+      },
+    }
+  }
+
+  private async detectProject(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseCwdArg(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const guard = validateDirectoryAccess(parsed.cwd, context)
+    if (guard) return { ok: false, error: guard }
+
+    const detected = await detectProject(parsed.cwd)
+    return { ok: true, content: detected }
+  }
+
+  private async validateProject(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseCwdArg(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const guard = validateDirectoryAccess(parsed.cwd, context)
+    if (guard) return { ok: false, error: guard }
+
+    const level = rawArgs.level === 'full' ? 'full' : 'quick'
+    const timeoutMs = clampTimeout(typeof rawArgs.timeoutMs === 'number' ? rawArgs.timeoutMs : DEFAULT_TIMEOUT_MS)
+    const detected = await detectProject(parsed.cwd)
+    const commands = validationCommands(detected, level, timeoutMs)
+    if (commands.length === 0) {
+      return {
+        ok: true,
+        content: {
+          cwd: resolvePath(parsed.cwd),
+          detected,
+          commands: [],
+          message: 'No safe validation command detected.',
+        },
+      }
+    }
+
+    const results: unknown[] = []
+    let failed = false
+    for (const command of commands) {
+      const result = await this.runCommand(command)
+      if (!result.ok) return result
+      results.push(result.content)
+      if (result.isError) {
+        failed = true
+        break
+      }
+    }
+
+    return {
+      ok: true,
+      isError: failed,
+      content: {
+        cwd: resolvePath(parsed.cwd),
+        detected,
+        level,
+        results,
+      },
+    }
+  }
+
+  private async ripgrep(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseCwdArg(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const guard = validateDirectoryAccess(parsed.cwd, context)
+    if (guard) return { ok: false, error: guard }
+
+    const query = typeof rawArgs.query === 'string' ? rawArgs.query : ''
+    if (!query.trim()) return { ok: false, error: 'search.ripgrep requires "query".' }
+    if (query.length > 500 || /[\r\n]/.test(query)) return { ok: false, error: 'search.ripgrep query is too long or contains newlines.' }
+    const maxMatches = clampNumber(rawArgs.maxMatches, 1, 200, 80)
+    const args = ['--line-number', '--column', '--hidden', '--glob', '!node_modules/**', '--glob', '!.git/**', '--max-count', String(maxMatches)]
+    if (typeof rawArgs.glob === 'string' && rawArgs.glob.trim()) {
+      args.push('--glob', rawArgs.glob.trim())
+    }
+    args.push(query)
+
+    const result = await this.runCommand({
+      command: 'rg',
+      args,
+      cwd: parsed.cwd,
+      timeoutMs: 30_000,
+    })
+    if (result.ok && result.isError && isRipgrepNoMatch(result.content)) {
+      return {
+        ok: true,
+        content: {
+          cwd: resolvePath(parsed.cwd),
+          query,
+          stdout: '',
+          stderr: '',
+          matches: 0,
+        },
+      }
+    }
+    return result
+  }
+
+  private async gitStatus(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseCwdArg(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const guard = validateDirectoryAccess(parsed.cwd, context)
+    if (guard) return { ok: false, error: guard }
+    return this.runCommand({
+      command: 'git',
+      args: ['status', '--short', '--branch'],
+      cwd: parsed.cwd,
+      timeoutMs: 30_000,
+    })
+  }
+
+  private async gitDiff(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseCwdArg(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    const guard = validateDirectoryAccess(parsed.cwd, context)
+    if (guard) return { ok: false, error: guard }
+
+    const args = ['diff', '--no-ext-diff']
+    if (rawArgs.staged === true) args.push('--cached')
+    if (typeof rawArgs.path === 'string' && rawArgs.path.trim()) {
+      if (rawArgs.path.includes('..')) return { ok: false, error: 'git.diff path must be project-relative and cannot contain "..".' }
+      args.push('--', rawArgs.path.trim())
+    }
+    return this.runCommand({
+      command: 'git',
+      args,
+      cwd: parsed.cwd,
+      timeoutMs: 30_000,
+    })
   }
 
   abortAllCalls(): void {
@@ -397,6 +663,12 @@ function parsePathArg(raw: Record<string, unknown>): { ok: true; path: string } 
   return { ok: true, path }
 }
 
+function parseCwdArg(raw: Record<string, unknown>): { ok: true; cwd: string } | { ok: false; error: string } {
+  const cwd = typeof raw.cwd === 'string' ? raw.cwd.trim() : ''
+  if (!cwd) return { ok: false, error: 'Tool requires "cwd" as a string.' }
+  return { ok: true, cwd }
+}
+
 function validateRunCommand(args: RunCommandArgs, context: RunContext): string | null {
   const commandName = normalizeCommandName(args.command)
   if (!COMMAND_ALLOWLIST.has(commandName)) {
@@ -424,6 +696,113 @@ function validatePathAccess(path: string, context: RunContext): string | null {
     return `Path "${path}" is outside the active project or allowed directories.`
   }
   return null
+}
+
+function validateDirectoryAccess(path: string, context: RunContext): string | null {
+  if (!existsSync(resolvePath(path))) return `Directory does not exist: ${path}`
+  return validatePathAccess(path, context)
+}
+
+async function detectProject(cwd: string): Promise<DetectedProject> {
+  const root = resolvePath(cwd)
+  const files = await safeReaddirNames(root)
+  const types: string[] = []
+  let scripts: Record<string, string> | undefined
+  let packageManager: string | undefined
+
+  if (files.includes('package.json')) {
+    types.push('node')
+    const pkg = await readJsonFile(resolvePath(root, 'package.json'))
+    if (pkg && typeof pkg === 'object' && 'scripts' in pkg && isRecord((pkg as Record<string, unknown>).scripts)) {
+      scripts = Object.fromEntries(
+        Object.entries((pkg as { scripts: Record<string, unknown> }).scripts)
+          .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+      )
+    }
+    packageManager = files.includes('pnpm-lock.yaml')
+      ? 'pnpm'
+      : files.includes('yarn.lock')
+        ? 'yarn'
+        : 'npm'
+    const deps = {
+      ...(isRecord((pkg as Record<string, unknown> | null)?.dependencies) ? (pkg as { dependencies: Record<string, unknown> }).dependencies : {}),
+      ...(isRecord((pkg as Record<string, unknown> | null)?.devDependencies) ? (pkg as { devDependencies: Record<string, unknown> }).devDependencies : {}),
+    }
+    if ('vite' in deps) types.push('vite')
+    if ('react' in deps) types.push('react')
+    if ('next' in deps) types.push('next')
+  }
+  if (files.includes('pyproject.toml') || files.includes('requirements.txt') || files.some(file => file.endsWith('.py'))) {
+    types.push('python')
+  }
+  if (files.some(file => file.endsWith('.csproj')) || files.some(file => file.endsWith('.sln'))) {
+    types.push('dotnet')
+  }
+
+  const detected: DetectedProject = {
+    cwd: root,
+    types: Array.from(new Set(types)),
+    packageManager,
+    scripts,
+    validationCommands: [],
+    files,
+  }
+  detected.validationCommands = validationCommands(detected, 'quick', DEFAULT_TIMEOUT_MS).map(command => ({
+    command: command.command,
+    args: command.args,
+    reason: validationReason(command),
+  }))
+  return detected
+}
+
+function validationCommands(project: DetectedProject, level: 'quick' | 'full', timeoutMs: number): RunCommandArgs[] {
+  const commands: RunCommandArgs[] = []
+  const pm = project.packageManager ?? 'npm'
+  const runArgs = pm === 'yarn' ? ['run'] : ['run']
+  const scripts = project.scripts ?? {}
+
+  if (project.types.includes('node')) {
+    if (scripts.typecheck) commands.push({ command: pm, args: [...runArgs, 'typecheck'], cwd: project.cwd, timeoutMs })
+    if (scripts.lint && level === 'full') commands.push({ command: pm, args: [...runArgs, 'lint'], cwd: project.cwd, timeoutMs })
+    if (scripts.build) commands.push({ command: pm, args: [...runArgs, 'build'], cwd: project.cwd, timeoutMs })
+    if (scripts.test && level === 'full') commands.push({ command: pm, args: [...runArgs, 'test'], cwd: project.cwd, timeoutMs })
+  }
+  if (project.types.includes('python') && level === 'full') {
+    commands.push({ command: 'python', args: ['-m', 'pytest'], cwd: project.cwd, timeoutMs })
+  }
+  if (project.types.includes('dotnet')) {
+    commands.push({ command: 'dotnet', args: ['build'], cwd: project.cwd, timeoutMs })
+    if (level === 'full') commands.push({ command: 'dotnet', args: ['test', '--no-build'], cwd: project.cwd, timeoutMs })
+  }
+  return commands
+}
+
+function validationReason(command: RunCommandArgs): string {
+  return `${command.command} ${command.args.join(' ')}`
+}
+
+async function safeReaddirNames(path: string): Promise<string[]> {
+  try {
+    return await readdir(path)
+  } catch {
+    return []
+  }
+}
+
+async function readJsonFile(path: string): Promise<unknown | null> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as unknown
+  } catch {
+    return null
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isRipgrepNoMatch(content: unknown): boolean {
+  return isRecord(content) && content.exitCode === 1 && typeof content.stdout === 'string' && content.stdout.length === 0
 }
 
 function isAllowedCwd(cwd: string, context: RunContext): boolean {
