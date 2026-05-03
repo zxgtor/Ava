@@ -26,6 +26,7 @@ import { toolAuditLog } from './services/toolAuditLog'
 import { applyWin11RoundedCorners } from './services/dwmCorners'
 
 const execAsync = promisify(exec)
+const TITLE_BAR_HEIGHT = 36
 
 let mainWindow: BrowserWindow | null = null
 let previewWindow: BrowserWindow | null = null
@@ -50,7 +51,7 @@ function createPreviewWindow(theme?: string): void {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: '#ffffff',
-      height: 44
+      height: TITLE_BAR_HEIGHT,
     },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -107,7 +108,7 @@ function createMainWindow(): void {
     titleBarOverlay: {
       color: '#00000000',
       symbolColor: '#ffffff',
-      height: 44
+      height: TITLE_BAR_HEIGHT,
     },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

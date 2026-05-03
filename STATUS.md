@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-02 · LLM Adapter refactoring + Win11 rounded corners_
+_Last updated: 2026-05-02 · Chat Pipeline Refactor + Thinking Model UI_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -123,6 +123,12 @@ _Last updated: 2026-05-02 · LLM Adapter refactoring + Win11 rounded corners_
   - main process 发送 `ava:llm:status` lifecycle event
   - assistant placeholder 按 `connecting / waiting_first_token / generating / tool_running / fallback` 显示无文字动画
   - 完成 / 错误 / 中断时同步 `runPhase`，避免用户看不出 server 是否工作中
+- [x] **P17 Chat Pipeline Refactor & Thinking UI**：
+  - **架构固化**：Project Context (brief/folder) 和 Traits 注入逻辑从 `ChatView.tsx` 彻底移入 `chat.ts` 的 `conversationToLlmMessages`
+  - **推理模型支持**：`reasoning_content` 全链路打通 (Adapter → IPC → Store)；新增 `ThinkingBlock` 组件，支持毫秒级计时与自动折叠
+  - **Trait-Aware Prompts**：支持 `code / design / business / idea / video / mastery` 6 种模式，自动注入差异化 System Prompt 并调整 Temperature
+  - **Token Budget**：实现 6000 tokens 历史上下文预算，带 CJK 字符加权估算 (~1 token/char)
+  - **UI 增强**：工具调用气泡 (`CollapsibleToolCalls`) 增加计时器，与推理块统一视觉语言
 
 ---
 
@@ -152,8 +158,8 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `main.ts` | 启动窗口；注册 IPC handler（ping / paths / settings / conversations / llm stream / llm abort / llm probe） |
 | `preload.ts` | `contextBridge.exposeInMainWorld('ava', …)` 暴露 API |
 | `storage.ts` | `loadSettings/saveSettings/loadConversations/saveConversations`，原子写（`.tmp` → `rename`） |
-| `llm.ts` | Node 端 LLM 核心：管理 tool-use 循环、system prompt 注入（skills/commands/hermes）、调度 adapter。支持 abort |
-| `adapters/` | [NEW] LLM 适配器：`base.ts` (接口) / `openai.ts` (标准协议) / `anthropic.ts` (消息協議) |
+| `llm.ts` | Node 端 LLM 核心：管理 tool-use 循环、system prompt 注入（skills/commands/hermes）、调度 adapter。支持 abort、reasoning 回调 |
+| `adapters/` | [NEW] LLM 适配器：`base.ts` (接口) / `openai.ts` (标准协议) / `anthropic.ts` (消息協議)。支持推理内容提取 |
 | `services/pluginManager.ts` | P3/P4 插件管理：扫描、安装、卸载、解析 manifest/skills/commands |
 | `services/mcpSupervisor.ts` | [NEW] MCP 客户端管理：启动 stdio/sse 进程、tool 执行、崩溃重启 |
 | `services/toolAuditLog.ts` | P7 工具审计日志：记录 tool-call 参数、状态、结果预览 |
@@ -167,13 +173,13 @@ npm run dev --workspace=@ava/shell       # 开发模式
 | `main.tsx` | React 入口 |
 | `index.css` | Tailwind 4 `@theme inline` tokens + 滚动条 + `gradient-text` + `streaming-dot` + `abort-flash` + `tool-pulse` 动画 |
 | `env.d.ts` | `window.ava: AvaApi`（从 preload 类型推导） |
-| `types.ts` | `Message` / `Conversation` / `ModelProvider` / `Settings` / `ViewMode` / `DiscoveredPlugin` / `PluginCommand` |
-| `store.tsx` | `useReducer` + Context。Actions：HYDRATE / SET_VIEW / CREATE/SELECT/DELETE/RENAME_CONVERSATION / ADD/UPDATE/APPEND_DELTA/DELETE_MESSAGE / UPDATE_SETTINGS。Mount 时 hydrate，state 变更 debounce 300-400ms 后 save |
+| `types.ts` | `Message` / `Conversation` / `ModelProvider` / `Settings` / `ViewMode` / `DiscoveredPlugin` / `PluginCommand`；支持 reasoningContent |
+| `store.tsx` | `useReducer` + Context。支持 APPEND_REASONING_DELTA |
 | `lib/llm/providers.ts` | 10 家 provider 默认配置；`mergeModelProviders` / `normalizeProviderChain` / `getEnabledProviders` / `chatCompletionsEndpoint` / `modelsEndpoint` / `defaultSettings` |
-| `lib/agent/chat.ts` | `sendChat`：拼 system prompt + 消息 → 调 `window.ava.llm.stream` → onDelta 回调。提供 `makeStreamId` / `makeMessageId` / `makeTaskId` / `makeUserMessage` / `makeAssistantPlaceholder` |
-| `components/ChatView.tsx` | 消息列表 + 自动滚动 + 调度 sendChat（发送、流式、停止、删除消息、删除对话、新对话、进设置）+ 空消息过滤 |
+| `lib/agent/chat.ts` | `sendChat`：核心 pipeline。Trait 识别、Token Budget、Project Context 注入、Temperature 调度 |
+| `components/ChatView.tsx` | 消息列表 + 自动滚动 + 调度 sendChat。逻辑已简化，context 注入已移出 |
 | `components/ChatHeader.tsx` | 顶部 bar：标题 / 删对话 / 新对话 / 进设置。高度 `h-11`，无自绘窗控（系统边框） |
-| `components/MessageBubble.tsx` | 单条消息渲染。streaming 三点动画、aborted flash 动画 + 半透明、retry pill 按钮。assistant 走 `MarkdownContent` |
+| `components/MessageBubble.tsx` | 单条消息渲染。支持 ThinkingBlock + CollapsibleToolCalls 与实时计时 |
 | `components/ToolCallBubble.tsx` | 工具调用卡片：running 脉冲、aborted 删除线、error 分类、参数/结果折叠 |
 | `components/MarkdownContent.tsx` | react-markdown + remark-gfm + rehype-highlight |
 | `components/ConversationSidebar.tsx` | 会话列表，按 updatedAt 倒序，active accent 色条，支持选中/重命名/删除 |

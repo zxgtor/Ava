@@ -88,7 +88,6 @@ function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${Math.floor(ms / 1000)}s`
 }
-}
 
 function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
   const [collapsed, setCollapsed] = useState(false)

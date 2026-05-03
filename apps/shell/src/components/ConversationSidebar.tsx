@@ -131,19 +131,9 @@ export function ConversationSidebar() {
 
   const toggleGroup = (id: string) => {
     setCollapsedGroups(prev => {
-      const isCurrentlyCollapsed = prev[id]
-      // If we are expanding this group, collapse all others
-      if (isCurrentlyCollapsed) {
-        const next: Record<string, boolean> = {}
-        groups.forEach(g => {
-          next[g.id] = true // Collapse everyone
-        })
-        next[id] = false // Expand this one
-        return next
-      } else {
-        // If we are collapsing this group, just do it
-        return { ...prev, [id]: true }
-      }
+      const isCollapsed = prev[id]
+      if (!isCollapsed) return { ...prev, [id]: true }
+      return Object.fromEntries(groups.map(group => [group.id, group.id !== id]))
     })
   }
 
