@@ -787,7 +787,9 @@ class BuiltInTools {
 
     const cwd = resolvePath(parsed.args.cwd)
     const existing = this.findDevServer({ cwd })
-    if (existing && existing.status !== 'exited') {
+    const expectedUrl = typeof rawArgs.expectedUrl === 'string' ? rawArgs.expectedUrl : undefined
+    if (existing && existing.status !== 'exited' && (!expectedUrl || existing.url === expectedUrl)) {
+      await waitForDevServerReady(existing)
       return { ok: true, content: devServerView(existing, 'already_running') }
     }
 
@@ -807,7 +809,7 @@ class BuiltInTools {
       child,
       startedAt: Date.now(),
       status: 'starting',
-      url: typeof rawArgs.expectedUrl === 'string' ? rawArgs.expectedUrl : undefined,
+      url: expectedUrl,
       stdout: '',
       stderr: '',
     }
@@ -1378,7 +1380,7 @@ function extractLocalUrl(text: string): string | undefined {
 async function waitForDevServerReady(server: DevServerProcess): Promise<void> {
   const deadline = Date.now() + DEVSERVER_READY_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if (server.status === 'exited' || server.url) return
+    if (server.status === 'exited' || server.status === 'running') return
     await new Promise(resolve => setTimeout(resolve, 100))
   }
 }

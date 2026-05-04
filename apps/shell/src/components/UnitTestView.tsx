@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, FlaskConical, Play, RefreshCw, XCircle } from 'lucide-react'
 import { useStore } from '../store'
 import type { UnitTestSection } from '../types'
@@ -25,14 +25,46 @@ interface TestState {
   durationMs?: number
 }
 
-const PREVIEW_TEST_URL = 'http://127.0.0.1:47831/'
+interface UnitTestLogEntry {
+  id: string
+  kind: TargetKind
+  name: string
+  status: 'passed' | 'failed'
+  message?: string
+  durationMs?: number
+  request?: string
+  toolCalls?: Array<{
+    name?: string
+    status?: string
+    error?: string
+    args?: Record<string, unknown>
+  }>
+  stopReason?: string
+  fullContent?: string
+}
 
 function defaultBuiltInRequest(toolName: string, cwd: string): string {
   const testDir = `${cwd}\\.ava-unit-test`
   const testFile = `${testDir}\\tool-write.txt`
   const patchFile = `${testDir}\\patch-target.txt`
   const screenshotPath = `${testDir}\\preview.png`
-  const nodeServerScript = `require('http').createServer(function(q,r){r.end('ava unit test')}).listen(47831,'127.0.0.1',function(){console.log('${PREVIEW_TEST_URL}')})`
+  const previewPortByTool: Record<string, number> = {
+    'devserver.start': 47831,
+    'devserver.stop': 47832,
+    'devserver.status': 47833,
+    'preview.open': 47834,
+    'preview.console': 47835,
+    'preview.screenshot': 47836,
+  }
+  const previewPort = previewPortByTool[toolName] ?? 47831
+  const previewUrl = `http://127.0.0.1:${previewPort}/`
+  const nodeServerScript = `require('http').createServer(function(q,r){r.end('ava unit test')}).listen(${previewPort},'127.0.0.1',function(){console.log('${previewUrl}')})`
+  const devserverStartCall = `<tool_call>${JSON.stringify({
+    name: 'devserver.start',
+    arguments: { cwd, command: 'node', args: ['-e', nodeServerScript], expectedUrl: previewUrl },
+  })}</tool_call>`
+  const previewCall = (name: string, args: Record<string, unknown>) =>
+    `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`
 
   const requests: Record<string, string> = {
     'shell.run_command': `Call shell.run_command exactly once to run node with args ["-e","console.log('ava shell ok')"] in cwd "${cwd}".`,
@@ -43,28 +75,51 @@ function defaultBuiltInRequest(toolName: string, cwd: string): string {
     'file.stat': `Call file.stat exactly once for "${cwd}\\package.json".`,
     'file.patch': `First call file.write_text to create "${patchFile}" with content "before patch". Then call file.patch exactly once on "${patchFile}" replacing "before" with "after".`,
     'project.detect': `Call project.detect exactly once with cwd "${cwd}".`,
-    'project.map': `Call project.map exactly once with cwd "${cwd}" and maxDepth 2.`,
+    'project.map': `Respond with exactly this one tool call and no extra tool calls: ${previewCall('project.map', { cwd, maxDepth: 2 })}`,
     'project.validate': `Call project.validate exactly once with cwd "${cwd}" and level "quick".`,
     'search.ripgrep': `Call search.ripgrep exactly once in cwd "${cwd}" to search for "ava" with maxResults 5.`,
     'git.status': `Call git.status exactly once with cwd "${cwd}".`,
     'git.diff': `Call git.diff exactly once with cwd "${cwd}".`,
-    'devserver.start': `Call devserver.start exactly once with cwd "${cwd}", command "node", args ["-e","${nodeServerScript}"], and expectedUrl "${PREVIEW_TEST_URL}".`,
+    'devserver.start': `Respond with exactly this one tool call and no extra tool calls: ${devserverStartCall}`,
     'devserver.status': `Call devserver.status exactly once with cwd "${cwd}".`,
-    'devserver.stop': `First call devserver.start with cwd "${cwd}", command "node", args ["-e","${nodeServerScript}"], and expectedUrl "${PREVIEW_TEST_URL}". Then call devserver.stop exactly once for cwd "${cwd}".`,
-    'preview.open': `First call devserver.start with cwd "${cwd}", command "node", args ["-e","${nodeServerScript}"], and expectedUrl "${PREVIEW_TEST_URL}". Then call preview.open exactly once for "${PREVIEW_TEST_URL}".`,
-    'preview.console': `First call devserver.start with cwd "${cwd}", command "node", args ["-e","${nodeServerScript}"], and expectedUrl "${PREVIEW_TEST_URL}". Then call preview.console exactly once for "${PREVIEW_TEST_URL}" with waitMs 300.`,
-    'preview.screenshot': `First call devserver.start with cwd "${cwd}", command "node", args ["-e","${nodeServerScript}"], and expectedUrl "${PREVIEW_TEST_URL}". Then call preview.screenshot exactly once for "${PREVIEW_TEST_URL}" and save to "${screenshotPath}".`,
+    'devserver.stop': `Respond with exactly these two tool calls and no extra tool calls:\n${devserverStartCall}\n${previewCall('devserver.stop', { cwd })}`,
+    'preview.open': `Respond with exactly these two tool calls and no extra tool calls:\n${devserverStartCall}\n${previewCall('preview.open', { url: previewUrl })}`,
+    'preview.console': `Respond with exactly these two tool calls and no extra tool calls:\n${devserverStartCall}\n${previewCall('preview.console', { url: previewUrl, waitMs: 300 })}`,
+    'preview.screenshot': `Respond with exactly these two tool calls and no extra tool calls:\n${devserverStartCall}\n${previewCall('preview.screenshot', { url: previewUrl, outputPath: screenshotPath, waitMs: 300 })}`,
   }
 
   return requests[toolName] ?? `Call ${toolName} exactly once with safe minimal arguments for cwd "${cwd}".`
 }
 
+function minimalJsonForSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object') return {}
+  const record = schema as Record<string, unknown>
+  if (Array.isArray(record.enum) && record.enum.length > 0) return record.enum[0]
+  if (Array.isArray(record.anyOf) && record.anyOf.length > 0) return minimalJsonForSchema(record.anyOf[0])
+  if (Array.isArray(record.oneOf) && record.oneOf.length > 0) return minimalJsonForSchema(record.oneOf[0])
+
+  const type = record.type
+  if (type === 'string') return 'ava-unit-test'
+  if (type === 'number' || type === 'integer') return 1
+  if (type === 'boolean') return true
+  if (type === 'array') return []
+  if (type === 'object' || record.properties) {
+    const required = Array.isArray(record.required) ? record.required.map(String) : []
+    const properties = record.properties && typeof record.properties === 'object'
+      ? record.properties as Record<string, unknown>
+      : {}
+    return Object.fromEntries(required.map(key => [key, minimalJsonForSchema(properties[key])]))
+  }
+  return {}
+}
+
 function makeMcpRequest(toolName: string, schema: unknown): string {
+  const args = minimalJsonForSchema(schema)
   return [
     `Call MCP tool ${toolName} exactly once.`,
-    'Use the input schema to choose the smallest safe valid arguments.',
-    'If required arguments are unknown, choose harmless placeholder values and let the tool return its real validation result.',
-    `Schema: ${JSON.stringify(schema ?? {})}`,
+    `Use exactly these JSON arguments: ${JSON.stringify(args)}.`,
+    'Do not call any other tool.',
+    'If the tool returns a validation or business error, report that result briefly.',
   ].join('\n')
 }
 
@@ -84,9 +139,11 @@ export function UnitTestView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [devCwd, setDevCwd] = useState('')
+  const [logPath, setLogPath] = useState('')
   const [targets, setTargets] = useState<TestTarget[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
+  const targetRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   const kind = state.unitTestSection
   const cwd = devCwd
@@ -106,6 +163,7 @@ export function UnitTestView() {
 
       const nextCwd = context.cwd
       setDevCwd(context.cwd)
+      setLogPath(context.logPath ?? '')
       const builtIns: TestTarget[] = context.builtInTools.map(tool => ({
         id: `built-in:${tool.name}`,
         kind: 'built-in',
@@ -160,6 +218,11 @@ export function UnitTestView() {
     if (firstForKind && selected?.kind !== kind) setSelectedId(firstForKind.id)
   }, [kind, selected?.kind, targets])
 
+  useEffect(() => {
+    if (!selectedId) return
+    targetRefs.current[selectedId]?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
+
   const updateRequest = (id: string, request: string) => {
     setTests(prev => ({
       ...prev,
@@ -168,20 +231,52 @@ export function UnitTestView() {
   }
 
   const runTarget = async (target: TestTarget) => {
-    const providers = state.settings.modelProviders.filter(provider => provider.enabled)
-    if (providers.length === 0) {
-      setTests(prev => ({ ...prev, [target.id]: { ...(prev[target.id] ?? { request: target.defaultRequest }), status: 'failed', message: 'No enabled LLM provider.' } }))
-      return
-    }
-    if (!cwd) {
-      setTests(prev => ({ ...prev, [target.id]: { ...(prev[target.id] ?? { request: target.defaultRequest }), status: 'failed', message: 'No test cwd available.' } }))
-      return
-    }
-
     const request = tests[target.id]?.request || target.defaultRequest
     const startedAt = Date.now()
     const streamId = `ut_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const parts: any[] = []
+
+    const writeLog = (entry: UnitTestLogEntry) => {
+      try {
+        const devApi = window.ava.dev as typeof window.ava.dev & {
+          appendUnitTestResult?: (entry: UnitTestLogEntry) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
+        }
+        if (typeof devApi.appendUnitTestResult !== 'function') {
+          console.warn('[unit-test] log API unavailable; restart Ava to enable persistent logs')
+          return
+        }
+        devApi.appendUnitTestResult(entry).catch(err => {
+          console.warn('[unit-test] failed to write log:', err)
+        })
+      } catch (err) {
+        console.warn('[unit-test] failed to schedule log write:', err)
+      }
+    }
+
+    const failBeforeStream = (message: string) => {
+      const durationMs = Date.now() - startedAt
+      setTests(prev => ({ ...prev, [target.id]: { request, status: 'failed', message, durationMs } }))
+      writeLog({
+        id: target.id,
+        kind: target.kind,
+        name: target.name,
+        status: 'failed',
+        message,
+        durationMs,
+        request,
+      })
+    }
+
+    const providers = state.settings.modelProviders.filter(provider => provider.enabled)
+    if (providers.length === 0) {
+      failBeforeStream('No enabled LLM provider.')
+      return
+    }
+    if (!cwd) {
+      failBeforeStream('No test cwd available.')
+      return
+    }
+
     setTests(prev => ({ ...prev, [target.id]: { request, status: 'running', message: 'Waiting for LLM/tool result...' } }))
 
     const offPart = window.ava.llm.onPart(({ streamId: id, partIndex, part }) => {
@@ -223,34 +318,75 @@ export function UnitTestView() {
       if (!reply.ok) throw new Error(reply.error)
       const toolParts = parts.filter(part => part?.type === 'tool_call')
       const targetCalls = toolParts.filter(part => part.name === target.name)
-      const failedCall = toolParts.find(part => part.status === 'error' || part.status === 'aborted')
+      const targetFailedCall = targetCalls.find(part => part.status === 'error' || part.status === 'aborted')
+      const targetOkCall = targetCalls.find(part => part.status === 'ok')
+      const targetReachedCall = targetCalls.find(part => part.status === 'ok' || part.status === 'error')
       const passed =
         target.kind === 'skill'
           ? Boolean(reply.result.fullContent.trim()) && !reply.result.stopReason
-          : targetCalls.some(part => part.status === 'ok') && !failedCall && !reply.result.stopReason
+        : target.kind === 'mcp'
+            ? Boolean(targetReachedCall)
+            : Boolean(targetOkCall)
+      const durationMs = Date.now() - startedAt
+      const message = passed
+        ? target.kind === 'mcp' && targetFailedCall
+          ? `Reached MCP tool in ${durationMs}ms; tool returned error: ${targetFailedCall.error ?? 'tool error'}`
+          : reply.result.stopReason
+            ? `Passed in ${durationMs}ms; target tool was reached before stopReason: ${reply.result.stopReason}`
+            : targetFailedCall
+              ? `Passed in ${durationMs}ms; target tool succeeded before later retry error: ${targetFailedCall.error ?? 'tool error'}`
+          : `Passed in ${durationMs}ms`
+        : targetFailedCall?.error || reply.result.stopReason || `Target tool was not called successfully. Calls: ${toolParts.map(part => `${part.name}:${part.status}`).join(', ') || 'none'}`
+      const lastTool = toolParts.map(part => `${part.name}:${part.status}`).join(', ')
 
       setTests(prev => ({
         ...prev,
         [target.id]: {
           request,
           status: passed ? 'passed' : 'failed',
-          message: passed
-            ? `Passed in ${Date.now() - startedAt}ms`
-            : failedCall?.error || reply.result.stopReason || `Target tool was not called successfully. Calls: ${toolParts.map(part => `${part.name}:${part.status}`).join(', ') || 'none'}`,
-          lastTool: toolParts.map(part => `${part.name}:${part.status}`).join(', '),
-          durationMs: Date.now() - startedAt,
+          message,
+          lastTool,
+          durationMs,
         },
       }))
+      writeLog({
+        id: target.id,
+        kind: target.kind,
+        name: target.name,
+        status: passed ? 'passed' : 'failed',
+        message,
+        durationMs,
+        request,
+        toolCalls: toolParts.map(part => ({
+          name: part.name,
+          status: part.status,
+          error: part.error,
+          args: part.args,
+        })),
+        stopReason: reply.result.stopReason,
+        fullContent: reply.result.fullContent,
+      })
     } catch (err) {
+      const durationMs = Date.now() - startedAt
+      const message = err instanceof Error ? err.message : String(err)
       setTests(prev => ({
         ...prev,
         [target.id]: {
           request,
           status: 'failed',
-          message: err instanceof Error ? err.message : String(err),
-          durationMs: Date.now() - startedAt,
+          message,
+          durationMs,
         },
       }))
+      writeLog({
+        id: target.id,
+        kind: target.kind,
+        name: target.name,
+        status: 'failed',
+        message,
+        durationMs,
+        request,
+      })
     } finally {
       offPart()
       offUpdate()
@@ -259,12 +395,25 @@ export function UnitTestView() {
 
   const runVisibleTargets = async () => {
     for (const target of visibleTargets) {
-      await runTarget(target)
+      setSelectedId(target.id)
+      try {
+        await runTarget(target)
+      } catch (err) {
+        const request = tests[target.id]?.request || target.defaultRequest
+        setTests(prev => ({
+          ...prev,
+          [target.id]: {
+            request,
+            status: 'failed',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }))
+      }
     }
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       <div className="border-b border-border-subtle px-6 py-4">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -272,6 +421,11 @@ export function UnitTestView() {
             <p className="mt-1 text-xs text-text-3">
               Dev-only LLM tool-call tests. CWD: <span className="font-mono text-text-2">{cwd || '(none)'}</span>
             </p>
+            {logPath && (
+              <p className="mt-1 text-xs text-text-3">
+                Log: <span className="font-mono text-text-2">{logPath}</span>
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={refresh} className="rounded-md border border-border-subtle px-3 py-1.5 text-xs text-text-2 hover:bg-white/[0.04]">
@@ -285,12 +439,9 @@ export function UnitTestView() {
         {error && <div className="mt-3 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">{error}</div>}
       </div>
 
-      <div className="grid flex-1 min-h-0 grid-cols-[280px_1fr]">
-        <div className="min-h-0 border-r border-border-subtle">
-          <div className="border-b border-border-subtle px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-text-3">
-            {kind === 'built-in' ? 'Built-in Tools' : kind === 'mcp' ? 'MCP Tools' : 'Skills'}
-          </div>
-          <div className="h-full min-h-0 overflow-y-auto p-2">
+      <div className="grid flex-1 min-h-0 overflow-hidden grid-cols-[280px_1fr]">
+        <div className="flex min-h-0 flex-col border-r border-border-subtle">
+          <div className="min-h-0 flex-1 overflow-y-auto p-2 pb-10">
             {loading ? (
               <div className="p-4 text-xs text-text-3">Loading...</div>
             ) : visibleTargets.length === 0 ? (
@@ -301,6 +452,7 @@ export function UnitTestView() {
                 return (
                   <button
                     key={target.id}
+                    ref={node => { targetRefs.current[target.id] = node }}
                     onClick={() => setSelectedId(target.id)}
                     className={`mb-1 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors ${
                       selected?.id === target.id ? 'bg-white/[0.08] text-text' : 'text-text-2 hover:bg-white/[0.04] hover:text-text'
@@ -318,7 +470,7 @@ export function UnitTestView() {
           </div>
         </div>
 
-        <div className="min-h-0 overflow-y-auto p-6">
+        <div className="min-h-0 overflow-y-auto p-6 pb-12">
           {selected ? (
             <div className="max-w-4xl space-y-4">
               <div className="rounded-xl border border-border-subtle bg-surface/50 p-4">

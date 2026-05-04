@@ -29,6 +29,7 @@ import { applyWin11RoundedCorners } from './services/dwmCorners'
 const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
+const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
 
 function defaultProjectFileContent(fileName: string): string | null {
   if (fileName === 'TASKS.md') {
@@ -73,6 +74,42 @@ async function ensureUnitTestWorkspace(): Promise<string> {
     'utf8',
   )
   return root
+}
+
+async function appendUnitTestResult(raw: unknown): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  const root = await ensureUnitTestWorkspace()
+  const file = join(root, UNIT_TEST_RESULTS_FILE)
+  try {
+    const record = {
+      time: new Date().toISOString(),
+      ...(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : { value: raw }),
+    }
+    await fs.appendFile(file, `${JSON.stringify(record)}\n`, 'utf8')
+    return { ok: true, path: file }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+async function readUnitTestResults(): Promise<{ ok: true; path: string; text: string } | { ok: false; error: string }> {
+  const root = await ensureUnitTestWorkspace()
+  const file = join(root, UNIT_TEST_RESULTS_FILE)
+  try {
+    return { ok: true, path: file, text: await fs.readFile(file, 'utf8').catch(() => '') }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+async function clearUnitTestResults(): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  const root = await ensureUnitTestWorkspace()
+  const file = join(root, UNIT_TEST_RESULTS_FILE)
+  try {
+    await fs.writeFile(file, '', 'utf8')
+    return { ok: true, path: file }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -258,6 +295,7 @@ function registerIpc(): void {
     return {
       isDev: true,
       cwd: testWorkspace,
+      logPath: join(testWorkspace, UNIT_TEST_RESULTS_FILE),
       builtInTools: builtInTools.listTools(),
       mcpTools: servers.flatMap(server =>
         (server.tools ?? []).map(tool => ({
@@ -277,6 +315,19 @@ function registerIpc(): void {
         })),
       ),
     }
+  })
+
+  ipcMain.handle('ava:dev:appendUnitTestResult', async (_e, raw: unknown) => {
+    if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
+    return appendUnitTestResult(raw)
+  })
+  ipcMain.handle('ava:dev:readUnitTestResults', async () => {
+    if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
+    return readUnitTestResults()
+  })
+  ipcMain.handle('ava:dev:clearUnitTestResults', async () => {
+    if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
+    return clearUnitTestResults()
   })
 
   // ── Tool audit log ──────────────────────────

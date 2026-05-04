@@ -144,6 +144,7 @@ interface McpToolDescriptor {
 interface UnitTestContext {
   isDev: boolean
   cwd: string
+  logPath?: string
   builtInTools: McpToolDescriptor[]
   mcpTools: Array<McpToolDescriptor & {
     serverId: string
@@ -156,6 +157,24 @@ interface UnitTestContext {
     enabled: boolean
     valid: boolean
   }>
+}
+
+interface UnitTestLogEntry {
+  id: string
+  kind: 'built-in' | 'mcp' | 'skill'
+  name: string
+  status: 'passed' | 'failed'
+  message?: string
+  durationMs?: number
+  request?: string
+  toolCalls?: Array<{
+    name?: string
+    status?: string
+    error?: string
+    args?: Record<string, unknown>
+  }>
+  stopReason?: string
+  fullContent?: string
 }
 
 interface McpServerRuntime {
@@ -337,6 +356,12 @@ const ava = {
   dev: {
     unitTestContext: (states: Record<string, PluginState>): Promise<UnitTestContext> =>
       ipcRenderer.invoke('ava:dev:unitTestContext', states),
+    appendUnitTestResult: (entry: UnitTestLogEntry): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke('ava:dev:appendUnitTestResult', entry),
+    readUnitTestResults: (): Promise<{ ok: true; path: string; text: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke('ava:dev:readUnitTestResults'),
+    clearUnitTestResults: (): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke('ava:dev:clearUnitTestResults'),
   },
 
   toolAudit: {
