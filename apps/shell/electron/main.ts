@@ -383,8 +383,8 @@ function registerIpc(): void {
     await pluginManager.uninstall(pluginId)
     return true
   })
-  ipcMain.handle('ava:plugins:getMarketplaceCatalog', async () =>
-    pluginManager.getMarketplaceCatalog(),
+  ipcMain.handle('ava:plugins:getMarketplaceCatalog', async (_e, states, options) =>
+    pluginManager.getMarketplaceCatalog(states, options),
   )
   ipcMain.handle('ava:plugins:update', async (_e, pluginId: string) =>
     pluginManager.update(pluginId),

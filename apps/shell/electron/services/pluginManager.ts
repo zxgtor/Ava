@@ -65,6 +65,39 @@ export interface PluginCapabilityView {
   error?: string
 }
 
+export type MarketplaceItemType = 'plugin' | 'skill'
+export type MarketplaceItemSource = 'claude' | 'codex' | 'ava'
+
+export interface MarketplaceItem {
+  id: string
+  type: MarketplaceItemType
+  name: string
+  description: string
+  author: string
+  category: string
+  source: MarketplaceItemSource
+  sourceLabel: string
+  sourceUrl?: string
+  repoUrl?: string
+  installUrl?: string
+  installKind: 'git' | 'parent-plugin' | 'unavailable'
+  installNote?: string
+  parentPluginName?: string
+  thumbnailUrl?: string
+  installedPluginId?: string
+  sourceBadges: string[]
+}
+
+export interface MarketplaceCatalog {
+  updatedAt: number
+  items: MarketplaceItem[]
+  warnings: string[]
+}
+
+export interface MarketplaceCatalogOptions {
+  sources?: MarketplaceItemSource[]
+}
+
 export interface PluginSkill {
   pluginId: string
   pluginName: string
@@ -224,6 +257,255 @@ async function readSourceInfo(rootPath: string, bundled: boolean): Promise<Plugi
 
 async function writeSourceInfo(rootPath: string, source: PluginSourceInfo): Promise<void> {
   await writeFile(join(rootPath, SOURCE_META), JSON.stringify(source, null, 2), 'utf8')
+}
+
+const CLAUDE_MARKETPLACE_URL =
+  'https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json'
+const CLAUDE_MARKETPLACE_REPO = 'https://github.com/anthropics/claude-plugins-official'
+const CODEX_MARKETPLACE_ORIGIN = 'https://www.codex-marketplace.com'
+
+interface ClaudeMarketplacePlugin {
+  name?: unknown
+  description?: unknown
+  category?: unknown
+  author?: { name?: unknown } | unknown
+  source?: unknown
+}
+
+function pluginToMarketplaceItems(plugin: LoadedPlugin): MarketplaceItem[] {
+  const pluginName = plugin.manifest?.name ?? basename(plugin.rootPath)
+  const category = plugin.bundled ? 'bundled' : 'installed'
+  const pluginItem: MarketplaceItem = {
+    id: `ava:plugin:${plugin.id}`,
+    type: 'plugin',
+    name: pluginName,
+    description: plugin.manifest?.description ?? plugin.rootPath,
+    author: plugin.bundled ? 'Ava' : 'Local',
+    category,
+    source: 'ava',
+    sourceLabel: 'Ava Local',
+    sourceUrl: plugin.rootPath,
+    repoUrl: plugin.source.uri,
+    installKind: 'unavailable',
+    installNote: 'Already available locally.',
+    installedPluginId: plugin.id,
+    sourceBadges: ['Ava'],
+  }
+  const skillItems: MarketplaceItem[] = plugin.skills.map(skill => ({
+    id: `ava:skill:${plugin.id}:${sanitizeId(skill.name) || 'skill'}`,
+    type: 'skill',
+    name: skill.name,
+    description: `Skill from ${pluginName}`,
+    author: pluginName,
+    category,
+    source: 'ava',
+    sourceLabel: 'Ava Local',
+    sourceUrl: skill.sourcePath,
+    repoUrl: plugin.source.uri,
+    installKind: 'parent-plugin',
+    installNote: 'Installed through its parent plugin.',
+    parentPluginName: pluginName,
+    installedPluginId: plugin.id,
+    sourceBadges: ['Ava'],
+  }))
+  return [pluginItem, ...skillItems]
+}
+
+async function loadClaudeMarketplace(): Promise<MarketplaceItem[]> {
+  const response = await fetch(CLAUDE_MARKETPLACE_URL)
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const catalog = await response.json() as { plugins?: ClaudeMarketplacePlugin[] }
+  const plugins = Array.isArray(catalog.plugins) ? catalog.plugins : []
+  return plugins.map(plugin => {
+    const name = stringValue(plugin.name, 'unknown-plugin')
+    const source = claudeSource(plugin.source)
+    const author = typeof plugin.author === 'object' && plugin.author
+      ? stringValue((plugin.author as { name?: unknown }).name, 'Unknown')
+      : 'Unknown'
+    const installUrl = source.installable ? source.repoUrl : undefined
+    return {
+      id: `claude:plugin:${sanitizeId(name) || 'plugin'}:${sanitizeId(source.sourceUrl ?? '') || 'source'}`,
+      type: 'plugin',
+      name,
+      description: stringValue(plugin.description, 'Claude Code plugin'),
+      author,
+      category: stringValue(plugin.category, 'uncategorized'),
+      source: 'claude',
+      sourceLabel: 'Claude Official',
+      sourceUrl: source.sourceUrl,
+      repoUrl: source.repoUrl,
+      installUrl,
+      installKind: installUrl ? 'git' : 'unavailable',
+      installNote: installUrl ? undefined : source.note,
+      sourceBadges: ['Claude'],
+    } satisfies MarketplaceItem
+  })
+}
+
+async function loadCodexMarketplace(): Promise<MarketplaceItem[]> {
+  const [plugins, skills] = await Promise.all([
+    loadCodexPage('plugin', `${CODEX_MARKETPLACE_ORIGIN}/plugins`),
+    loadCodexPage('skill', `${CODEX_MARKETPLACE_ORIGIN}/skills`),
+  ])
+  return [...plugins, ...skills]
+}
+
+async function loadCodexPage(type: MarketplaceItemType, url: string): Promise<MarketplaceItem[]> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const html = await response.text()
+  const cards = html.split('plugin-card-link block" href="').slice(1)
+  return cards.map(card => parseCodexCard(type, card)).filter((item): item is MarketplaceItem => Boolean(item))
+}
+
+function parseCodexCard(type: MarketplaceItemType, card: string): MarketplaceItem | null {
+  const path = card.slice(0, card.indexOf('"'))
+  const name = htmlDecode(matchFirst(card, /<h3[^>]*>([\s\S]*?)<\/h3>/))
+  if (!name) return null
+  const author = htmlDecode(matchFirst(card, /<p class="mt-1[^"]*"[^>]*>([\s\S]*?)<\/p>/)) || 'Unknown'
+  const description = htmlDecode(matchFirst(card, /<p class="mt-4 line-clamp-2[^"]*"[^>]*>([\s\S]*?)<\/p>/)) || 'Codex marketplace item'
+  const tags = Array.from(card.matchAll(/<span class="inline-flex[^"]*"[^>]*>([\s\S]*?)<\/span>/g))
+    .map(match => htmlDecode(match[1]))
+    .filter(Boolean)
+  const installCommand = htmlDecode(matchFirst(card, /<code[^>]*>([\s\S]*?codex-marketplace add[\s\S]*?)<\/code>/))
+    .replace(/\s+/g, ' ')
+    .replace(/\$ npx/g, 'npx')
+    .trim()
+  const sourcePath = installCommand.match(/codex-marketplace add ([^\s]+)\s/)?.[1]
+  const repoUrl = sourcePath ? githubRepoFromCodexPath(sourcePath) : undefined
+  const category = tags.find(tag => !/^(plugin|skill|hook)$/i.test(tag)) ?? 'uncategorized'
+  return {
+    id: `codex:${type}:${sanitizeId(sourcePath ?? (path || name)) || 'item'}`,
+    type,
+    name,
+    description,
+    author,
+    category,
+    source: 'codex',
+    sourceLabel: 'Codex Community',
+    sourceUrl: `${CODEX_MARKETPLACE_ORIGIN}${path}`,
+    repoUrl,
+    installUrl: type === 'plugin' ? repoUrl : undefined,
+    installKind: type === 'plugin' && repoUrl ? 'git' : 'unavailable',
+    installNote: type === 'skill'
+      ? 'Standalone Codex skill install is not wired in Ava yet.'
+      : repoUrl ? undefined : 'No Git install source found.',
+    sourceBadges: ['Codex'],
+  }
+}
+
+function mergeMarketplaceItems(items: MarketplaceItem[], localPlugins: LoadedPlugin[]): MarketplaceItem[] {
+  const map = new Map<string, MarketplaceItem>()
+  for (const item of items) {
+    const key = marketplaceDedupeKey(item)
+    const existing = map.get(key)
+    if (!existing) {
+      map.set(key, markInstalled(item, localPlugins))
+      continue
+    }
+    map.set(key, {
+      ...existing,
+      description: longerText(existing.description, item.description),
+      sourceBadges: Array.from(new Set([...existing.sourceBadges, ...item.sourceBadges])),
+      installedPluginId: existing.installedPluginId ?? item.installedPluginId,
+      installUrl: existing.installUrl ?? item.installUrl,
+      installKind: existing.installKind === 'git' ? existing.installKind : item.installKind,
+      installNote: existing.installNote ?? item.installNote,
+    })
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.type.localeCompare(b.type) || a.category.localeCompare(b.category) || a.name.localeCompare(b.name),
+  )
+}
+
+function normalizeMarketplaceSources(sources?: MarketplaceItemSource[]): Set<MarketplaceItemSource> {
+  const allowed: MarketplaceItemSource[] = ['claude', 'codex', 'ava']
+  if (!Array.isArray(sources) || sources.length === 0) return new Set(allowed)
+  const selected = sources.filter((source): source is MarketplaceItemSource => allowed.includes(source))
+  return new Set(selected.length > 0 ? selected : allowed)
+}
+
+function markInstalled(item: MarketplaceItem, localPlugins: LoadedPlugin[]): MarketplaceItem {
+  if (item.installedPluginId) return item
+  const itemRepo = normalizeRepoUrl(item.repoUrl ?? item.installUrl ?? '')
+  if (!itemRepo) return item
+  const installed = localPlugins.find(plugin => normalizeRepoUrl(plugin.source.uri ?? '') === itemRepo)
+  return installed ? { ...item, installedPluginId: installed.id } : item
+}
+
+function marketplaceDedupeKey(item: MarketplaceItem): string {
+  const repo = normalizeRepoUrl(item.repoUrl ?? item.installUrl ?? '')
+  if (repo) return `${item.type}:repo:${repo}`
+  return `${item.type}:name:${sanitizeId(item.name) || 'item'}`
+}
+
+function claudeSource(raw: unknown): { sourceUrl?: string; repoUrl?: string; installable: boolean; note?: string } {
+  if (typeof raw === 'string') {
+    if (raw.startsWith('./')) {
+      return {
+        sourceUrl: `${CLAUDE_MARKETPLACE_REPO}/tree/main/${raw.replace(/^\.\//, '')}`,
+        installable: false,
+        note: 'Claude marketplace subdirectory plugins are listed but not directly installable by Ava yet.',
+      }
+    }
+    return { sourceUrl: raw, repoUrl: raw, installable: /^https?:|^git@/.test(raw) }
+  }
+  if (raw && typeof raw === 'object') {
+    const src = raw as { url?: unknown; path?: unknown }
+    const url = stringValue(src.url)
+    const path = stringValue(src.path)
+    if (url && path) {
+      return {
+        sourceUrl: `${url.replace(/\.git$/, '')}/tree/main/${path}`,
+        repoUrl: url,
+        installable: false,
+        note: 'Git subdirectory plugins are listed but not directly installable by Ava yet.',
+      }
+    }
+    if (url) return { sourceUrl: url, repoUrl: url, installable: true }
+  }
+  return { installable: false, note: 'Unknown marketplace source format.' }
+}
+
+function githubRepoFromCodexPath(path: string): string | undefined {
+  const parts = path.split('/').filter(Boolean)
+  if (parts.length < 2) return undefined
+  return `https://github.com/${parts[0]}/${parts[1]}.git`
+}
+
+function normalizeRepoUrl(url: string): string {
+  return url
+    .trim()
+    .toLowerCase()
+    .replace(/^git\+/, '')
+    .replace(/^git@github\.com:/, 'https://github.com/')
+    .replace(/\.git$/, '')
+    .replace(/\/$/, '')
+}
+
+function stringValue(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback
+}
+
+function longerText(a: string, b: string): string {
+  return b.length > a.length ? b : a
+}
+
+function matchFirst(text: string, re: RegExp): string {
+  return text.match(re)?.[1] ?? ''
+}
+
+function htmlDecode(text: string): string {
+  return text
+    .replace(/<!--\s*-->/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(Number(code)))
+    .replace(/<[^>]+>/g, '')
+    .trim()
 }
 
 async function findPluginRoot(rootPath: string): Promise<string | null> {
@@ -638,26 +920,38 @@ export class PluginManager {
     return view
   }
 
-  async getMarketplaceCatalog(): Promise<any[]> {
-    // For now, return a static list of catalog items.
-    return [
-      {
-        id: 'windows-mcp',
-        name: 'Windows MCP',
-        description: 'Control Windows system settings and applications via Model Context Protocol.',
-        author: 'CyanVoxel',
-        repoUrl: 'https://github.com/CyanVoxel/Windows-MCP',
-        icon: 'Monitor',
-      },
-      {
-        id: 'sqlite-mcp',
-        name: 'SQLite MCP',
-        description: 'Official Model Context Protocol server for SQLite databases.',
-        author: 'Anthropic',
-        repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite',
-        icon: 'Database',
-      }
-    ]
+  async getMarketplaceCatalog(
+    states: Record<string, PluginState> = {},
+    options: MarketplaceCatalogOptions = {},
+  ): Promise<MarketplaceCatalog> {
+    const warnings: string[] = []
+    const enabledSources = normalizeMarketplaceSources(options.sources)
+    const needsLocalPlugins = enabledSources.has('ava') || enabledSources.has('claude') || enabledSources.has('codex')
+    const localPlugins = needsLocalPlugins ? await this.load(states).catch(err => {
+      warnings.push(`Failed to read local plugins: ${err instanceof Error ? err.message : String(err)}`)
+      return [] as LoadedPlugin[]
+    }) : []
+    const localItems = enabledSources.has('ava') ? localPlugins.flatMap(pluginToMarketplaceItems) : []
+    const [claudeItems, codexItems] = await Promise.all([
+      enabledSources.has('claude')
+        ? loadClaudeMarketplace().catch(err => {
+            warnings.push(`Claude marketplace unavailable: ${err instanceof Error ? err.message : String(err)}`)
+            return [] as MarketplaceItem[]
+          })
+        : Promise.resolve([]),
+      enabledSources.has('codex')
+        ? loadCodexMarketplace().catch(err => {
+            warnings.push(`Codex marketplace unavailable: ${err instanceof Error ? err.message : String(err)}`)
+            return [] as MarketplaceItem[]
+          })
+        : Promise.resolve([]),
+    ])
+    const items = mergeMarketplaceItems([...claudeItems, ...codexItems, ...localItems], localPlugins)
+    return {
+      updatedAt: Date.now(),
+      items,
+      warnings,
+    }
   }
 
   private async load(states: Record<string, PluginState>): Promise<LoadedPlugin[]> {

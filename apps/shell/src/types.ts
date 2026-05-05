@@ -198,6 +198,39 @@ export interface PluginCapabilityView {
   error?: string
 }
 
+export type MarketplaceItemType = 'plugin' | 'skill'
+export type MarketplaceItemSource = 'claude' | 'codex' | 'ava'
+
+export interface MarketplaceItem {
+  id: string
+  type: MarketplaceItemType
+  name: string
+  description: string
+  author: string
+  category: string
+  source: MarketplaceItemSource
+  sourceLabel: string
+  sourceUrl?: string
+  repoUrl?: string
+  installUrl?: string
+  installKind: 'git' | 'parent-plugin' | 'unavailable'
+  installNote?: string
+  parentPluginName?: string
+  thumbnailUrl?: string
+  installedPluginId?: string
+  sourceBadges: string[]
+}
+
+export interface MarketplaceCatalog {
+  updatedAt: number
+  items: MarketplaceItem[]
+  warnings: string[]
+}
+
+export interface MarketplaceCatalogOptions {
+  sources?: MarketplaceItemSource[]
+}
+
 export interface PluginCommand {
   pluginId: string
   pluginName: string

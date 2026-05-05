@@ -40,7 +40,7 @@ const SETTINGS_CATEGORIES = [
   { id: 'chain', labelKey: 'settings.fallback_chain', fallback: 'Fallback Chain', icon: GitBranch },
   { id: 'mcp', labelKey: 'settings.mcp', fallback: 'MCP Servers', icon: Server },
   { id: 'audit', labelKey: 'settings.audit_title', fallback: 'Tool Audit Log', icon: ClipboardList },
-  { id: 'marketplace', labelKey: 'settings.marketplace_title', fallback: 'Plugin Marketplace', icon: Store },
+  { id: 'marketplace', labelKey: 'settings.marketplace_title', fallback: 'Marketplace', icon: Store },
   { id: 'plugins', labelKey: 'settings.plugins', fallback: 'Plugins', icon: Puzzle },
   { id: 'voice', labelKey: 'settings.voice', fallback: 'Voice & STT', icon: Mic },
   { id: 'about', labelKey: 'settings.about', fallback: 'About', icon: Info },

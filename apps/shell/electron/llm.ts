@@ -137,12 +137,16 @@ const WINDOWS_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：、]+/g
 const WINDOWS_DRIVE_SCOPE_RE = /\b[A-Za-z]:\\?(?![^\s"'`<>|?*])/g
 const TOOL_INTENT_RE =
   /\b(read|open|inspect|check|list|search|find|scan|write|create|edit|modify|delete|run|execute|call|use tool|tool call)\b|读取|打开|检查|查看|列出|搜索|查找|扫描|写入|创建|编辑|修改|删除|运行|执行|调用工具|使用工具/i
+const CONTINUATION_TOOL_INTENT_RE =
+  /\b(continue|retry|resume|again|previous|last|same|unfinished|interrupted|pick up|keep going|carry on)\b|继续|重试|恢复|再试|刚才|上次|之前|同一个|未完成|中断|接着/i
 const REASONING_INTENT_RE =
   /\b(debug|diagnose|trace|root cause|why|architecture|architect|design|plan|strategy|refactor|migrate|compare|tradeoff|risk|review|analyze|complex|investigate|fix|implement)\b|为什么|原因|诊断|排查|调试|架构|设计|计划|方案|重构|迁移|比较|权衡|风险|审查|分析|复杂|调查|修复|实现/i
 const SIMPLE_CHAT_RE =
   /\b(what is|how to|do you know|explain|summarize|translate|tell me|can this|does this|support)\b|是什么|怎么|如何|解释|总结|翻译|支持吗|知道/i
 const RAW_COMMAND_ONLY_RE =
   /^(?:dir|ls|npm|npx|pnpm|yarn|bun|bunx|node|git|python|python3|py|pip|pip3|pytest|rg|dotnet|vite|tsc|deno|uv|uvx|powershell|pwsh)(?:\s+[^\r\n]+)?$/i
+const ACTION_PROMISE_WITHOUT_TOOL_RE =
+  /\b(?:i will|i'll|let's|let me|first step|first,? i|now i|i need to|start by|begin by|check current|need to check|need to confirm)\b[\s\S]{0,240}\b(?:check|inspect|list|read|run|create|install|start|verify|look|view|initialize|launch)\b|我(?:将|会|需要|先|现在)[\s\S]{0,120}(?:检查|查看|读取|运行|创建|安装|启动|验证|初始化)|第一步|让我们先|请允许我查看/i
 
 export function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
@@ -247,6 +251,7 @@ function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask
 function shouldExposeTools(currentTask: string, activeCommandInvocation?: ToolAuditCommandInvocation): boolean {
   if (activeCommandInvocation) return true
   if (extractPathScopes(currentTask).length > 0) return true
+  if (CONTINUATION_TOOL_INTENT_RE.test(currentTask)) return true
   return TOOL_INTENT_RE.test(currentTask)
 }
 
@@ -294,10 +299,98 @@ function withFinalizePrompt(messages: LlmMessage[]): LlmMessage[] {
 }
 
 function looksLikeRawCommandInsteadOfTool(text: string): boolean {
-  const cleaned = text.trim().replace(/^```(?:\w+)?\s*|\s*```$/g, '').trim()
+  const cleaned = cleanRawCommandText(text)
   if (!cleaned || cleaned.length > 240 || cleaned.includes('\n\n')) return false
   const lines = cleaned.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
   return lines.length > 0 && lines.length <= 3 && lines.every(line => RAW_COMMAND_ONLY_RE.test(line))
+}
+
+function extractTrailingRawCommand(text: string): { prefixText: string; commandLine: string } | null {
+  const cleaned = cleanRawCommandText(text)
+  if (!cleaned || cleaned.length > 2_000) return null
+  const lines = cleaned.split(/\r?\n/)
+  let commandIndex = -1
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].trim()) {
+      commandIndex = i
+      break
+    }
+  }
+  if (commandIndex < 0) return null
+  const commandLine = lines[commandIndex].trim()
+  if (!RAW_COMMAND_ONLY_RE.test(commandLine)) return null
+  const prefixText = lines.slice(0, commandIndex).join('\n').trim()
+  return { prefixText, commandLine }
+}
+
+function cleanRawCommandText(text: string): string {
+  return text.trim().replace(/^```(?:\w+)?\s*|\s*```$/g, '').trim()
+}
+
+function splitShellWords(commandLine: string): string[] {
+  const words: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (let i = 0; i < commandLine.length; i += 1) {
+    const char = commandLine[i]
+    if (quote) {
+      if (char === quote) {
+        quote = null
+      } else {
+        current += char
+      }
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += char
+  }
+  if (current) words.push(current)
+  return words
+}
+
+function rawCommandToShellToolCall(rawText: string, cwd?: string): ToolCallCandidate | null {
+  if (!cwd) return null
+  const trailing = extractTrailingRawCommand(rawText)
+  if (!trailing) return null
+  const words = splitShellWords(trailing.commandLine)
+  const command = words[0]
+  if (!command) return null
+  return {
+    id: `raw_shell_${Date.now()}`,
+    name: 'shell.run_command',
+    args: {
+      command,
+      args: words.slice(1),
+      cwd,
+    },
+  }
+}
+
+function actionPromiseToToolCall(rawText: string, cwd?: string): ToolCallCandidate | null {
+  if (!cwd || !looksLikeActionPromiseWithoutTool(rawText)) return null
+  const cleaned = cleanRawCommandText(rawText)
+  const wantsProjectInspection =
+    /\b(package\.json|directory structure|current state|project state|current directory|files?|dependencies|installed|inspect|check|list|read|look at|view)\b|检查|查看|读取|目录|文件|依赖|项目状态/i.test(cleaned)
+  if (!wantsProjectInspection) return null
+  return {
+    id: `auto_project_map_${Date.now()}`,
+    name: 'project.map',
+    args: {
+      cwd,
+      maxDepth: 4,
+      maxFiles: 250,
+    },
+  }
 }
 
 function withToolCallCorrectionPrompt(messages: LlmMessage[], rawText: string): LlmMessage[] {
@@ -316,6 +409,35 @@ function withToolCallCorrectionPrompt(messages: LlmMessage[], rawText: string): 
         'For checking project structure, prefer project.map or file.list_dir.',
         'For one-shot commands, use shell.run_command with structured command, args, and cwd.',
         'For long-running dev servers, use devserver.start.',
+      ].join(' '),
+    },
+  ]
+}
+
+function looksLikeActionPromiseWithoutTool(text: string): boolean {
+  const cleaned = cleanRawCommandText(text)
+  if (!cleaned || cleaned.length > 3_000) return false
+  if (/[。.!?]\s*(?:done|completed|finished|已完成|完成了)\s*$/i.test(cleaned)) return false
+  return ACTION_PROMISE_WITHOUT_TOOL_RE.test(cleaned)
+}
+
+function withActionRequiredPrompt(messages: LlmMessage[], rawText: string): LlmMessage[] {
+  return [
+    ...messages,
+    {
+      role: 'assistant',
+      content: rawText,
+    },
+    {
+      role: 'system',
+      content: [
+        'The previous assistant response announced an action but did not call any tool.',
+        'That is not a completed agent step.',
+        'Do not repeat the plan or say what you will do.',
+        'Call exactly one appropriate available tool now.',
+        'For checking project state, use project.map or file.list_dir.',
+        'For one-shot commands, use shell.run_command with structured command, args, and cwd.',
+        'For creating or editing files, use file.write_text or file.patch.',
       ].join(' '),
     },
   ]
@@ -617,6 +739,7 @@ async function runToolLoop(
   let toolCallsIssued = 0
   let sawFirstToken = false
   let rawCommandCorrectionIssued = false
+  let actionCorrectionCount = 0
 
   for (let round = 0; round < MAX_TOOL_LOOP; round += 1) {
     if (controller.signal.aborted) throw new Error('aborted')
@@ -666,37 +789,63 @@ async function runToolLoop(
 
     const outputLimitReached = step.finishReason === 'length' || step.finishReason === 'max_tokens'
     const serverDisconnected = step.finishReason === 'stream_disconnected'
-    const rawCommandOnly =
-      tools.length > 0 &&
-      step.toolCalls.length === 0 &&
-      Boolean(step.visibleText) &&
-      looksLikeRawCommandInsteadOfTool(step.visibleText)
-
-    if (rawCommandOnly) {
-      if (!rawCommandCorrectionIssued) {
+    let toolCalls = step.toolCalls
+    const trailingRawCommand =
+      tools.length > 0 && toolCalls.length === 0 && step.visibleText
+        ? extractTrailingRawCommand(step.visibleText)
+        : null
+    if (trailingRawCommand) {
+      const shellToolCall = rawCommandToShellToolCall(step.visibleText, args.activeFolderPath)
+      if (shellToolCall) {
+        toolCalls = [shellToolCall]
+      } else if (!rawCommandCorrectionIssued) {
         rawCommandCorrectionIssued = true
         workingMessages.splice(0, workingMessages.length, ...withToolCallCorrectionPrompt(workingMessages, step.visibleText))
         continue
-      }
-
-      const failText = rawCommandNoToolText(step.visibleText)
-      fullContent += failText
-      parts.push({ type: 'text', text: failText })
-      if (!webContents.isDestroyed()) {
-        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: failText })
-      }
-      return {
-        fullContent,
-        parts,
-        model,
-        toolCallsIssued,
-        loopRounds: round + 1,
-        detectedToolFormat,
-        stopReason: 'raw_command_no_tool',
+      } else {
+        const failText = rawCommandNoToolText(step.visibleText)
+        fullContent += failText
+        parts.push({ type: 'text', text: failText })
+        if (!webContents.isDestroyed()) {
+          webContents.send('ava:llm:chunk', { streamId: args.streamId, text: failText })
+        }
+        return {
+          fullContent,
+          parts,
+          model,
+          toolCallsIssued,
+          loopRounds: round + 1,
+          detectedToolFormat,
+          stopReason: 'raw_command_no_tool',
+        }
       }
     }
 
-    if (step.visibleText) {
+    if (trailingRawCommand?.prefixText && toolCalls.length > 0) {
+      fullContent += trailingRawCommand.prefixText
+      parts.push({ type: 'text', text: trailingRawCommand.prefixText })
+      if (tools.length > 0 && bufferedVisibleText && !webContents.isDestroyed()) {
+        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: trailingRawCommand.prefixText })
+      }
+    }
+
+    const actionPromiseWithoutTool =
+      tools.length > 0 &&
+      toolCalls.length === 0 &&
+      Boolean(step.visibleText) &&
+      looksLikeActionPromiseWithoutTool(step.visibleText)
+    if (actionPromiseWithoutTool) {
+      const synthesizedToolCall = actionPromiseToToolCall(step.visibleText, args.activeFolderPath)
+      if (synthesizedToolCall) {
+        toolCalls = [synthesizedToolCall]
+      } else if (actionCorrectionCount < 4) {
+        actionCorrectionCount += 1
+        workingMessages.splice(0, workingMessages.length, ...withActionRequiredPrompt(workingMessages, step.visibleText))
+        continue
+      }
+    }
+
+    if (step.visibleText && toolCalls.length === 0) {
       fullContent += step.visibleText
       parts.push({ type: 'text', text: step.visibleText })
       if (tools.length > 0 && bufferedVisibleText && !webContents.isDestroyed()) {
@@ -704,7 +853,7 @@ async function runToolLoop(
       }
     }
 
-    if (step.hiddenReasoningExceeded && !step.visibleText && step.toolCalls.length === 0) {
+    if (step.hiddenReasoningExceeded && !step.visibleText && toolCalls.length === 0) {
       const finalizeProvider: ModelProvider = { ...effectiveProvider, reasoningMode: 'off' }
       const finalizeMessages = withFinalizePrompt(workingMessages)
       const finalizeStep = await streamFromProvider(
@@ -755,7 +904,7 @@ async function runToolLoop(
       }
     }
 
-    if (step.toolCalls.length === 0) {
+    if (toolCalls.length === 0) {
       if (step.visibleText) {
         workingMessages.push({ role: 'assistant', content: step.visibleText })
       }
@@ -771,13 +920,13 @@ async function runToolLoop(
       }
     }
 
-    toolCallsIssued += step.toolCalls.length
+    toolCallsIssued += toolCalls.length
     workingMessages.push({
       role: 'assistant',
       content: step.visibleText,
-      toolCalls: step.toolCalls,
+      toolCalls,
     })
-    for (const toolCall of step.toolCalls) {
+    for (const toolCall of toolCalls) {
       if (controller.signal.aborted) throw new Error('aborted')
       sendRunStatus(webContents, args, provider, model, 'tool_running')
 
