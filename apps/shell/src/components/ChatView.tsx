@@ -9,6 +9,7 @@ import { useStore } from '../store'
 import { EmptyState } from './EmptyState'
 import { MessageBubble } from './MessageBubble'
 import { PromptInput } from './PromptInput'
+import { TaskGraphWidget } from './TaskGraphWidget'
 import {
   makeAssistantPlaceholder,
   makeMessageId,
@@ -22,7 +23,24 @@ import {
 import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
-import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand } from '../types'
+import {
+  blockPlan,
+  completePlan,
+  createCodingDesignTaskPlan,
+  generateDynamicTaskPlan,
+  evaluateStepCompletion,
+  extractWorkingDirectoryFromText,
+  finalValidationGateSatisfied,
+  isCodingDesignBigTask,
+  markStepDone,
+  markStepRunning,
+  markStepSkipped,
+  nextTaskStep,
+  updatePlanValidation,
+  withValidation,
+} from '../lib/agent/taskExecution'
+import { runAnalyzePhase } from '../lib/agent/roles/planner'
+import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, TaskExecutionPlan, ProjectAnalysis } from '../types'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -45,12 +63,15 @@ interface PendingTaskIntake {
   content: string
   attachments: string[]
   commandInvocation?: CommandInvocation
+  analysis?: ProjectAnalysis
 }
 
 const TASK_INTAKE_INTENT_RE = /\b(build|create|make|generate|implement|fix|debug|refactor|modify|update|edit|write|add|remove|delete|site|app|component|page|feature|bug|code|html|css|javascript|typescript|react|three\.?js|3d)\b|创建|生成|实现|修复|调试|重构|修改|更新|添加|删除|网站|应用|组件|页面|功能|代码|三维|3d/i
 const LARGE_TASK_INTENT_RE = /\b(3d|three\.?js|animation|animated|site|website|landing page|app|full app|project|professional|production ready|complete|responsive|dashboard|frontend|ui|ux|migrate|refactor|implement feature|create|build|generate)\b|三维|动画|网站|站点|落地页|应用|完整|专业|响应式|前端|界面|迁移|重构|项目/i
 const CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run|执行|开始|继续|确认|可以|好的|好|没问题|就这样)\b/i
+const FEATURE_TEST_RE = /^\s*\[AVA-FEATURE-TEST:([A-Za-z0-9_.-]+)\]/i
 const MAX_AUTO_CONTINUE_ROUNDS = 3
+const MAX_TASK_ENGINE_ROUNDS = 24
 
 function shouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
   if (commandInvocation) return true
@@ -62,74 +83,24 @@ function isTaskConfirmation(content: string): boolean {
 }
 
 function makeTaskIntakeText(content: string, conversation: Conversation): string {
-  const folder = conversation.folderPath || '(未关联工作目录)'
+  const folder = conversation.folderPath || extractWorkingDirectoryFromText(content) || '(未关联工作目录)'
   const firstLine = content.trim().split('\n')[0]
-  const isLargeTask = LARGE_TASK_INTENT_RE.test(content) || content.length > 300
-  const plan = isLargeTask
-    ? [
-        '小步执行计划（为本地模型小上下文优化）：',
-        '1. 用 project.map 获取压缩项目图，确认目录、入口、配置和关键文件。',
-        '2. 初始化或补齐最小项目结构，不一次性生成过大的代码块。',
-        '3. 安装/确认必要依赖。',
-        '4. 分批写入核心文件：入口、样式、组件/3D 场景。',
-        '5. 启动 dev server，并用 preview.console 检查运行错误。',
-        '6. 用 preview.screenshot 截图检查视觉结果。',
-        '7. 根据 console/screenshot 反馈修复问题，必要时重复检查。',
-        '8. 运行 project.validate 或等价 build/typecheck。',
-        '9. 最终报告文件改动、验证结果、剩余风险。',
-      ]
-    : [
-        '执行计划：',
-        '1. 检查相关文件/项目状态。',
-        '2. 做最小必要修改。',
-        '3. 运行可用验证。',
-        '4. 汇报改动、验证结果、剩余风险。',
-      ]
   return [
     '我先确认一下我的理解：',
     '',
     `目标：${firstLine.length > 160 ? `${firstLine.slice(0, 160)}…` : firstLine}`,
     `工作目录：${folder}`,
     '',
-    ...plan,
-    '',
-    '完成标准：',
-    '- 必须写入/修改实际项目文件，不能只在聊天里输出代码。',
-    '- 需要预览的前端/3D任务必须检查 console；可截图时保存 screenshot。',
-    '- 能验证就必须验证；不能验证时必须说明原因。',
-    '- 没有通过验证或未完成时，不能声称完成。',
-    '',
     '如果理解正确，请回复「确认」或「开始」。如果有误，请直接补充修正。',
   ].join('\n')
 }
 
 function makeConfirmedTaskPlanPrompt(content: string, conversation: Conversation): string {
-  const folder = conversation.folderPath || '(no active folder)'
-  const isLargeTask = LARGE_TASK_INTENT_RE.test(content) || content.length > 300
+  const folder = conversation.folderPath || extractWorkingDirectoryFromText(content) || '(no active folder)'
   return [
     'User confirmed the task plan. Execute it now.',
     `Task: ${content}`,
     `Working directory: ${folder}`,
-    isLargeTask
-      ? [
-          'This is a large task for a local LLM with limited context.',
-          'Use small steps. Do not try to complete the whole project in one giant response.',
-          'Keep each tool round focused on the next smallest step.',
-          'Recommended step order:',
-          '1. project.map for compact project picture, then project.detect/file reads as needed.',
-          'Do not print raw commands such as "dir"; call project.map or file.list_dir for directory inspection.',
-          '2. initialize or inspect project structure.',
-          '3. install/confirm dependencies.',
-          '4. write files in small batches.',
-          '5. devserver.start and preview.console.',
-          '6. preview.screenshot for visual feedback.',
-          '7. repair any console/build/visual issues.',
-          '8. project.validate or equivalent build/typecheck.',
-          '9. final report with changed files, validation result, and remaining risks.',
-        ].join('\n')
-      : [
-          'Use the smallest safe workflow: inspect, edit, validate, report.',
-        ].join('\n'),
     'If interrupted, continue from existing file state. Never restart from scratch unless explicitly asked.',
     'Do not mark the task complete unless validation/checks support that conclusion.',
   ].join('\n')
@@ -185,6 +156,38 @@ function stopReasonText(stopReason: string): string {
   if (stopReason === 'tool_loop_limit') return 'tool loop limit reached'
   if (stopReason === 'raw_command_no_tool') return 'model output raw command instead of tool call'
   return stopReason
+}
+
+function taskRoundSummary(stepTitle: string, parts: ContentPart[]): string {
+  const toolSummaries = parts
+    .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+    .map(part => {
+      const payload = part.status === 'ok'
+        ? JSON.stringify(part.result).slice(0, 1800)
+        : part.error ?? part.status
+      return `- ${part.name}: ${part.status}${payload ? `\n  ${payload}` : ''}`
+    })
+  const text = partsToText(parts).trim()
+  return [
+    `Completed execution round for step: ${stepTitle}`,
+    text ? `Visible assistant text:\n${text.slice(0, 1200)}` : '',
+    toolSummaries.length > 0 ? `Tool results:\n${toolSummaries.join('\n')}` : 'No tool result was produced.',
+  ].filter(Boolean).join('\n\n')
+}
+
+function featureTestIdFromText(text: string): string | null {
+  return text.match(FEATURE_TEST_RE)?.[1] ?? null
+}
+
+function toolCallsForLog(parts: ContentPart[]) {
+  return parts
+    .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+    .map(part => ({
+      name: part.name,
+      status: part.status,
+      error: part.error,
+      args: part.args,
+    }))
 }
 
 function ChatSessionBar({
@@ -643,16 +646,78 @@ export function ChatView() {
       conversationId: string,
       placeholderId: string,
       activeTaskId: string,
+      initialTaskPlan?: TaskExecutionPlan,
     ) => {
       const id = makeStreamId()
       setIsStreaming(true)
       let currentSnapshot = conversationSnapshot
       let accumulatedParts: ContentPart[] = []
       let continuationRound = 0
+      let taskPlan = initialTaskPlan ?? conversationSnapshot.activeTaskPlan
+      if (taskPlan?.taskId !== activeTaskId) taskPlan = undefined
+      let taskEngineRound = 0
+      const featureTestRequest = (() => {
+        for (let i = conversationSnapshot.messages.length - 1; i >= 0; i -= 1) {
+          const message = conversationSnapshot.messages[i]
+          if (message.role !== 'user') continue
+          const text = partsToText(message.content)
+          const testId = featureTestIdFromText(text)
+          if (testId) return { testId, text }
+        }
+        return null
+      })()
+      let featureTestLogged = false
+      const logFeatureTest = async (input: {
+        status: 'passed' | 'failed'
+        message?: string
+        stopReason?: string
+        fullContent?: string
+      }) => {
+        if (!featureTestRequest || featureTestLogged || !window.ava.dev?.appendUnitTestResult) return
+        featureTestLogged = true
+        try {
+          await window.ava.dev.appendUnitTestResult({
+            id: `feature-test:${featureTestRequest.testId}`,
+            kind: 'feature',
+            name: featureTestRequest.testId,
+            status: input.status,
+            message: input.message,
+            request: featureTestRequest.text,
+            toolCalls: toolCallsForLog(accumulatedParts),
+            stopReason: input.stopReason,
+            fullContent: input.fullContent ?? partsToText(accumulatedParts),
+          })
+        } catch (err) {
+          console.warn('[feature-test] failed to write log:', err)
+        }
+      }
 
       try {
         while (true) {
+          const activeStep = taskPlan ? nextTaskStep(taskPlan) : null
+          if (taskPlan && !activeStep) {
+            taskPlan = completePlan(taskPlan)
+            dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { streaming: false, runPhase: 'completed', taskStepTitle: undefined },
+            })
+            break
+          }
+          if (taskPlan && activeStep) {
+            taskPlan = markStepRunning(taskPlan, activeStep.id)
+            dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { taskStepTitle: activeStep.title },
+            })
+          }
           const streamId = continuationRound === 0 ? id : makeStreamId()
+          const roundStartPartIndex = accumulatedParts.length
           setStreamId(streamId)
           const result = await sendChat({
             conversation: currentSnapshot,
@@ -661,6 +726,9 @@ export function ChatView() {
             folderPath: currentSnapshot.folderPath,
             streamId,
             activeTaskId,
+            activeTaskPlan: taskPlan,
+            activeStep: activeStep ?? undefined,
+            finalReportAllowed: activeStep?.id === 'final_report' && taskPlan ? finalValidationGateSatisfied(taskPlan.validation) : false,
             onStatus: ({ taskId, phase }) => {
               if (taskId && taskId !== activeTaskId) return
               dispatch({
@@ -712,6 +780,116 @@ export function ChatView() {
             },
           })
 
+          if (taskPlan && activeStep && result.ok) {
+            const roundParts = accumulatedParts.slice(roundStartPartIndex)
+            taskPlan = withValidation(taskPlan, updatePlanValidation(taskPlan, roundParts))
+            dispatch({ type: 'UPDATE_TASK_VALIDATION', conversationId, validation: taskPlan.validation })
+            const evaluation = evaluateStepCompletion({
+              plan: taskPlan,
+              step: activeStep,
+              parts: roundParts,
+              fullContent: result.fullContent,
+            })
+            if (evaluation.complete) {
+              taskPlan = activeStep.id === 'repair'
+                ? markStepSkipped(taskPlan, activeStep.id)
+                : markStepDone(taskPlan, activeStep.id)
+              dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
+              if (activeStep.id === 'final_report') {
+                taskPlan = completePlan(taskPlan)
+                dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
+              } else if (taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
+                taskEngineRound += 1
+                currentSnapshot = {
+                  ...conversationSnapshot,
+                  activeTaskPlan: taskPlan,
+                  messages: [
+                    ...currentSnapshot.messages,
+                    {
+                      id: makeMessageId(),
+                      taskId: activeTaskId,
+                      role: 'system',
+                      content: [{ type: 'text', text: taskRoundSummary(activeStep.title, roundParts) }],
+                      createdAt: Date.now(),
+                    },
+                  ],
+                }
+                continue
+              }
+            } else if (evaluation.blocked) {
+              taskPlan = blockPlan(taskPlan, activeStep.id, evaluation.blocked)
+              dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { streaming: false, error: evaluation.blocked, runPhase: 'error' },
+              })
+              await logFeatureTest({ status: 'failed', message: evaluation.blocked, fullContent: result.fullContent })
+              return
+            } else if (evaluation.needsRepair && taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
+              // Validate failed with build errors → rewind the repair step so it runs again
+              taskEngineRound += 1
+              taskPlan = {
+                ...taskPlan,
+                steps: taskPlan.steps.map(s =>
+                  s.id === 'repair' ? { ...s, status: 'pending', attempts: 0, lastError: undefined } : s
+                ),
+                currentStepId: 'repair',
+                updatedAt: Date.now(),
+              }
+              dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
+              currentSnapshot = {
+                ...conversationSnapshot,
+                activeTaskPlan: taskPlan,
+                messages: [
+                  ...currentSnapshot.messages,
+                  {
+                    id: makeMessageId(),
+                    taskId: activeTaskId,
+                    role: 'system',
+                    content: [{ type: 'text', text: [
+                      '🔧 Validation failed. Routing back to repair step.',
+                      evaluation.needsRepair,
+                      'Fix the errors above, then validate will re-run automatically.',
+                    ].join('\n\n') }],
+                    createdAt: Date.now(),
+                  },
+                ],
+              }
+              continue
+            } else if (taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
+              taskEngineRound += 1
+              currentSnapshot = {
+                ...conversationSnapshot,
+                activeTaskPlan: taskPlan,
+                messages: [
+                  ...currentSnapshot.messages,
+                  {
+                    id: makeMessageId(),
+                    taskId: activeTaskId,
+                    role: 'system',
+                    content: [{ type: 'text', text: taskRoundSummary(activeStep.title, roundParts) }],
+                    createdAt: Date.now(),
+                  },
+                ],
+              }
+              continue
+            } else {
+              const error = `Task execution stopped after ${MAX_TASK_ENGINE_ROUNDS} automatic step round(s). Current step did not complete: ${activeStep.title}.`
+              taskPlan = blockPlan(taskPlan, activeStep.id, error)
+              dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { streaming: false, error, runPhase: 'error' },
+              })
+              await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
+              return
+            }
+          }
+
           if (result.ok) {
             if (result.detectedToolFormat !== 'none') {
               const key = `${result.providerId}:${result.model}`
@@ -727,7 +905,49 @@ export function ChatView() {
               })
             }
             if (result.stopReason) {
-              if (result.stopReason !== 'raw_command_no_tool' && continuationRound < MAX_AUTO_CONTINUE_ROUNDS) {
+              // ── Tool loop: inject a "break the loop" message and give the model one more chance ──
+              if (result.stopReason === 'tool_loop_limit' && continuationRound < 1) {
+                continuationRound += 1
+                // Summarise the last few tool calls so the model can see what it was repeating
+                const recentToolCalls = accumulatedParts
+                  .filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
+                  .slice(-3)
+                  .map(p => `- ${p.name}(${JSON.stringify(p.args).slice(0, 200)}): ${p.status === 'ok' ? JSON.stringify(p.result).slice(0, 300) : p.error ?? p.status}`)
+                  .join('\n')
+
+                const loopBreakMsg: Message = {
+                  id: makeMessageId(),
+                  taskId: activeTaskId,
+                  role: 'system',
+                  content: [{ type: 'text', text: [
+                    '⚠️ TOOL LOOP DETECTED. You have been calling the same tool(s) repeatedly and reaching the same error.',
+                    'Recent repeated tool calls:',
+                    recentToolCalls || '(no tool calls recorded)',
+                    '',
+                    'Instructions:',
+                    '1. Do NOT call the same tool with the same arguments again.',
+                    '2. Diagnose the root cause from the error output above.',
+                    '3. Try a fundamentally different approach (e.g. check if the resource exists first, use a different tool, or read files before writing).',
+                    '4. If you cannot resolve this, output a brief explanation of why you are stuck and stop.',
+                  ].join('\n') }],
+                  createdAt: Date.now(),
+                }
+                currentSnapshot = {
+                  ...conversationSnapshot,
+                  messages: [
+                    ...currentSnapshot.messages,
+                    { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
+                    loopBreakMsg,
+                  ],
+                }
+                continue
+              }
+
+              // ── output_limit / server_disconnected: standard continuation ──
+              if (
+                (result.stopReason === 'output_limit' || result.stopReason === 'server_disconnected') &&
+                continuationRound < MAX_AUTO_CONTINUE_ROUNDS
+              ) {
                 continuationRound += 1
                 currentSnapshot = {
                   ...conversationSnapshot,
@@ -739,6 +959,48 @@ export function ChatView() {
                 continue
               }
 
+              // ── Tool loop inside a task step: skip the stuck step and recover ──
+              // The step likely partially succeeded (e.g. directory was created on run 1,
+              // so every retry fails with "already exists"). Skip it and tell the next
+              // step to inspect the actual filesystem state before acting.
+              if (result.stopReason === 'tool_loop_limit' && taskPlan && activeStep) {
+                taskEngineRound += 1
+                const recentLoopedTools = accumulatedParts
+                  .filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
+                  .slice(-4)
+                  .map(p => `- ${p.name}: ${p.status === 'ok' ? 'ok' : (p.error ?? p.status)}`)
+                  .join('\n')
+
+                // Mark the stuck step as skipped (not failed) — partial success is assumed
+                taskPlan = markStepSkipped(taskPlan, activeStep.id)
+                dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
+                currentSnapshot = {
+                  ...conversationSnapshot,
+                  activeTaskPlan: taskPlan,
+                  messages: [
+                    ...currentSnapshot.messages,
+                    { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
+                    {
+                      id: makeMessageId(),
+                      taskId: activeTaskId,
+                      role: 'system',
+                      content: [{ type: 'text', text: [
+                        `⚠️ Step "${activeStep.title}" was stuck in a tool loop and has been skipped.`,
+                        `Repeated tools:\n${recentLoopedTools || '(none recorded)'}`,
+                        '',
+                        'IMPORTANT: Before doing anything in the next step, first READ the actual filesystem state:',
+                        `- Run file.list_dir or project.map on: ${taskPlan.workingDirectory}`,
+                        '- Check what already exists before creating or installing anything.',
+                        '- Do not repeat the same command that was looping.',
+                      ].join('\n') }],
+                      createdAt: Date.now(),
+                    },
+                  ],
+                }
+                continue
+              }
+
+              // ── All other cases: hard stop with a clear error ──
               const error =
                 result.stopReason === 'output_limit'
                   ? `Stopped: output token limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s). Ava preserved current file state but could not safely finish.`
@@ -746,21 +1008,39 @@ export function ChatView() {
                     ? `Stopped: model server disconnected after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
                     : result.stopReason === 'raw_command_no_tool'
                       ? 'Stopped: model output a raw command instead of calling a tool. Ava did not execute the plain text command; please retry or switch to a model/profile that follows tool-call format.'
-                      : `Stopped: tool loop limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
+                      : result.stopReason === 'tool_loop_limit'
+                        ? [
+                            'Stopped: Tool loop limit exceeded.',
+                            'The model was stuck calling the same tool repeatedly. This often happens if:',
+                            '1. A file is locked by another process (e.g., your dev server is running).',
+                            '2. The directory already exists and the command cannot overwrite it.',
+                            '3. There is a persistent permission issue.',
+                            '',
+                            '💡 Suggestion: Close your dev server, manually delete the problematic folder, or click "Retry" after switching to a different model.',
+                          ].join('\n')
+                        : `Stopped: ${stopReasonText(result.stopReason)}.`
               dispatch({
                 type: 'UPDATE_MESSAGE',
                 conversationId,
                 messageId: placeholderId,
                 patch: { streaming: false, error, runPhase: 'error' },
               })
+              await logFeatureTest({
+                status: 'failed',
+                message: error,
+                stopReason: result.stopReason,
+                fullContent: result.fullContent,
+              })
               return
             }
+
             dispatch({
               type: 'UPDATE_MESSAGE',
               conversationId,
               messageId: placeholderId,
               patch: { streaming: false, runPhase: 'completed' },
             })
+            await logFeatureTest({ status: 'passed', fullContent: result.fullContent })
           } else if (result.error === 'aborted') {
             dispatch({
               type: 'UPDATE_MESSAGE',
@@ -768,6 +1048,7 @@ export function ChatView() {
               messageId: placeholderId,
               patch: { streaming: false, aborted: true, runPhase: 'aborted' },
             })
+            await logFeatureTest({ status: 'failed', message: 'aborted' })
           } else {
             dispatch({
               type: 'UPDATE_MESSAGE',
@@ -775,6 +1056,7 @@ export function ChatView() {
               messageId: placeholderId,
               patch: { streaming: false, error: result.error, runPhase: 'error' },
             })
+            await logFeatureTest({ status: 'failed', message: result.error })
           }
           break
         }
@@ -800,12 +1082,13 @@ export function ChatView() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg === 'aborted') {
-          dispatch({
-            type: 'UPDATE_MESSAGE',
-            conversationId,
-            messageId: placeholderId,
-            patch: { streaming: false, aborted: true, runPhase: 'aborted' },
-          })
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { streaming: false, aborted: true, runPhase: 'aborted' },
+            })
+            await logFeatureTest({ status: 'failed', message: 'aborted' })
         } else {
           dispatch({
             type: 'UPDATE_MESSAGE',
@@ -813,6 +1096,7 @@ export function ChatView() {
             messageId: placeholderId,
             patch: { streaming: false, error: msg, runPhase: 'error' },
           })
+          await logFeatureTest({ status: 'failed', message: msg })
         }
       } finally {
         setIsStreaming(false)
@@ -893,18 +1177,43 @@ export function ChatView() {
             editedUser,
             {
               ...intakeMsg,
-              content: [{ type: 'text', text: makeTaskIntakeText(nextText, conversation) }],
-              streaming: false,
-              runPhase: 'completed',
+              content: [{ type: 'text', text: '🔍 Analyzing project constraints...' }],
+              streaming: true,
+              runPhase: 'generating',
             },
           ],
         })
+        
+        const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(nextText)
+        const analysis = await runAnalyzePhase({
+          taskId,
+          goal: nextText,
+          workingDirectory,
+          providers: getEnabledProviders(state.settings),
+          settings: state.settings,
+          contextBudget: 8000,
+        })
+
+        dispatch({
+          type: 'UPDATE_MESSAGE',
+          conversationId,
+          messageId: intakeMsg.id,
+          patch: {
+            content: analysis 
+              ? [{ type: 'project_analysis', analysis }] 
+              : [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.\n\nThe LLM could not parse the project constraints. Please try re-sending your request, or check your API key and model settings.` }],
+            streaming: false,
+            runPhase: 'completed',
+          }
+        })
+
         setPendingTaskIntake({
           conversationId,
           taskId,
           content: nextText,
           attachments,
           commandInvocation: original.commandInvocation,
+          analysis: analysis || undefined
         })
         return
       }
@@ -939,7 +1248,7 @@ export function ChatView() {
   )
 
   const handleSend = useCallback(
-    (content: string, attachments?: string[], commandInvocation?: CommandInvocation) => {
+    async (content: string, attachments?: string[], commandInvocation?: CommandInvocation) => {
       const conversation = activeConversation ?? createConversation()
       if (editDraft && activeConversation) {
         runEditedResend(editDraft.messageId, content, attachments ?? [], activeConversation)
@@ -960,13 +1269,77 @@ export function ChatView() {
           content: [{ type: 'text' as const, text: makeConfirmedTaskPlanPrompt(pending.content, conversation) }],
           createdAt: Date.now(),
         }
+        const isBigTask = isCodingDesignBigTask(pending.content)
+        let taskPlan = undefined
+        if (isBigTask) {
+          const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(pending.content)
+          if (!workingDirectory) {
+            dispatch({
+              type: 'ADD_MESSAGE',
+              conversationId: conversation.id,
+              message: {
+                ...placeholder,
+                content: [{
+                  type: 'text',
+                  text: '无法开始执行：这个大任务需要一个工作目录，但当前会话没有绑定 Active Folder，且请求里没有明确路径。请先把目标项目目录设为 Active Folder，或在请求里写清楚路径，例如 D:\\Apps\\TestProject。',
+                }],
+                streaming: false,
+                runPhase: 'error',
+              },
+            })
+            return
+          }
+
+          if (workingDirectory && workingDirectory !== conversation.folderPath) {
+            try {
+              await window.ava.fs.createDir(workingDirectory)
+            } catch (err) {
+              console.warn('Failed to auto-create working directory:', err)
+            }
+            dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path: workingDirectory })
+          }
+
+          dispatch({
+            type: 'ADD_MESSAGE',
+            conversationId: conversation.id,
+            message: {
+              ...placeholder,
+              content: [{ type: 'text', text: '正在规划任务执行步骤...' }],
+              streaming: false,
+              runPhase: 'generating',
+            },
+          })
+
+          taskPlan = await generateDynamicTaskPlan({
+            taskId: pending.taskId,
+            goal: pending.content,
+            workingDirectory,
+            projectBrief,
+            providers: getEnabledProviders(state.settings),
+            settings: state.settings,
+          })
+
+          dispatch({
+            type: 'UPDATE_MESSAGE',
+            conversationId: conversation.id,
+            messageId: placeholder.id,
+            patch: { content: [], runPhase: 'connecting' }
+          })
+        }
+
         setPendingTaskIntake(null)
-        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        if (taskPlan) {
+          dispatch({ type: 'START_TASK_PLAN', conversationId: conversation.id, plan: taskPlan })
+        }
+        if (!isBigTask) {
+          dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        }
         driveStream(
-          { ...conversation, messages: [...conversation.messages, confirmationContext] },
+          { ...conversation, activeTaskPlan: taskPlan, messages: [...conversation.messages, confirmationContext] },
           conversation.id,
           placeholder.id,
           pending.taskId,
+          taskPlan,
         )
         return
       }
@@ -975,7 +1348,6 @@ export function ChatView() {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         const intakeMsg = makeAssistantPlaceholder(taskId)
-        const intakeText = makeTaskIntakeText(content, conversation)
         const conversationId = conversation.id
 
         dispatch({ type: 'ADD_MESSAGE', conversationId, message: userMsg })
@@ -984,9 +1356,9 @@ export function ChatView() {
           conversationId,
           message: {
             ...intakeMsg,
-            content: [{ type: 'text', text: intakeText }],
-            streaming: false,
-            runPhase: 'completed',
+            content: [{ type: 'text', text: '🔍 Analyzing project constraints...' }],
+            streaming: true,
+            runPhase: 'generating',
           },
         })
 
@@ -998,6 +1370,29 @@ export function ChatView() {
             dispatch({ type: 'SET_TRAITS', id: conversationId, traits: initialTraits })
           }
         }
+        
+        const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(content)
+        const analysis = await runAnalyzePhase({
+          taskId,
+          goal: content,
+          workingDirectory,
+          providers: getEnabledProviders(state.settings),
+          settings: state.settings,
+          contextBudget: 8000,
+        })
+
+        dispatch({
+          type: 'UPDATE_MESSAGE',
+          conversationId,
+          messageId: intakeMsg.id,
+          patch: {
+            content: analysis 
+              ? [{ type: 'project_analysis', analysis }] 
+              : [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.\n\nThe LLM could not parse the project constraints. Please try re-sending your request, or check your API key and model settings.` }],
+            streaming: false,
+            runPhase: 'completed',
+          }
+        })
 
         setPendingTaskIntake({
           conversationId,
@@ -1005,6 +1400,7 @@ export function ChatView() {
           content,
           attachments: attachments ?? [],
           commandInvocation,
+          analysis: analysis || undefined
         })
         return
       }
@@ -1031,6 +1427,7 @@ export function ChatView() {
           conversationId: activeConversation.id,
           messageId: lastAssistantId,
         })
+        dispatch({ type: 'ABORT_TASK_PLAN', conversationId: activeConversation.id })
       }
       window.ava.llm.abort(streamId).catch(() => { /* noop */ })
     }
@@ -1235,6 +1632,13 @@ export function ChatView() {
 
       {/* Top Blur Overlay */}
       <div className="absolute top-10 left-0 right-0 h-8 z-20 pointer-events-none bg-gradient-to-b from-bg/80 via-bg/40 to-transparent backdrop-blur-md [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+
+      {/* Task Graph Overlay (Option A: Sticky Top) */}
+      {activeConversation?.activeTaskPlan && (
+        <div className="w-full z-40 bg-bg sticky top-0 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5)]">
+          <TaskGraphWidget plan={activeConversation.activeTaskPlan} />
+        </div>
+      )}
 
       {isDragging && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-bg/80 backdrop-blur-sm border-2 border-dashed border-accent m-4 rounded-3xl pointer-events-none transition-all animate-in fade-in zoom-in duration-200">

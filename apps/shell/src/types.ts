@@ -32,7 +32,60 @@ export interface ImagePart {
   }
 }
 
-export type ContentPart = TextPart | ToolCallPart | ImagePart
+export interface ProjectAnalysisPart {
+  type: 'project_analysis'
+  analysis: ProjectAnalysis
+}
+
+export type ContentPart = TextPart | ToolCallPart | ImagePart | ProjectAnalysisPart
+
+export type TaskExecutionStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type TaskExecutionPlanStatus = 'planning' | 'running' | 'blocked' | 'completed' | 'failed' | 'aborted'
+
+export interface TaskExecutionStep {
+  id: string
+  title: string
+  status: TaskExecutionStepStatus
+  requiredTools: string[]
+  completionSignals: string[]
+  attempts: number
+  lastError?: string
+  /** DAG dependency graph: list of step IDs that must be 'done' before this step can start. */
+  dependsOn?: string[]
+  /** Dynamic decomposition: if a task is too large, it can be broken down into subtasks. */
+  subtasks?: TaskExecutionStep[]
+  /** Specific template workflow type for this step (e.g. 'scaffold', 'debug'). Defaults to 'feature' if omitted. */
+  workflowType?: 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research'
+}
+
+export type AgentRole = 'planner' | 'executor' | 'critic' | 'orchestrator'
+
+export interface ProjectAnalysis {
+  projectSummary: string
+  architecture: string
+  unknowns: string[]
+  risks: string[]
+}
+
+export interface TaskExecutionValidation {
+  devServerChecked: boolean
+  consoleChecked: boolean
+  screenshotChecked: boolean
+  buildChecked: boolean
+}
+
+export interface TaskExecutionPlan {
+  taskId: string
+  status: TaskExecutionPlanStatus
+  goal: string
+  workingDirectory: string
+  kind: 'coding-design'
+  currentStepId?: string
+  steps: TaskExecutionStep[]
+  validation: TaskExecutionValidation
+  createdAt: number
+  updatedAt: number
+}
 
 export type AssistantRunPhase =
   | 'connecting'
@@ -62,6 +115,7 @@ export interface Message {
   createdAt: number
   streaming?: boolean
   runPhase?: AssistantRunPhase
+  taskStepTitle?: string
   error?: string
   aborted?: boolean
   /** Accumulated reasoning/thinking content from the model (hidden by default, shown in collapsible block). */
@@ -98,6 +152,7 @@ export interface Conversation {
   pinned?: boolean
   archived?: boolean
   folderPath?: string
+  activeTaskPlan?: TaskExecutionPlan
   createdAt: number
   updatedAt: number
 }
@@ -141,6 +196,18 @@ export interface McpServerConfig {
 
 /** Per-model detected tool-call format, cached so we do not re-probe every request. */
 export type ToolCallFormat = 'openai' | 'hermes' | 'none'
+
+export interface ModelCapabilityProfile {
+  model: string
+  providerId: string
+  vision: 'yes' | 'no' | 'unknown'
+  tools: 'yes' | 'no' | 'unknown'
+  thinking: 'yes' | 'no' | 'unknown'
+  toolFormat: ToolCallFormat | 'json' | 'unknown'
+  source: 'probe' | 'heuristic'
+  checkedAt: number
+  error?: string
+}
 
 export interface PluginState {
   enabled: boolean
@@ -285,6 +352,8 @@ export interface Settings {
   pluginStates: Record<string, PluginState>
   /** Key = `${providerId}:${modelId}` → detected format. */
   modelToolFormatMap: Record<string, ToolCallFormat>
+  /** Key = `${providerId}:${modelId}` → detected or inferred model capabilities. */
+  modelCapabilityMap: Record<string, ModelCapabilityProfile>
   voice: VoiceConfig
   theme: 'aura-glass' | 'cyber-zen' | 'nebula-clear'
   language: 'auto' | 'en-US' | 'zh-CN'

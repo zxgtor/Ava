@@ -4,6 +4,7 @@ import { Check, ChevronRight, Copy, Edit2, RotateCw, Trash2, Brain, Wrench } fro
 import type { AssistantRunPhase, ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
 import { ToolCallBubble } from './ToolCallBubble'
+import { ProjectAnalysisCard } from './ProjectAnalysisCard'
 import { useStore } from '../store'
 import { playTTS } from '../lib/voiceClient'
 
@@ -202,6 +203,9 @@ function renderParts(parts: ContentPart[], opts: { isUser: boolean; isError: boo
         </div>
       )
     }
+    if (part.type === 'project_analysis') {
+      return <ProjectAnalysisCard key={idx} analysis={part.analysis} />
+    }
     // tool_call
     return <ToolCallBubble key={idx} part={part} />
   })
@@ -339,6 +343,12 @@ function MessageBubbleImpl({
             </div>
           )}
           <div className="message-selectable">
+            {!isUser && message.taskStepTitle && (
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-[11px] text-accent select-none">
+                <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+                <span className="truncate">Step: {message.taskStepTitle}</span>
+              </div>
+            )}
             {!isUser && message.reasoningContent && (
               <ThinkingBlock content={message.reasoningContent} isStreaming={Boolean(message.streaming)} />
             )}

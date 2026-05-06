@@ -991,6 +991,18 @@ class BuiltInTools {
         if (settled) return
         controller.abort()
         child.kill()
+        
+        // Force-settle if the process is stuck and doesn't fire 'close'
+        setTimeout(() => {
+          if (settled) return
+          settled = true
+          this.active.delete(active)
+          resolve({ 
+            ok: false, 
+            error: 'Command timed out and failed to exit within grace period. It may be locked by another process (e.g. dev server).', 
+            aborted: true 
+          })
+        }, 5000)
       }, timeoutMs)
 
       const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {

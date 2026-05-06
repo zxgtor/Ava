@@ -18,6 +18,9 @@ import type {
   ProjectBrief,
   AssistantRunPhase,
   Settings,
+  TaskExecutionPlan,
+  TaskExecutionStep,
+  TaskExecutionValidation,
   ToolCallStatus,
   UnitTestSection,
   ViewMode,
@@ -61,6 +64,13 @@ type Action =
   | { type: 'SET_CONVERSATION_FOLDER'; id: string; path: string }
   | { type: 'ADD_MESSAGE'; conversationId: string; message: Message }
   | { type: 'UPDATE_MESSAGE'; conversationId: string; messageId: string; patch: Partial<Message> }
+  | { type: 'START_TASK_PLAN'; conversationId: string; plan: TaskExecutionPlan }
+  | { type: 'UPDATE_TASK_STEP'; conversationId: string; stepId: string; patch: Partial<TaskExecutionStep> }
+  | { type: 'ADVANCE_TASK_STEP'; conversationId: string; plan: TaskExecutionPlan }
+  | { type: 'COMPLETE_TASK_PLAN'; conversationId: string; plan: TaskExecutionPlan }
+  | { type: 'BLOCK_TASK_PLAN'; conversationId: string; plan: TaskExecutionPlan }
+  | { type: 'ABORT_TASK_PLAN'; conversationId: string }
+  | { type: 'UPDATE_TASK_VALIDATION'; conversationId: string; validation: TaskExecutionValidation }
   | { type: 'ADD_PART'; conversationId: string; messageId: string; part: ContentPart }
   | { type: 'UPDATE_PART'; conversationId: string; messageId: string; partIndex: number; partId?: string; patch: Partial<Extract<ContentPart, { type: 'tool_call' }>> }
   | { type: 'ABORT_RUNNING_PARTS'; conversationId: string; messageId: string }
@@ -182,6 +192,75 @@ function reducer(state: AppState, action: Action): AppState {
                 messages: c.messages.map(m =>
                   m.id === action.messageId ? { ...m, ...action.patch } : m,
                 ),
+              },
+        ),
+      }
+
+    case 'START_TASK_PLAN':
+    case 'ADVANCE_TASK_STEP':
+    case 'COMPLETE_TASK_PLAN':
+    case 'BLOCK_TASK_PLAN':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id === action.conversationId
+            ? { ...c, activeTaskPlan: action.plan, updatedAt: Date.now() }
+            : c,
+        ),
+      }
+
+    case 'UPDATE_TASK_STEP':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id !== action.conversationId || !c.activeTaskPlan
+            ? c
+            : {
+                ...c,
+                updatedAt: Date.now(),
+                activeTaskPlan: {
+                  ...c.activeTaskPlan,
+                  updatedAt: Date.now(),
+                  steps: c.activeTaskPlan.steps.map(step =>
+                    step.id === action.stepId ? { ...step, ...action.patch } : step,
+                  ),
+                },
+              },
+        ),
+      }
+
+    case 'UPDATE_TASK_VALIDATION':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id !== action.conversationId || !c.activeTaskPlan
+            ? c
+            : {
+                ...c,
+                updatedAt: Date.now(),
+                activeTaskPlan: {
+                  ...c.activeTaskPlan,
+                  validation: action.validation,
+                  updatedAt: Date.now(),
+                },
+              },
+        ),
+      }
+
+    case 'ABORT_TASK_PLAN':
+      return {
+        ...state,
+        conversations: state.conversations.map(c =>
+          c.id !== action.conversationId || !c.activeTaskPlan
+            ? c
+            : {
+                ...c,
+                updatedAt: Date.now(),
+                activeTaskPlan: {
+                  ...c.activeTaskPlan,
+                  status: 'aborted',
+                  updatedAt: Date.now(),
+                },
               },
         ),
       }
@@ -327,6 +406,7 @@ function reducer(state: AppState, action: Action): AppState {
           return {
             ...c,
             updatedAt: Date.now(),
+            activeTaskPlan: undefined,
             messages: [...c.messages.slice(0, idx), ...action.messages],
           }
         }),
@@ -393,6 +473,31 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
       }
     }
   }
+  const modelCapabilityMap: Settings['modelCapabilityMap'] = {}
+  if (src.modelCapabilityMap && typeof src.modelCapabilityMap === 'object') {
+    for (const [k, v] of Object.entries(src.modelCapabilityMap)) {
+      if (!v || typeof v !== 'object') continue
+      const item = v as Partial<Settings['modelCapabilityMap'][string]>
+      const vision = item.vision === 'yes' || item.vision === 'no' || item.vision === 'unknown' ? item.vision : 'unknown'
+      const tools = item.tools === 'yes' || item.tools === 'no' || item.tools === 'unknown' ? item.tools : 'unknown'
+      const thinking = item.thinking === 'yes' || item.thinking === 'no' || item.thinking === 'unknown' ? item.thinking : 'unknown'
+      const toolFormat =
+        item.toolFormat === 'openai' || item.toolFormat === 'hermes' || item.toolFormat === 'json' || item.toolFormat === 'none'
+          ? item.toolFormat
+          : 'unknown'
+      modelCapabilityMap[k] = {
+        model: typeof item.model === 'string' ? item.model : k.split(':').slice(1).join(':'),
+        providerId: typeof item.providerId === 'string' ? item.providerId : k.split(':')[0],
+        vision,
+        tools,
+        thinking,
+        toolFormat,
+        source: item.source === 'probe' ? 'probe' : 'heuristic',
+        checkedAt: typeof item.checkedAt === 'number' ? item.checkedAt : 0,
+        error: typeof item.error === 'string' ? item.error : undefined,
+      }
+    }
+  }
   const pluginStates: Settings['pluginStates'] = {}
   if (src.pluginStates && typeof src.pluginStates === 'object') {
     for (const [id, state] of Object.entries(src.pluginStates)) {
@@ -412,6 +517,7 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
     mcpServers,
     pluginStates,
     modelToolFormatMap: toolFormatMap,
+    modelCapabilityMap,
     voice: {
       enabled: typeof src.voice?.enabled === 'boolean' ? src.voice.enabled : merged.voice.enabled,
       sttServerUrl: typeof src.voice?.sttServerUrl === 'string' ? src.voice.sttServerUrl : merged.voice.sttServerUrl,
@@ -487,8 +593,9 @@ function sanitizeMessage(raw: unknown): Message | null {
     content,
     toolCallId: typeof m.toolCallId === 'string' ? m.toolCallId : undefined,
     createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now(),
-    streaming: m.streaming ? true : undefined,
+    streaming: undefined, // always clear on hydration — a restarted app is never mid-stream
     runPhase: sanitizeRunPhase(m.runPhase),
+    taskStepTitle: typeof m.taskStepTitle === 'string' ? m.taskStepTitle : undefined,
     error: typeof m.error === 'string' ? m.error : undefined,
     aborted: m.aborted ? true : undefined,
     commandInvocation: sanitizeCommandInvocation(m.commandInvocation),
@@ -496,16 +603,16 @@ function sanitizeMessage(raw: unknown): Message | null {
 }
 
 function sanitizeRunPhase(raw: unknown): AssistantRunPhase | undefined {
-  return raw === 'connecting' ||
+  // Transient phases never survive a restart — remap to 'error' so the
+  // message shows a retry button instead of a perpetual spinner.
+  if (
+    raw === 'connecting' ||
     raw === 'waiting_first_token' ||
     raw === 'generating' ||
     raw === 'tool_running' ||
-    raw === 'fallback' ||
-    raw === 'completed' ||
-    raw === 'error' ||
-    raw === 'aborted'
-    ? raw
-    : undefined
+    raw === 'fallback'
+  ) return 'error'
+  return raw === 'completed' || raw === 'error' || raw === 'aborted' ? raw : undefined
 }
 
 function sanitizeCommandInvocation(raw: unknown): CommandInvocation | undefined {
@@ -529,6 +636,66 @@ function sanitizeCommandInvocation(raw: unknown): CommandInvocation | undefined 
     commandName: src.commandName,
     sourcePath: src.sourcePath,
     arguments: args,
+  }
+}
+
+function sanitizeTaskExecutionPlan(raw: unknown): TaskExecutionPlan | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const src = raw as Partial<TaskExecutionPlan> & Record<string, unknown>
+  if (typeof src.taskId !== 'string' || typeof src.goal !== 'string') return undefined
+  if (src.kind !== 'coding-design') return undefined
+  const status = src.status === 'planning' ||
+    src.status === 'running' ||
+    src.status === 'blocked' ||
+    src.status === 'completed' ||
+    src.status === 'failed' ||
+    src.status === 'aborted'
+    ? src.status
+    : 'running'
+  const steps: TaskExecutionStep[] = []
+  if (Array.isArray(src.steps)) {
+    for (const rawStep of src.steps) {
+      if (!rawStep || typeof rawStep !== 'object') continue
+      const step = rawStep as Partial<TaskExecutionStep> & Record<string, unknown>
+      if (typeof step.id !== 'string' || typeof step.title !== 'string') continue
+      const stepStatus = step.status === 'pending' ||
+        step.status === 'running' ||
+        step.status === 'done' ||
+        step.status === 'failed' ||
+        step.status === 'skipped'
+        ? step.status
+        : 'pending'
+      steps.push({
+        id: step.id,
+        title: step.title,
+        status: stepStatus,
+        requiredTools: Array.isArray(step.requiredTools) ? step.requiredTools.filter((item): item is string => typeof item === 'string') : [],
+        completionSignals: Array.isArray(step.completionSignals) ? step.completionSignals.filter((item): item is string => typeof item === 'string') : [],
+        attempts: typeof step.attempts === 'number' ? step.attempts : 0,
+        lastError: typeof step.lastError === 'string' ? step.lastError : undefined,
+      })
+    }
+  }
+  if (steps.length === 0) return undefined
+  const validation = src.validation && typeof src.validation === 'object'
+    ? src.validation as Partial<TaskExecutionValidation>
+    : {}
+  return {
+    taskId: src.taskId,
+    status,
+    goal: src.goal,
+    workingDirectory: typeof src.workingDirectory === 'string' ? src.workingDirectory : '(no active folder)',
+    kind: 'coding-design',
+    currentStepId: typeof src.currentStepId === 'string' ? src.currentStepId : undefined,
+    steps,
+    validation: {
+      devServerChecked: Boolean(validation.devServerChecked),
+      consoleChecked: Boolean(validation.consoleChecked),
+      screenshotChecked: Boolean(validation.screenshotChecked),
+      buildChecked: Boolean(validation.buildChecked),
+    },
+    createdAt: typeof src.createdAt === 'number' ? src.createdAt : Date.now(),
+    updatedAt: typeof src.updatedAt === 'number' ? src.updatedAt : Date.now(),
   }
 }
 
@@ -564,6 +731,7 @@ function sanitizeConversation(raw: unknown): Conversation | null {
     pinned: Boolean(c.pinned),
     archived: Boolean(c.archived),
     folderPath: typeof c.folderPath === 'string' ? c.folderPath : undefined,
+    activeTaskPlan: sanitizeTaskExecutionPlan(c.activeTaskPlan),
     createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
     updatedAt: typeof c.updatedAt === 'number' ? c.updatedAt : Date.now(),
   }

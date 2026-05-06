@@ -1,5 +1,6 @@
-import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ProjectBrief, Settings } from '../../types'
+import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ProjectBrief, Settings, TaskExecutionPlan, TaskExecutionStep } from '../../types'
 import { getEnabledProviders } from '../llm/providers'
+import { buildExecutorSystemPrompt } from './roles/executor'
 
 // ── Shared utilities ────────────────────────────────────────────────
 
@@ -227,6 +228,9 @@ function conversationToLlmMessages(
   settings: Settings,
   projectBrief?: ProjectBrief,
   folderPath?: string,
+  taskPlan?: TaskExecutionPlan,
+  activeStep?: TaskExecutionStep,
+  finalReportAllowed?: boolean,
 ): LlmMessage[] {
   const latestUserIndex = (() => {
     for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
@@ -251,6 +255,18 @@ function conversationToLlmMessages(
 
   if (latestUserRequest) {
     mandatory.push({ role: 'system', content: buildCurrentTaskPrompt(latestUserRequest, activeTaskId) })
+  }
+
+  if (taskPlan && activeStep) {
+    const memoryState = '' // TODO: Inject from ContextManager
+    const prompt = buildExecutorSystemPrompt({
+      plan: taskPlan,
+      step: activeStep,
+      memoryState,
+      providers: [], // Providers are used elsewhere
+      settings
+    })
+    mandatory.push({ role: 'system', content: prompt })
   }
 
   // ── 2. Build the active-task messages (latest user + same-task messages after it) ──
@@ -392,6 +408,9 @@ export interface SendOptions {
   onPart?: (payload: { taskId?: string; partIndex: number; part: ContentPart }) => void
   onPartUpdate?: (payload: { taskId?: string; partIndex: number; partId?: string; patch: Record<string, unknown> }) => void
   streamId: string
+  activeTaskPlan?: TaskExecutionPlan
+  activeStep?: TaskExecutionStep
+  finalReportAllowed?: boolean
 }
 
 export interface SendResult {
@@ -424,6 +443,9 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     options.settings,
     options.projectBrief,
     options.folderPath,
+    options.activeTaskPlan,
+    options.activeStep,
+    options.finalReportAllowed,
   )
 
   // Trait-based temperature
@@ -474,16 +496,18 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
   }
 
   try {
+    const activeFolderPath = options.folderPath || taskPlanWorkingDirectory(options.activeTaskPlan)
     const reply = await window.ava.llm.stream({
       streamId: options.streamId,
       messages,
       providers,
       activeTaskId: options.activeTaskId,
-      activeFolderPath: options.folderPath,
+      activeFolderPath,
       activeCommandInvocation: latestCommandInvocation(options.conversation),
       temperature,
       toolFormatMap: options.settings.modelToolFormatMap,
       pluginStates: options.settings.pluginStates,
+      activeStepRequiredTools: options.activeStep?.requiredTools,
     })
 
     if (!reply.ok) {
@@ -503,6 +527,12 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
   } finally {
     cleanups.forEach(fn => fn())
   }
+}
+
+function taskPlanWorkingDirectory(plan?: TaskExecutionPlan): string | undefined {
+  const cwd = plan?.workingDirectory?.trim()
+  if (!cwd || cwd === '(no active folder)') return undefined
+  return cwd
 }
 
 function latestCommandInvocation(conversation: Conversation): CommandInvocation | undefined {
