@@ -154,6 +154,19 @@ const ACTION_PROMISE_WITHOUT_TOOL_RE =
   /\b(?:i will|i'll|let's|let me|first step|first,? i|now i|i need to|start by|begin by|check current|need to check|need to confirm)\b[\s\S]{0,240}\b(?:check|inspect|list|read|run|create|install|start|verify|look|view|initialize|launch)\b|我(?:将|会|需要|先|现在)[\s\S]{0,120}(?:检查|查看|读取|运行|创建|安装|启动|验证|初始化)|第一步|让我们先|请允许我查看/i
 const FINAL_REPORT_READ_TOOL_NAMES = new Set(['file.read_text', 'file.list_dir', 'git.diff', 'project.validate'])
 
+/**
+ * Tools that stay exposed even when a step has a narrow requiredTools set.
+ * Lets the model do safe inspection without burning loop budget on tools
+ * that wouldn't count toward step completion anyway.
+ */
+const ALWAYS_ALLOWED_CORE_TOOLS = new Set<string>([
+  'file.read_text',
+  'file.list_dir',
+  'project.map',
+  'project.detect',
+  'search.ripgrep',
+])
+
 export function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
   if (/\/chat\/completions$/i.test(trimmed)) return trimmed
@@ -273,9 +286,13 @@ function listAvailableTools(
   currentTask: string,
   activeCommandInvocation?: ToolAuditCommandInvocation,
   forceToolExposure = false,
+  activeStepRequiredTools?: string[],
 ): McpToolDescriptor[] {
   if (!shouldExposeTools(currentTask, activeCommandInvocation, forceToolExposure)) return []
-  return [...builtInTools.listTools(), ...mcpSupervisor.listAllTools()]
+  const all = [...builtInTools.listTools(), ...mcpSupervisor.listAllTools()]
+  if (!activeStepRequiredTools || activeStepRequiredTools.length === 0) return all
+  const allowed = new Set([...activeStepRequiredTools, ...ALWAYS_ALLOWED_CORE_TOOLS])
+  return all.filter(tool => allowed.has(tool.name))
 }
 
 function chooseReasoningMode(
@@ -912,6 +929,7 @@ async function runToolLoop(
     currentTask,
     args.activeCommandInvocation,
     Boolean(args.activeStepRequiredTools?.length),
+    args.activeStepRequiredTools,
   )
   const effectiveProvider: ModelProvider = {
     ...provider,
