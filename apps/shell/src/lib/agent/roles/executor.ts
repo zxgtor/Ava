@@ -20,15 +20,30 @@ export function getExecutorTemplate(workflowType?: string): string {
   }
 }
 
+const WRITE_TOOLS = new Set(['file.write_text', 'file.patch', 'file.create_dir'])
+
+function requiresWrite(step: ExecutorInput['step']): boolean {
+  return step.requiredTools.some(name => WRITE_TOOLS.has(name))
+}
+
 export function buildExecutorSystemPrompt(input: ExecutorInput): string {
   const template = getExecutorTemplate(input.step.workflowType)
-  
-  return [
+  const sections = [
     template,
     `Goal for this step: ${input.step.title}`,
     `Working Directory: ${input.plan.workingDirectory}`,
     `Memory State (Completed Tasks context):\n${input.memoryState || 'None'}`,
     `Allowed Tools: ${input.step.requiredTools.join(', ') || 'All tools allowed'}`,
-    `Self-Correction: If a tool fails, analyze the error and retry locally before giving up. Maximum retries: 2.`
-  ].join('\n\n')
+  ]
+
+  if (requiresWrite(input.step)) {
+    sections.push([
+      'This step expects a write/create tool call to make progress.',
+      'Do not call file.read_text or file.list_dir more than once before writing.',
+      'Do not output a textual plan; call the write tool now.',
+    ].join('\n'))
+  }
+
+  sections.push('Self-Correction: If a tool fails, read the error message, adjust, and retry. Maximum retries: 2.')
+  return sections.join('\n\n')
 }
