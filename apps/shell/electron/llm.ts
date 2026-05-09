@@ -295,6 +295,32 @@ function listAvailableTools(
   return all.filter(tool => allowed.has(tool.name))
 }
 
+/**
+ * Models discovered to emit only reasoning_content (no visible content / tool
+ * calls) when reasoning is on. We force reasoning off for these for the rest
+ * of the process lifetime, regardless of what the auto-rules would otherwise
+ * pick. The flag is set by the runToolLoop bail-out below — the user should
+ * never have to configure this manually.
+ */
+const reasoningBrokenModels = new Set<string>()
+
+function reasoningBrokenKey(providerId: string, model: string): string {
+  return `${providerId}::${model}`
+}
+
+function markReasoningBroken(providerId: string, model: string): void {
+  const key = reasoningBrokenKey(providerId, model)
+  if (reasoningBrokenModels.has(key)) return
+  reasoningBrokenModels.add(key)
+  console.warn(
+    `[reasoning-detect] ${key} produced only hidden reasoning with no visible content — auto-disabling reasoning for this model in this process.`,
+  )
+}
+
+function isReasoningBroken(providerId: string, model: string): boolean {
+  return reasoningBrokenModels.has(reasoningBrokenKey(providerId, model))
+}
+
 function chooseReasoningMode(
   provider: ModelProvider,
   currentTask: string,
@@ -302,6 +328,7 @@ function chooseReasoningMode(
 ): 'off' | 'on' {
   if (provider.reasoningMode === 'off') return 'off'
   if (provider.reasoningMode === 'on') return 'on'
+  if (isReasoningBroken(provider.id, provider.defaultModel)) return 'off'
   if (REASONING_INTENT_RE.test(currentTask)) return 'on'
   if (toolsExposed && !SIMPLE_CHAT_RE.test(currentTask)) return 'on'
   return 'off'
@@ -1096,6 +1123,9 @@ async function runToolLoop(
         },
       )
       if (finalizeStep.visibleText) {
+        // Recovery worked, but only with reasoning forced off. Remember this so
+        // future calls for this provider+model skip the wasted reasoning attempt.
+        markReasoningBroken(provider.id, model)
         fullContent += finalizeStep.visibleText
         parts.push({ type: 'text', text: finalizeStep.visibleText })
         return {
@@ -1107,6 +1137,11 @@ async function runToolLoop(
           detectedToolFormat,
         }
       }
+      // Even with reasoning forced off the model produced nothing. Mark broken
+      // so the next call skips the reasoning-on attempt and gives the user a
+      // clean run; the underlying chat-template issue still needs the user's
+      // attention but Ava will at least not loop on it.
+      markReasoningBroken(provider.id, model)
       const failText = [
         'Model produced only hidden reasoning (chain-of-thought) and no visible content or tool call, even after a recovery attempt with reasoning disabled.',
         'This is almost always a model template / profile mismatch — the model is emitting content into a reasoning_content channel that Ava cannot use to drive tools.',
