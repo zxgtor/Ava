@@ -1,4 +1,4 @@
-import type { ContentPart, ModelProvider, ProjectAnalysis, Settings, TaskExecutionPlan, TaskExecutionStep, TaskExecutionValidation } from '../../types'
+import type { ContentPart, Message, ModelProvider, ProjectAnalysis, Settings, TaskExecutionPlan, TaskExecutionStep, TaskExecutionValidation } from '../../types'
 import { planningContextBudgetForProviders } from './chat'
 import { normalizeRequiredTools } from './toolNames'
 
@@ -95,10 +95,11 @@ export async function generateDynamicTaskPlan(input: {
   analysis?: ProjectAnalysis | null
   skipAnalysis?: boolean
   traits?: string[]
+  messages?: Message[]
 }): Promise<TaskExecutionPlan> {
   const fallbackPlan = createCodingDesignTaskPlan(input)
   const contextBudget = planningContextBudgetForProviders(input.providers, input.traits)
-  
+
   // Phase 1: Analyze only before user confirmation. After the user confirms
   // the summary, reuse that confirmed analysis so planning cannot restart
   // clarification questions.
@@ -111,6 +112,7 @@ export async function generateDynamicTaskPlan(input: {
         providers: input.providers,
         settings: input.settings,
         contextBudget,
+        messages: input.messages,
       })
   
   // Phase 2: Plan (DAG generation)

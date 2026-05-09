@@ -1565,6 +1565,7 @@ export function ChatView() {
               ? { ...pending.analysis, unknowns: [] }
               : null,
             skipAnalysis: true,
+            messages: conversation.messages,
           })
 
           dispatch({
