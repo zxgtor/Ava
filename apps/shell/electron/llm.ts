@@ -103,6 +103,13 @@ export interface StreamChatResult {
   loopRounds: number
   detectedToolFormat: ToolCallFormat
   stopReason?: 'output_limit' | 'tool_loop_limit' | 'server_disconnected' | 'raw_command_no_tool'
+  /**
+   * Set when runToolLoop exited because a tool listed in
+   * activeStepRequiredTools succeeded. This is the runtime's authoritative
+   * signal — the orchestrator must trust it even if the accumulated parts
+   * stream looks stale (IPC ordering, etc).
+   */
+  successfulRequiredTool?: string
 }
 
 export interface ToolCallCandidate {
