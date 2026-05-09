@@ -1,7 +1,32 @@
-import type { ModelProvider, Settings, TaskExecutionPlan, ProjectAnalysis, Message } from '../../../types'
+import type { ModelProvider, Settings, TaskExecutionPlan, TaskExecutionStep, ProjectAnalysis, Message } from '../../../types'
 import { ANALYZE_TEMPLATE, PLANNER_TEMPLATE } from '../prompts/templates'
 import { partsToText } from '../chat'
 import { normalizeRequiredTools } from '../toolNames'
+import { extractJsonObject } from '../jsonExtraction'
+
+const VALID_ROLES = new Set<NonNullable<TaskExecutionStep['role']>>([
+  'inspect', 'scaffold', 'install', 'feature',
+  'preview', 'console', 'screenshot', 'repair',
+  'validate', 'final_report',
+])
+
+function normalizeRole(value: unknown): TaskExecutionStep['role'] {
+  if (typeof value !== 'string') return undefined
+  return VALID_ROLES.has(value as NonNullable<TaskExecutionStep['role']>)
+    ? (value as TaskExecutionStep['role'])
+    : undefined
+}
+
+const VALID_WORKFLOW_TYPES = new Set<NonNullable<TaskExecutionStep['workflowType']>>([
+  'scaffold', 'feature', 'debug', 'refactor', 'research',
+])
+
+function normalizeWorkflowType(value: unknown): TaskExecutionStep['workflowType'] {
+  if (typeof value !== 'string') return 'feature'
+  return VALID_WORKFLOW_TYPES.has(value as NonNullable<TaskExecutionStep['workflowType']>)
+    ? (value as TaskExecutionStep['workflowType'])
+    : 'feature'
+}
 
 export interface PlannerInput {
   taskId: string
@@ -46,11 +71,12 @@ export async function runAnalyzePhase(input: PlannerInput): Promise<ProjectAnaly
       return null
     }
 
-    const jsonMatch = reply.result.fullContent.match(/```json\s*(\{[\s\S]*?\})\s*```/) || 
-                      reply.result.fullContent.match(/(\{[\s\S]*\})/)
-    if (!jsonMatch) return null
-
-    return JSON.parse(jsonMatch[1]) as ProjectAnalysis
+    const parsed = extractJsonObject(reply.result.fullContent)
+    if (!parsed) {
+      console.warn('Analyze phase: could not extract JSON from output:', reply.result.fullContent.slice(0, 500))
+      return null
+    }
+    return parsed as unknown as ProjectAnalysis
   } catch (err) {
     console.error('Error in analyze phase:', err)
     return null
@@ -86,11 +112,11 @@ export async function runPlanPhase(input: PlannerInput, analysis: ProjectAnalysi
       return null
     }
 
-    const jsonMatch = reply.result.fullContent.match(/```json\s*(\{[\s\S]*?\})\s*```/) || 
-                      reply.result.fullContent.match(/(\{[\s\S]*\})/)
-    if (!jsonMatch) return null
-
-    const parsed = JSON.parse(jsonMatch[1])
+    const parsed = extractJsonObject(reply.result.fullContent)
+    if (!parsed) {
+      console.warn('Plan phase: could not extract JSON from output:', reply.result.fullContent.slice(0, 500))
+      return null
+    }
     if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
       return null
     }
@@ -102,7 +128,7 @@ export async function runPlanPhase(input: PlannerInput, analysis: ProjectAnalysi
       goal: input.goal,
       workingDirectory: input.workingDirectory || '(no active folder)',
       kind: 'coding-design',
-      steps: parsed.steps.map((s: any, idx: number) => ({
+      steps: (parsed.steps as any[]).map((s: any, idx: number): TaskExecutionStep => ({
         id: s.id || `step_${idx + 1}`,
         title: s.title || `Step ${idx + 1}`,
         status: 'pending',
@@ -110,7 +136,8 @@ export async function runPlanPhase(input: PlannerInput, analysis: ProjectAnalysi
         completionSignals: s.completionSignals || ['Done'],
         attempts: 0,
         dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn : [],
-        workflowType: s.workflowType || 'feature'
+        workflowType: normalizeWorkflowType(s.workflowType),
+        role: normalizeRole(s.role),
       })),
       validation: { devServerChecked: false, consoleChecked: false, screenshotChecked: false, buildChecked: false },
       createdAt: now,
