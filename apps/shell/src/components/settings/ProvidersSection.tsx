@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight } from 'lucide-react'
-import type { ModelProvider, Settings } from '../../types'
+import { Brain, ChevronDown, ChevronRight, Eye, HelpCircle, Wrench } from 'lucide-react'
+import type { ModelCapabilityProfile, ModelProvider, Settings } from '../../types'
 import { LabeledInput, ModelChips, Toggle } from './shared'
 
 export function ProvidersSection({ settings, update }: { settings: Settings; update: (p: (s: Settings) => Settings) => void }) {
@@ -14,9 +14,24 @@ export function ProvidersSection({ settings, update }: { settings: Settings; upd
           <ProviderRow
             key={provider.id}
             provider={provider}
+            capability={settings.modelCapabilityMap[`${provider.id}:${provider.defaultModel}`]}
             onChange={next => update(s => ({
               ...s,
               modelProviders: s.modelProviders.map(p => p.id === provider.id ? next : p),
+            }))}
+            onCapability={profile => update(s => ({
+              ...s,
+              modelCapabilityMap: {
+                ...s.modelCapabilityMap,
+                [`${profile.providerId}:${profile.model}`]: profile,
+              },
+              modelToolFormatMap:
+                profile.toolFormat === 'openai' || profile.toolFormat === 'hermes' || profile.toolFormat === 'none'
+                  ? {
+                      ...s.modelToolFormatMap,
+                      [`${profile.providerId}:${profile.model}`]: profile.toolFormat,
+                    }
+                  : s.modelToolFormatMap,
             }))}
           />
         ))}
@@ -25,10 +40,21 @@ export function ProvidersSection({ settings, update }: { settings: Settings; upd
   )
 }
 
-function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange: (p: ModelProvider) => void }) {
+function ProviderRow({
+  provider,
+  capability,
+  onChange,
+  onCapability,
+}: {
+  provider: ModelProvider
+  capability?: ModelCapabilityProfile
+  onChange: (p: ModelProvider) => void
+  onCapability: (profile: ModelCapabilityProfile) => void
+}) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [probing, setProbing] = useState(false)
+  const [capProbing, setCapProbing] = useState(false)
   const [probeResult, setProbeResult] = useState<string | null>(null)
 
   const probe = async () => {
@@ -55,6 +81,26 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
     }
   }
 
+  const probeCapabilities = async (model = provider.defaultModel) => {
+    if (!provider.baseUrl || !model) return
+    setCapProbing(true)
+    try {
+      const result = await window.ava.llm.probeModelCapabilities({
+        provider: { ...provider, defaultModel: model },
+        model,
+      })
+      onCapability(result.profile)
+      if (!result.ok) setProbeResult(`✗ ${result.error}`)
+    } finally {
+      setCapProbing(false)
+    }
+  }
+
+  const changeModel = (model: string) => {
+    onChange({ ...provider, defaultModel: model })
+    void probeCapabilities(model)
+  }
+
   return (
     <div className="bg-surface border border-border-subtle rounded-lg">
       <div className="flex items-center gap-3 px-3 py-2">
@@ -69,6 +115,7 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
           <div className="flex items-center gap-2">
             <span className="text-sm text-text">{provider.name}</span>
             <span className="px-1.5 py-0.5 text-[10px] text-text-3 bg-surface-2 rounded">{provider.type}</span>
+            <CapabilityBadges profile={capability} probing={capProbing} />
           </div>
           <div className="text-xs text-text-3 truncate">{provider.baseUrl || t('settings.no_base_url', '(no baseUrl set)')}</div>
         </div>
@@ -96,7 +143,7 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
           <LabeledInput
             label={t('settings.default_model', 'Default Model')}
             value={provider.defaultModel}
-            onChange={v => onChange({ ...provider, defaultModel: v })}
+            onChange={changeModel}
             list={provider.models}
           />
           <label className="block">
@@ -124,7 +171,7 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
             <ModelChips
               models={provider.models}
               value={provider.defaultModel}
-              onPick={v => onChange({ ...provider, defaultModel: v })}
+              onPick={changeModel}
             />
           )}
           <div className="flex items-center gap-2 pt-1">
@@ -136,14 +183,66 @@ function ProviderRow({ provider, onChange }: { provider: ModelProvider; onChange
             >
               {probing ? t('settings.probing', 'Probing...') : t('settings.probe_connectivity', 'Probe Connectivity')}
             </button>
+            <button
+              type="button"
+              onClick={() => probeCapabilities()}
+              disabled={!provider.baseUrl || !provider.defaultModel || capProbing}
+              className="px-2.5 py-1 text-xs text-success bg-success/10 rounded-full cursor-pointer hover:bg-success/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {capProbing ? 'Detecting...' : 'Detect capabilities'}
+            </button>
             {probeResult && (
               <span className={`text-xs ${probeResult.startsWith('✓') ? 'text-success' : 'text-error'}`}>
                 {probeResult}
               </span>
             )}
           </div>
+          {capability && (
+            <div className="text-[11px] text-text-3">
+              Capabilities checked {new Date(capability.checkedAt).toLocaleString()} via {capability.source}
+              {capability.error ? `; ${capability.error}` : ''}
+            </div>
+          )}
         </div>
       )}
     </div>
   )
+}
+
+function CapabilityBadges({ profile, probing }: { profile?: ModelCapabilityProfile; probing: boolean }) {
+  const stale = profile ? Date.now() - profile.checkedAt > 7 * 24 * 60 * 60 * 1000 : false
+  if (probing) {
+    return <span className="text-[10px] text-warning">detecting...</span>
+  }
+  if (!profile) {
+    return (
+      <span title="Model capabilities not detected yet" className="inline-flex items-center gap-1 text-text-3">
+        <HelpCircle size={12} />
+      </span>
+    )
+  }
+  return (
+    <span
+      title={`Vision: ${profile.vision}; Tools: ${profile.tools}; Thinking: ${profile.thinking}; Format: ${profile.toolFormat}${stale ? '; stale' : ''}`}
+      className={`inline-flex items-center gap-1 text-[10px] ${stale ? 'text-warning' : 'text-text-3'}`}
+    >
+      <Eye size={12} className={capColor(profile.vision)} />
+      <Wrench size={12} className={capColor(profile.tools)} />
+      <Brain size={12} className={capColor(profile.thinking)} />
+      <span className={profile.toolFormat === 'unknown' || profile.toolFormat === 'none' ? 'text-text-3' : 'text-success'}>
+        {formatLabel(profile.toolFormat)}
+      </span>
+    </span>
+  )
+}
+
+function capColor(value: ModelCapabilityProfile['vision']): string {
+  if (value === 'yes') return 'text-success'
+  if (value === 'no') return 'text-error'
+  return 'text-text-3'
+}
+
+function formatLabel(format: ModelCapabilityProfile['toolFormat']): string {
+  if (format === 'openai') return 'native'
+  return format
 }

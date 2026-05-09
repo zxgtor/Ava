@@ -32,6 +32,18 @@ interface ModelProvider {
   reasoningMode?: 'auto' | 'off' | 'on'
 }
 
+interface ModelCapabilityProfile {
+  model: string
+  providerId: string
+  vision: 'yes' | 'no' | 'unknown'
+  tools: 'yes' | 'no' | 'unknown'
+  thinking: 'yes' | 'no' | 'unknown'
+  toolFormat: 'openai' | 'hermes' | 'json' | 'none' | 'unknown'
+  source: 'probe' | 'heuristic'
+  checkedAt: number
+  error?: string
+}
+
 interface LlmAttempt {
   providerId: string
   providerName: string
@@ -61,6 +73,9 @@ interface StreamChatArgs {
   temperature?: number
   toolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
   pluginStates?: Record<string, PluginState>
+  activeStepRequiredTools?: string[]
+  activeStepToolLoopBudget?: number
+  finalReportReadBudget?: number
 }
 
 interface StreamChatOk {
@@ -161,7 +176,7 @@ interface UnitTestContext {
 
 interface UnitTestLogEntry {
   id: string
-  kind: 'built-in' | 'mcp' | 'skill'
+  kind: 'built-in' | 'mcp' | 'skill' | 'feature'
   name: string
   status: 'passed' | 'failed'
   message?: string
@@ -339,6 +354,9 @@ const ava = {
     probe: (args: { baseUrl: string; apiKey: string; providerId?: string }): Promise<
       { ok: true; models: string[] } | { ok: false; error: string }
     > => ipcRenderer.invoke('ava:llm:probe', args),
+    probeModelCapabilities: (args: { provider: ModelProvider; model: string }): Promise<
+      { ok: true; profile: ModelCapabilityProfile } | { ok: false; profile: ModelCapabilityProfile; error: string }
+    > => ipcRenderer.invoke('ava:llm:probeModelCapabilities', args),
     onChunk: (handler: (payload: ChunkPayload) => void) => on<ChunkPayload>('ava:llm:chunk', handler),
     onReasoningChunk: (handler: (payload: ChunkPayload) => void) => on<ChunkPayload>('ava:llm:reasoning-chunk', handler),
     onAttempt: (handler: (payload: AttemptPayload) => void) => on<AttemptPayload>('ava:llm:attempt', handler),
@@ -401,6 +419,7 @@ const ava = {
   fs: {
     writeFile: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('ava:fs:writeFile', path, content),
     readFile: (path: string): Promise<string> => ipcRenderer.invoke('ava:fs:readFile', path),
+    createDir: (path: string): Promise<boolean> => ipcRenderer.invoke('ava:fs:createDir', path),
     listDir: (path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>> => 
       ipcRenderer.invoke('ava:fs:listDir', path),
   },

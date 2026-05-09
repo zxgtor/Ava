@@ -1,6 +1,7 @@
-import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ProjectBrief, Settings, TaskExecutionPlan, TaskExecutionStep } from '../../types'
+import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ModelProvider, ProjectBrief, Settings, TaskExecutionPlan, TaskExecutionStep } from '../../types'
 import { getEnabledProviders } from '../llm/providers'
 import { buildExecutorSystemPrompt } from './roles/executor'
+import { finalReportReadBudgetForStep, toolLoopBudgetForStep } from './taskExecutionPolicy'
 
 // ── Shared utilities ────────────────────────────────────────────────
 
@@ -223,6 +224,28 @@ export function contextBudgetForTraits(traits?: string[]): number {
   return CONTEXT_BUDGET_BY_TRAIT[trait] ?? CONTEXT_BUDGET_BY_TRAIT.chat
 }
 
+export function contextBudgetForModel(provider?: Pick<ModelProvider, 'id' | 'name' | 'defaultModel' | 'models'>): number {
+  const text = [
+    provider?.id,
+    provider?.name,
+    provider?.defaultModel,
+    ...(provider?.models ?? []),
+  ].filter(Boolean).join(' ').toLowerCase()
+
+  if (!text) return 8000
+  if (/\b(1m|1000k|512k|256k|200k|128k)\b|claude|gemini|gpt-5|gpt-4\.1/.test(text)) return 32000
+  if (/\b(64k|32k)\b|gpt-4o|o3|o4|deepseek|qwen3|qwen2\.5|kimi/.test(text)) return 24000
+  if (/\b(16k|14b|32b|70b)\b|llama|mistral|mixtral|phi/.test(text)) return 16000
+  return 8000
+}
+
+export function planningContextBudgetForProviders(providers: ModelProvider[], traits?: string[]): number {
+  const enabled = providers.find(provider => provider.enabled) ?? providers[0]
+  const traitBudget = contextBudgetForTraits(traits)
+  const modelBudget = contextBudgetForModel(enabled)
+  return Math.max(traitBudget, modelBudget)
+}
+
 function conversationToLlmMessages(
   conversation: Conversation,
   settings: Settings,
@@ -300,7 +323,7 @@ function conversationToLlmMessages(
   // ── 3. Build history messages within the token budget ──
   const mandatoryTokens = mandatory.reduce((sum, m) => sum + estimateMessageTokens(m), 0)
   const activeTokens = activeMessages.reduce((sum, m) => sum + estimateMessageTokens(m), 0)
-  const contextBudget = contextBudgetForTraits(conversation.traits)
+  const contextBudget = planningContextBudgetForProviders(getEnabledProviders(settings), conversation.traits)
   let remainingBudget = contextBudget - mandatoryTokens - activeTokens
 
   const historyMessages: LlmMessage[] = []
@@ -384,7 +407,7 @@ export function estimateContextUsage(
 ): ContextUsageEstimate {
   const messages = conversationToLlmMessages(conversation, settings, projectBrief, folderPath)
   const usedTokens = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)
-  const budgetTokens = contextBudgetForTraits(conversation.traits)
+  const budgetTokens = planningContextBudgetForProviders(getEnabledProviders(settings), conversation.traits)
   return {
     usedTokens,
     budgetTokens,
@@ -508,6 +531,8 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       toolFormatMap: options.settings.modelToolFormatMap,
       pluginStates: options.settings.pluginStates,
       activeStepRequiredTools: options.activeStep?.requiredTools,
+      activeStepToolLoopBudget: toolLoopBudgetForStep(options.activeStep),
+      finalReportReadBudget: finalReportReadBudgetForStep(options.activeStep),
     })
 
     if (!reply.ok) {

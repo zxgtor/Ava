@@ -1,10 +1,22 @@
-import type { ContentPart, ModelProvider, Settings, TaskExecutionPlan, TaskExecutionStep, TaskExecutionValidation } from '../../types'
+import type { ContentPart, ModelProvider, ProjectAnalysis, Settings, TaskExecutionPlan, TaskExecutionStep, TaskExecutionValidation } from '../../types'
+import { planningContextBudgetForProviders } from './chat'
+import { normalizeRequiredTools } from './toolNames'
 
 const CODING_DESIGN_TASK_RE =
   /\b(3d|three\.?js|animation|animated|site|website|landing page|app|full app|project|professional|production ready|complete|responsive|dashboard|frontend|ui|ux|migrate|refactor|implement feature|create|build|generate)\b|三维|动画|网站|站点|落地页|应用|完整|专业|响应式|前端|界面|迁移|重构|项目/i
 
 const MAX_STEP_ATTEMPTS = 3
 const MAX_VALIDATE_REPAIR_CYCLES = 2
+
+export function normalizeTaskExecutionPlan(plan: TaskExecutionPlan): TaskExecutionPlan {
+  return {
+    ...plan,
+    steps: plan.steps.map(step => ({
+      ...step,
+      requiredTools: normalizeRequiredTools(step.requiredTools),
+    })),
+  }
+}
 
 export function isCodingDesignBigTask(content: string): boolean {
   return CODING_DESIGN_TASK_RE.test(content) || content.length > 300
@@ -60,18 +72,26 @@ export async function generateDynamicTaskPlan(input: {
   projectBrief?: any
   providers: ModelProvider[]
   settings: Settings
+  analysis?: ProjectAnalysis | null
+  skipAnalysis?: boolean
+  traits?: string[]
 }): Promise<TaskExecutionPlan> {
   const fallbackPlan = createCodingDesignTaskPlan(input)
+  const contextBudget = planningContextBudgetForProviders(input.providers, input.traits)
   
-  // Phase 1: Analyze
-  const analysis = await runAnalyzePhase({
-    taskId: input.taskId,
-    goal: input.goal,
-    workingDirectory: input.workingDirectory,
-    providers: input.providers,
-    settings: input.settings,
-    contextBudget: 8000 // default budget
-  })
+  // Phase 1: Analyze only before user confirmation. After the user confirms
+  // the summary, reuse that confirmed analysis so planning cannot restart
+  // clarification questions.
+  const analysis = input.skipAnalysis
+    ? input.analysis ?? null
+    : await runAnalyzePhase({
+        taskId: input.taskId,
+        goal: input.goal,
+        workingDirectory: input.workingDirectory,
+        providers: input.providers,
+        settings: input.settings,
+        contextBudget,
+      })
   
   // Phase 2: Plan (DAG generation)
   const plan = await runPlanPhase({
@@ -80,7 +100,7 @@ export async function generateDynamicTaskPlan(input: {
     workingDirectory: input.workingDirectory,
     providers: input.providers,
     settings: input.settings,
-    contextBudget: 8000
+    contextBudget
   }, analysis)
 
   if (plan) {
@@ -91,18 +111,19 @@ export async function generateDynamicTaskPlan(input: {
       screenshotChecked: false,
       buildChecked: false,
     }
-    return plan
+    return normalizeTaskExecutionPlan(plan)
   }
 
   console.warn('Dynamic planning failed, using fallback plan')
-  return fallbackPlan
+  return normalizeTaskExecutionPlan(fallbackPlan)
 }
 
 import { TaskGraph } from './runtime/taskGraph'
 
 export function nextTaskStep(plan: TaskExecutionPlan): TaskExecutionStep | null {
   const graph = new TaskGraph(plan)
-  return graph.getNextStep()
+  const step = graph.getNextStep()
+  return step ? { ...step, requiredTools: normalizeRequiredTools(step.requiredTools) } : null
 }
 
 export function getNodesByLayer(plan: TaskExecutionPlan): TaskExecutionStep[][] {

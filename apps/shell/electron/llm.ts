@@ -9,6 +9,7 @@ import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
 import { pluginManager, type PluginSkill, type PluginState } from './services/pluginManager'
 import { previewValue, toolAuditLog, type ToolAuditCommandInvocation } from './services/toolAuditLog'
 import { builtInTools } from './services/builtInTools'
+import { runtimeEnvironmentPrompt } from './services/runtimeEnvironment'
 import { OpenAiAdapter } from './adapters/openai'
 import { AnthropicAdapter } from './adapters/anthropic'
 import { LlmAdapter } from './adapters/base'
@@ -79,6 +80,9 @@ export interface StreamChatArgs {
   temperature?: number
   toolFormatMap?: Record<string, ToolCallFormat>
   pluginStates?: Record<string, PluginState>
+  activeStepRequiredTools?: string[]
+  activeStepToolLoopBudget?: number
+  finalReportReadBudget?: number
 }
 
 export interface StreamStepArgs extends StreamChatArgs {
@@ -132,7 +136,8 @@ const activeStreams = new Map<string, ActiveStream>()
 
 const ANTHROPIC_API_VERSION = '2023-06-01'
 const ANTHROPIC_MAX_TOKENS = 4096
-const MAX_TOOL_LOOP = 10
+const DEFAULT_TOOL_LOOP = 10
+const MAX_TOOL_LOOP = 50
 const WINDOWS_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：、]+/g
 const WINDOWS_DRIVE_SCOPE_RE = /\b[A-Za-z]:\\?(?![^\s"'`<>|?*])/g
 const TOOL_INTENT_RE =
@@ -144,9 +149,10 @@ const REASONING_INTENT_RE =
 const SIMPLE_CHAT_RE =
   /\b(what is|how to|do you know|explain|summarize|translate|tell me|can this|does this|support)\b|是什么|怎么|如何|解释|总结|翻译|支持吗|知道/i
 const RAW_COMMAND_ONLY_RE =
-  /^(?:dir|ls|npm|npx|pnpm|yarn|bun|bunx|node|git|python|python3|py|pip|pip3|pytest|rg|dotnet|vite|tsc|deno|uv|uvx|powershell|pwsh)(?:\s+[^\r\n]+)?$/i
+  /^(?:dir|ls|pwd|cat|touch|mkdir|mv|cp|npm|npx|pnpm|yarn|bun|bunx|node|git|python|python3|py|pip|pip3|pytest|rg|dotnet|vite|tsc|deno|uv|uvx|powershell|pwsh)(?:\s+[^\r\n]+)?$/i
 const ACTION_PROMISE_WITHOUT_TOOL_RE =
   /\b(?:i will|i'll|let's|let me|first step|first,? i|now i|i need to|start by|begin by|check current|need to check|need to confirm)\b[\s\S]{0,240}\b(?:check|inspect|list|read|run|create|install|start|verify|look|view|initialize|launch)\b|我(?:将|会|需要|先|现在)[\s\S]{0,120}(?:检查|查看|读取|运行|创建|安装|启动|验证|初始化)|第一步|让我们先|请允许我查看/i
+const FINAL_REPORT_READ_TOOL_NAMES = new Set(['file.read_text', 'file.list_dir', 'git.diff', 'project.validate'])
 
 export function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
@@ -248,7 +254,8 @@ function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask
   return `Blocked stale filesystem tool call. The requested path "${path}" is outside the latest user request scope: ${scopes.join(', ')}.`
 }
 
-function shouldExposeTools(currentTask: string, activeCommandInvocation?: ToolAuditCommandInvocation): boolean {
+function shouldExposeTools(currentTask: string, activeCommandInvocation?: ToolAuditCommandInvocation, forceToolExposure = false): boolean {
+  if (forceToolExposure) return true
   if (activeCommandInvocation) return true
   if (extractPathScopes(currentTask).length > 0) return true
   if (CONTINUATION_TOOL_INTENT_RE.test(currentTask)) return true
@@ -262,8 +269,12 @@ function allowedFilesystemDirs(): string[] {
     .filter(dir => typeof dir === 'string' && dir.trim().length > 0)
 }
 
-function listAvailableTools(currentTask: string, activeCommandInvocation?: ToolAuditCommandInvocation): McpToolDescriptor[] {
-  if (!shouldExposeTools(currentTask, activeCommandInvocation)) return []
+function listAvailableTools(
+  currentTask: string,
+  activeCommandInvocation?: ToolAuditCommandInvocation,
+  forceToolExposure = false,
+): McpToolDescriptor[] {
+  if (!shouldExposeTools(currentTask, activeCommandInvocation, forceToolExposure)) return []
   return [...builtInTools.listTools(), ...mcpSupervisor.listAllTools()]
 }
 
@@ -379,8 +390,43 @@ function rawCommandToShellToolCall(rawText: string, cwd?: string): ToolCallCandi
 function actionPromiseToToolCall(rawText: string, cwd?: string): ToolCallCandidate | null {
   if (!cwd || !looksLikeActionPromiseWithoutTool(rawText)) return null
   const cleaned = cleanRawCommandText(rawText)
+  const mkdirMatch = cleaned.match(/\bmkdir\s+([A-Za-z]:\\[^\r\n"'`<>|?*]+)/i)
+  if (mkdirMatch?.[1]) {
+    return {
+      id: `auto_create_dir_${Date.now()}`,
+      name: 'file.create_dir',
+      args: {
+        path: mkdirMatch[1].trim(),
+      },
+    }
+  }
+
+  if (/\bnpm\s+create\s+vite@latest\b|vite\s+project|initialize\s+(?:the\s+)?(?:vite|react)|初始化.*vite/i.test(cleaned)) {
+    return {
+      id: `auto_vite_scaffold_${Date.now()}`,
+      name: 'shell.run_command',
+      args: {
+        command: 'npm',
+        args: ['create', 'vite@latest', '.', '--', '--template', 'react'],
+        cwd,
+      },
+    }
+  }
+
+  if (/\bnpm\s+install\b|install\s+(?:the\s+)?(?:necessary\s+)?dependencies|安装.*依赖/i.test(cleaned)) {
+    return {
+      id: `auto_npm_install_${Date.now()}`,
+      name: 'shell.run_command',
+      args: {
+        command: 'npm',
+        args: ['install'],
+        cwd,
+      },
+    }
+  }
+
   const wantsProjectInspection =
-    /\b(package\.json|directory structure|current state|project state|current directory|files?|dependencies|installed|inspect|check|list|read|look at|view)\b|检查|查看|读取|目录|文件|依赖|项目状态/i.test(cleaned)
+    /\b(package\.json|directory structure|current state|project state|current directory|files?|dependencies|installed|inspect|check|list|read|look at|view)\b|检查|查看|读取|获取|目录|文件|依赖|项目状态|项目结构/i.test(cleaned)
   if (!wantsProjectInspection) return null
   return {
     id: `auto_project_map_${Date.now()}`,
@@ -391,6 +437,88 @@ function actionPromiseToToolCall(rawText: string, cwd?: string): ToolCallCandida
       maxFiles: 250,
     },
   }
+}
+
+const CWD_TOOL_NAMES = new Set([
+  'project.detect',
+  'project.map',
+  'project.validate',
+  'search.ripgrep',
+  'git.status',
+  'git.diff',
+  'devserver.start',
+  'devserver.stop',
+  'devserver.status',
+  'shell.run_command',
+])
+
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  file_read: 'file.read_text',
+  file_read_text: 'file.read_text',
+  file_read_file: 'file.read_text',
+  read_file: 'file.read_text',
+  read_text_file: 'file.read_text',
+  file_write: 'file.write_text',
+  file_write_text: 'file.write_text',
+  write_file: 'file.write_text',
+  file_list: 'file.list_dir',
+  file_list_dir: 'file.list_dir',
+  list_dir: 'file.list_dir',
+  file_mkdir: 'file.create_dir',
+  mkdir: 'file.create_dir',
+  create_dir: 'file.create_dir',
+  file_stat: 'file.stat',
+  shell_exec: 'shell.run_command',
+  shell_execute: 'shell.run_command',
+  run_command: 'shell.run_command',
+}
+
+function normalizeToolCallName(name: string): string {
+  const normalized = name.trim().replace(/\./g, '_').toLowerCase()
+  return TOOL_NAME_ALIASES[normalized] ?? name
+}
+
+function expandToolCallAliases(toolCall: ToolCallCandidate): ToolCallCandidate[] {
+  const normalizedName = toolCall.name.trim().replace(/\./g, '_').toLowerCase()
+  if (normalizedName === 'file_read_multiple_files' || normalizedName === 'read_multiple_files') {
+    const rawPaths = Array.isArray(toolCall.args.paths) ? toolCall.args.paths : []
+    const paths = rawPaths.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    if (paths.length > 0) {
+      return paths.map((path, index) => ({
+        id: `${toolCall.id}_read_${index + 1}`,
+        name: 'file.read_text',
+        args: {
+          path,
+          ...(typeof toolCall.args.maxChars === 'number' ? { maxChars: toolCall.args.maxChars } : {}),
+        },
+      }))
+    }
+  }
+
+  const name = normalizeToolCallName(toolCall.name)
+  if (name === toolCall.name) return [toolCall]
+  return [{ ...toolCall, name }]
+}
+
+function isAbsolutePathLike(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\') || value.startsWith('/')
+}
+
+function normalizeToolCallsForContext(toolCalls: ToolCallCandidate[], activeFolderPath?: string): ToolCallCandidate[] {
+  return toolCalls.flatMap(expandToolCallAliases).map(call => {
+    if (!CWD_TOOL_NAMES.has(call.name) || typeof call.args.cwd === 'string') return call
+
+    const pathArg = typeof call.args.path === 'string' ? call.args.path.trim() : ''
+    const cwd = pathArg && isAbsolutePathLike(pathArg)
+      ? pathArg
+      : activeFolderPath
+
+    if (!cwd) return call
+
+    const args = { ...call.args, cwd }
+    if (call.name.startsWith('project.') && 'path' in args) delete args.path
+    return { ...call, args }
+  })
 }
 
 function withToolCallCorrectionPrompt(messages: LlmMessage[], rawText: string): LlmMessage[] {
@@ -421,6 +549,24 @@ function looksLikeActionPromiseWithoutTool(text: string): boolean {
   return ACTION_PROMISE_WITHOUT_TOOL_RE.test(cleaned)
 }
 
+function toolLoopBudgetFromArgs(args: StreamChatArgs): number {
+  const requested = args.activeStepToolLoopBudget
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) return DEFAULT_TOOL_LOOP
+  return Math.max(1, Math.min(MAX_TOOL_LOOP, Math.floor(requested)))
+}
+
+function isFinalReportReadTool(name: string): boolean {
+  return FINAL_REPORT_READ_TOOL_NAMES.has(name)
+}
+
+function finalReportBudgetError(budget: number): string {
+  return [
+    `Final report read budget reached (${budget}).`,
+    'Use the already accumulated tool results, validation output, and changed-file context to produce the final report now.',
+    'Do not call another read/list/diff/validate tool for this final report step.',
+  ].join(' ')
+}
+
 function withActionRequiredPrompt(messages: LlmMessage[], rawText: string): LlmMessage[] {
   return [
     ...messages,
@@ -448,7 +594,7 @@ function rawCommandNoToolText(rawText: string): string {
   return `Stopped: the model output a raw command instead of calling a tool: ${command}. Ava did not execute it. Please retry; Ava will require a tool call such as project.map, file.list_dir, shell.run_command, or devserver.start.`
 }
 
-export function buildToolPrompt(tools: McpToolDescriptor[]): string {
+export function buildToolPrompt(tools: McpToolDescriptor[], runtimePrompt = runtimeEnvironmentPrompt()): string {
   const toolLines = tools.map(tool => {
     const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema) : '{}'
     return `- ${tool.name}: ${tool.description ?? 'No description'} | args schema: ${schema}`
@@ -461,11 +607,14 @@ export function buildToolPrompt(tools: McpToolDescriptor[]): string {
     ?? tools[0]
   const exampleName = exampleTool?.name ?? 'filesystem.read_text_file'
   return [
+    runtimePrompt,
+    '',
     'Available tools:',
     ...toolLines,
     'Only call a tool when the latest user request requires external state, filesystem access, or an explicit action.',
     'For conceptual questions, instructions, or explanations, answer directly without a tool call.',
     'For file work, prefer built-in file.read_text, file.write_text, file.list_dir, file.create_dir, and file.stat when available.',
+    'There is no batch read tool. To read multiple files, call file.read_text once per file.',
     'For focused edits to an existing file, prefer file.patch with exact oldText/newText before rewriting the whole file.',
     'For codebase exploration, use project.map first for a compact project picture, then search.ripgrep/project.detect/read files as needed.',
     'Before claiming coding work is complete, use project.validate or an equivalent shell.run_command validation when available.',
@@ -513,6 +662,14 @@ export function toOpenAiMessages(messages: LlmMessage[]) {
   })
 }
 
+function injectRuntimeEnvironmentPrompt(messages: LlmMessage[]): LlmMessage[] {
+  const prompt = runtimeEnvironmentPrompt()
+  if (messages[0]?.role === 'system') {
+    return [{ ...messages[0], content: `${messages[0].content}\n\n${prompt}` }, ...messages.slice(1)]
+  }
+  return [{ role: 'system', content: prompt }, ...messages]
+}
+
 function injectHermesToolPrompt(messages: LlmMessage[], tools: McpToolDescriptor[]): LlmMessage[] {
   if (tools.length === 0) return messages
   const prompt = buildToolPrompt(tools)
@@ -554,22 +711,48 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
   }
 }
 
+function toolCallFromJsonObject(parsed: Record<string, unknown>): ToolCallCandidate | null {
+  const name = typeof parsed.name === 'string' ? parsed.name : null
+  if (!name) return null
+  const argsSource = parsed.arguments ?? parsed.args
+  const args = argsSource && typeof argsSource === 'object' ? argsSource as Record<string, unknown> : {}
+  return {
+    id: `json_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    args,
+  }
+}
+
+function parseFencedJsonToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
+  const toolCalls: ToolCallCandidate[] = []
+  let visibleText = text.replace(/```(?:json)?\s*([\s\S]*?)\s*```/gi, (match, body) => {
+    const parsed = parseJsonObject(String(body).trim())
+    const call = parsed ? toolCallFromJsonObject(parsed) : null
+    if (!call) return match
+    toolCalls.push(call)
+    return ''
+  })
+
+  if (toolCalls.length === 0) {
+    const parsed = parseJsonObject(visibleText.trim())
+    const call = parsed ? toolCallFromJsonObject(parsed) : null
+    if (call) {
+      toolCalls.push(call)
+      visibleText = ''
+    }
+  }
+
+  return { visibleText: visibleText.trim(), toolCalls }
+}
+
 export function parseHermesToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
   const toolCalls: ToolCallCandidate[] = []
   const toolCallBlockRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
-  const visibleText = text.replace(toolCallBlockRe, (_match, body) => {
+  let visibleText = text.replace(toolCallBlockRe, (_match, body) => {
     const parsed = parseJsonObject(body)
     if (parsed) {
-      const name = typeof parsed.name === 'string' ? parsed.name : null
-      const argsSource = parsed.arguments ?? parsed.args
-      const args = argsSource && typeof argsSource === 'object' ? argsSource as Record<string, unknown> : {}
-      if (name) {
-        toolCalls.push({
-          id: `hermes_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          name,
-          args,
-        })
-      }
+      const call = toolCallFromJsonObject(parsed)
+      if (call) toolCalls.push(call)
       return ''
     }
 
@@ -586,6 +769,15 @@ export function parseHermesToolCalls(text: string): { visibleText: string; toolC
 
     return ''
   }).trim()
+
+  if (toolCalls.length === 0) {
+    const fenced = parseFencedJsonToolCalls(visibleText)
+    if (fenced.toolCalls.length > 0) {
+      toolCalls.push(...fenced.toolCalls)
+      visibleText = fenced.visibleText
+    }
+  }
+
   return { visibleText, toolCalls }
 }
 
@@ -716,7 +908,11 @@ async function runToolLoop(
 ): Promise<Omit<StreamChatResult, 'provider' | 'attempts' | 'fallbackUsed'>> {
   const model = provider.defaultModel
   const currentTask = latestUserRequest(args.messages)
-  const tools = listAvailableTools(currentTask, args.activeCommandInvocation)
+  const tools = listAvailableTools(
+    currentTask,
+    args.activeCommandInvocation,
+    Boolean(args.activeStepRequiredTools?.length),
+  )
   const effectiveProvider: ModelProvider = {
     ...provider,
     reasoningMode: chooseReasoningMode(provider, currentTask, tools.length > 0),
@@ -732,7 +928,7 @@ async function runToolLoop(
     initialHint === 'none'
       ? undefined
       : initialHint ?? (provider.id === 'lmstudio' && tools.length > 0 ? 'hermes' : undefined)
-  const workingMessages: LlmMessage[] = [...args.messages]
+  const workingMessages: LlmMessage[] = injectRuntimeEnvironmentPrompt(args.messages)
   const parts: StreamChatResult['parts'] = []
   let fullContent = ''
   let detectedToolFormat: ToolCallFormat = initialHint ?? 'none'
@@ -740,8 +936,13 @@ async function runToolLoop(
   let sawFirstToken = false
   let rawCommandCorrectionIssued = false
   let actionCorrectionCount = 0
+  const loopBudget = toolLoopBudgetFromArgs(args)
+  const finalReportReadBudget = typeof args.finalReportReadBudget === 'number'
+    ? Math.max(0, Math.floor(args.finalReportReadBudget))
+    : undefined
+  let finalReportReadCalls = 0
 
-  for (let round = 0; round < MAX_TOOL_LOOP; round += 1) {
+  for (let round = 0; round < loopBudget; round += 1) {
     if (controller.signal.aborted) throw new Error('aborted')
     sendRunStatus(webContents, args, provider, model, round === 0 ? 'waiting_first_token' : 'generating')
     let bufferedVisibleText = ''
@@ -789,7 +990,7 @@ async function runToolLoop(
 
     const outputLimitReached = step.finishReason === 'length' || step.finishReason === 'max_tokens'
     const serverDisconnected = step.finishReason === 'stream_disconnected'
-    let toolCalls = step.toolCalls
+    let toolCalls = normalizeToolCallsForContext(step.toolCalls, args.activeFolderPath)
     const trailingRawCommand =
       tools.length > 0 && toolCalls.length === 0 && step.visibleText
         ? extractTrailingRawCommand(step.visibleText)
@@ -837,7 +1038,7 @@ async function runToolLoop(
     if (actionPromiseWithoutTool) {
       const synthesizedToolCall = actionPromiseToToolCall(step.visibleText, args.activeFolderPath)
       if (synthesizedToolCall) {
-        toolCalls = [synthesizedToolCall]
+        toolCalls = normalizeToolCallsForContext([synthesizedToolCall], args.activeFolderPath)
       } else if (actionCorrectionCount < 4) {
         actionCorrectionCount += 1
         workingMessages.splice(0, workingMessages.length, ...withActionRequiredPrompt(workingMessages, step.visibleText))
@@ -931,7 +1132,16 @@ async function runToolLoop(
       sendRunStatus(webContents, args, provider, model, 'tool_running')
 
       const partIndex = parts.length
-      const staleReason = validateToolAgainstCurrentTask(toolCall, currentTask)
+      const finalReportBudgetReason =
+        finalReportReadBudget !== undefined &&
+        isFinalReportReadTool(toolCall.name) &&
+        finalReportReadCalls >= finalReportReadBudget
+          ? finalReportBudgetError(finalReportReadBudget)
+          : null
+      if (finalReportReadBudget !== undefined && isFinalReportReadTool(toolCall.name) && !finalReportBudgetReason) {
+        finalReportReadCalls += 1
+      }
+      const staleReason = finalReportBudgetReason ?? validateToolAgainstCurrentTask(toolCall, currentTask)
       const builtInTool = builtInTools.resolveTool(toolCall.name)
       const resolvedTool = builtInTool ?? mcpSupervisor.resolveTool(toolCall.name)
       const serverRuntime = resolvedTool && !builtInTool ? mcpSupervisor.getServer(resolvedTool.serverId) : null
@@ -1032,11 +1242,43 @@ async function runToolLoop(
         toolCallId: toolCall.id,
         content: toolText,
       })
+
+      if (
+        args.activeStepRequiredTools?.length &&
+        result.ok &&
+        !result.isError &&
+        args.activeStepRequiredTools.includes(toolCall.name)
+      ) {
+        return {
+          fullContent,
+          parts,
+          model,
+          toolCallsIssued,
+          loopRounds: round + 1,
+          detectedToolFormat,
+        }
+      }
     }
     sendRunStatus(webContents, args, provider, model, 'generating')
   }
 
-  const stopText = 'Tool loop exceeded, stopping.'
+  const recentTools = parts
+    .filter((part): part is ToolCallPart => part.type === 'tool_call')
+    .slice(-5)
+    .map(part => {
+      const argText = JSON.stringify(part.args).slice(0, 180)
+      const statusText = part.status === 'ok'
+        ? `ok: ${JSON.stringify(part.result).slice(0, 220)}`
+        : part.error ?? part.status
+      return `- ${part.name}(${argText}): ${statusText}`
+    })
+    .join('\n')
+  const stopText = [
+    `Tool loop exceeded after ${loopBudget} round(s), stopping.`,
+    recentTools ? `Recent tool calls:\n${recentTools}` : '',
+    '',
+    'Ava stopped to avoid repeating the same action indefinitely.',
+  ].filter(Boolean).join('\n')
   fullContent += stopText
   parts.push({ type: 'text', text: stopText })
   if (!webContents.isDestroyed()) {
@@ -1047,7 +1289,7 @@ async function runToolLoop(
     parts,
     model,
     toolCallsIssued,
-    loopRounds: MAX_TOOL_LOOP,
+    loopRounds: loopBudget,
     detectedToolFormat,
     stopReason: 'tool_loop_limit',
   }

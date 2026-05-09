@@ -1,5 +1,7 @@
-import type { ModelProvider, Settings, TaskExecutionPlan, ProjectAnalysis } from '../../../types'
+import type { ModelProvider, Settings, TaskExecutionPlan, ProjectAnalysis, Message } from '../../../types'
 import { ANALYZE_TEMPLATE, PLANNER_TEMPLATE } from '../prompts/templates'
+import { partsToText } from '../chat'
+import { normalizeRequiredTools } from '../toolNames'
 
 export interface PlannerInput {
   taskId: string
@@ -8,13 +10,20 @@ export interface PlannerInput {
   providers: ModelProvider[]
   settings: Settings
   contextBudget: number
+  messages?: Message[]
 }
 
 export async function runAnalyzePhase(input: PlannerInput): Promise<ProjectAnalysis | null> {
   const streamId = `analyze_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   
+  const historyText = input.messages
+    ? input.messages.slice(-10).map(m => `${m.role.toUpperCase()}: ${partsToText(m.content)}`).join('\n\n')
+    : ''
+
   const systemPrompt = [
     ANALYZE_TEMPLATE,
+    `Conversation History:\n${historyText}`,
+    `Context Budget: ${input.contextBudget} tokens. Ask only the questions required to make a safe executable plan for this budget.`,
     `Goal: ${input.goal}`,
     `Working directory: ${input.workingDirectory || '(none)'}`
   ].join('\n\n')
@@ -97,7 +106,7 @@ export async function runPlanPhase(input: PlannerInput, analysis: ProjectAnalysi
         id: s.id || `step_${idx + 1}`,
         title: s.title || `Step ${idx + 1}`,
         status: 'pending',
-        requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools : [],
+        requiredTools: normalizeRequiredTools(Array.isArray(s.requiredTools) ? s.requiredTools : []),
         completionSignals: s.completionSignals || ['Done'],
         attempts: 0,
         dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn : [],

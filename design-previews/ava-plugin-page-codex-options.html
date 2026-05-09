@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ava Plugin Page Options</title>
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --panel: #111722;
+      --panel-2: #151d2b;
+      --line: rgba(255,255,255,.09);
+      --text: #eef3ff;
+      --muted: #8792a8;
+      --green: #4ee6a8;
+      --blue: #7aa7ff;
+      --orange: #ffb86b;
+      --red: #ff7474;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 10%, rgba(78,230,168,.14), transparent 26%),
+        radial-gradient(circle at 86% 16%, rgba(122,167,255,.12), transparent 30%),
+        linear-gradient(135deg, #080b11, #101827 52%, #0b0e14);
+      color: var(--text);
+      font-family: "Aptos", "Segoe UI", sans-serif;
+      padding: 32px;
+    }
+    header { max-width: 1180px; margin: 0 auto 24px; }
+    h1 { margin: 0; font-size: 28px; letter-spacing: -.03em; }
+    .sub { color: var(--muted); margin-top: 8px; font-size: 14px; }
+    .grid {
+      max-width: 1180px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .option {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(17,23,34,.82);
+      overflow: hidden;
+      box-shadow: 0 24px 70px rgba(0,0,0,.34);
+    }
+    .option-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(78,230,168,.12);
+      color: var(--green);
+      border: 1px solid rgba(78,230,168,.18);
+    }
+    h2 { font-size: 16px; margin: 0; letter-spacing: -.02em; }
+    .mock {
+      min-height: 560px;
+      background: rgba(8,11,17,.72);
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    .toolbar {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .search {
+      flex: 1;
+      height: 32px;
+      border-radius: 10px;
+      background: #0c111b;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      font-size: 12px;
+    }
+    .btn {
+      height: 32px;
+      padding: 0 10px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid var(--line);
+      color: var(--text);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+    }
+    .btn.primary { background: rgba(78,230,168,.12); color: var(--green); border-color: rgba(78,230,168,.22); }
+    .body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .plugin-card {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.035);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .title { font-weight: 650; font-size: 13px; }
+    .desc { color: var(--muted); font-size: 11px; margin-top: 5px; line-height: 1.35; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .chip { font-size: 10px; color: #aeb8cc; padding: 4px 6px; background: rgba(255,255,255,.055); border-radius: 7px; }
+    .toggle { width: 32px; height: 18px; border-radius: 999px; background: rgba(78,230,168,.25); border: 1px solid rgba(78,230,168,.35); position: relative; }
+    .toggle:after { content: ""; position: absolute; right: 2px; top: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--green); }
+    .split { display: grid; grid-template-columns: 42% 1fr; min-height: 520px; }
+    .list { border-right: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .detail { padding: 16px; }
+    .selected { background: rgba(78,230,168,.09); border-color: rgba(78,230,168,.25); }
+    .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+    .tab { padding: 6px 8px; border-radius: 9px; font-size: 11px; background: rgba(255,255,255,.05); color: var(--muted); }
+    .tab.active { background: rgba(122,167,255,.12); color: #bcd0ff; }
+    .empty-box { border: 1px dashed var(--line); border-radius: 14px; padding: 14px; color: var(--muted); font-size: 12px; }
+    .footer {
+      max-width: 1180px;
+      margin: 18px auto 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    @media (max-width: 1050px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ava Plugin Page: Codex-style directions</h1>
+    <div class="sub">Pick the information architecture first. After you choose, I will turn it into a concrete implementation plan.</div>
+  </header>
+
+  <main class="grid">
+    <section class="option">
+      <div class="option-head">
+        <h2>A. Marketplace Cards</h2>
+        <span class="badge">Recommended</span>
+      </div>
+      <div class="mock">
+        <div class="toolbar">
+          <div class="search">Search plugins, skills, MCP...</div>
+          <div class="btn">Refresh</div>
+          <div class="btn primary">Install</div>
+        </div>
+        <div class="body">
+          <div class="plugin-card selected">
+            <div class="row">
+              <div>
+                <div class="title">Superpowers</div>
+                <div class="desc">Workflow skills for brainstorming, planning, and implementation discipline.</div>
+              </div>
+              <div class="toggle"></div>
+            </div>
+            <div class="chips"><span class="chip">8 skills</span><span class="chip">0 MCP</span><span class="chip">bundled</span><span class="chip">enabled</span></div>
+          </div>
+          <div class="plugin-card">
+            <div class="row">
+              <div>
+                <div class="title">Browser Use</div>
+                <div class="desc">Local browser automation and screenshot support for preview testing.</div>
+              </div>
+              <div class="toggle"></div>
+            </div>
+            <div class="chips"><span class="chip">1 skill</span><span class="chip">3 tools</span><span class="chip">installed</span></div>
+          </div>
+          <div class="plugin-card">
+            <div class="row">
+              <div>
+                <div class="title">GitHub</div>
+                <div class="desc">Repository, PR, issue and CI workflows.</div>
+              </div>
+              <div class="toggle"></div>
+            </div>
+            <div class="chips"><span class="chip">4 skills</span><span class="chip">connector</span><span class="chip">needs auth</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="option">
+      <div class="option-head">
+        <h2>B. Split Inspector</h2>
+        <span class="badge" style="color:var(--blue);background:rgba(122,167,255,.12);border-color:rgba(122,167,255,.2)">Codex-like</span>
+      </div>
+      <div class="mock split">
+        <div class="list">
+          <div class="search">Filter</div>
+          <div class="plugin-card selected"><div class="title">Superpowers</div><div class="desc">enabled · 8 skills</div></div>
+          <div class="plugin-card"><div class="title">Browser Use</div><div class="desc">enabled · 1 skill</div></div>
+          <div class="plugin-card"><div class="title">GitHub</div><div class="desc">disabled · connector</div></div>
+        </div>
+        <div class="detail">
+          <div class="row">
+            <div>
+              <div class="title" style="font-size:16px">Superpowers</div>
+              <div class="desc">openai-curated · v3c463363</div>
+            </div>
+            <div class="toggle"></div>
+          </div>
+          <div class="tabs">
+            <div class="tab active">Overview</div><div class="tab">Skills</div><div class="tab">MCP</div><div class="tab">Files</div>
+          </div>
+          <div class="empty-box">Status, permissions, source path, update button, uninstall button, warnings, and runtime health all stay in this detail pane.</div>
+          <div class="chips"><span class="chip">brainstorming</span><span class="chip">writing-plans</span><span class="chip">implementation</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="option">
+      <div class="option-head">
+        <h2>C. Operational Console</h2>
+        <span class="badge" style="color:var(--orange);background:rgba(255,184,107,.12);border-color:rgba(255,184,107,.22)">Power user</span>
+      </div>
+      <div class="mock">
+        <div class="toolbar">
+          <div class="btn primary">All</div><div class="btn">Enabled</div><div class="btn">Errors</div><div class="btn">Updates</div>
+        </div>
+        <div class="body">
+          <div class="plugin-card selected">
+            <div class="row"><div class="title">Browser Use MCP</div><span class="chip" style="color:var(--green)">running</span></div>
+            <div class="desc">3 tools exposed · last heartbeat now · no errors</div>
+          </div>
+          <div class="plugin-card">
+            <div class="row"><div class="title">Filesystem Plugin</div><span class="chip" style="color:var(--red)">blocked</span></div>
+            <div class="desc">cwd outside plugin root · click to inspect permission issue</div>
+          </div>
+          <div class="plugin-card">
+            <div class="row"><div class="title">Skills Registry</div><span class="chip" style="color:var(--green)">loaded</span></div>
+            <div class="desc">12 skill files injected into agent context</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="footer">
+    Recommendation: use A as the main page, with B-style detail drawer/pane when a plugin is selected. C is useful later for diagnostics, but too heavy as the default plugin page.
+  </div>
+</body>
+</html>

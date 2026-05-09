@@ -60,11 +60,23 @@ export interface TaskExecutionStep {
 
 export type AgentRole = 'planner' | 'executor' | 'critic' | 'orchestrator'
 
+export interface ProjectUnknown {
+  question: string
+  options: string[]
+  importance: 'high' | 'low'
+}
+
+export interface ProjectRisk {
+  risk: string
+  mitigation: string
+  impact: 'high' | 'medium' | 'low'
+}
+
 export interface ProjectAnalysis {
   projectSummary: string
   architecture: string
-  unknowns: string[]
-  risks: string[]
+  unknowns: ProjectUnknown[]
+  risks: ProjectRisk[]
 }
 
 export interface TaskExecutionValidation {

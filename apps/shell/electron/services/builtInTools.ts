@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { resolve as resolvePath, basename, dirname } from 'node:path'
 
 import type { McpToolDescriptor, CallToolError, CallToolResult } from './mcpSupervisor'
+import { COMMAND_ALLOWLIST, DEVSERVER_COMMAND_ALLOWLIST } from './runtimeEnvironment'
 
 const MAX_OUTPUT_CHARS = 24_000
 const MAX_DEVSERVER_LOG_CHARS = 12_000
@@ -16,35 +17,6 @@ const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 10 * 60_000
 const DEVSERVER_READY_TIMEOUT_MS = 20_000
 
-const COMMAND_ALLOWLIST = new Set([
-  'npm',
-  'npx',
-  'pnpm',
-  'yarn',
-  'bun',
-  'bunx',
-  'node',
-  'git',
-  'rg',
-  'python',
-  'python3',
-  'py',
-  'pip',
-  'pip3',
-  'pytest',
-  'dotnet',
-  'tsc',
-  'vite',
-  'deno',
-  'uv',
-  'uvx',
-  'powershell',
-  'powershell.exe',
-  'pwsh',
-  'pwsh.exe',
-])
-
-const DEVSERVER_COMMAND_ALLOWLIST = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'bunx', 'node'])
 const PROJECT_MAP_IGNORED_DIRS = new Set([
   '.git',
   '.next',
@@ -75,7 +47,7 @@ const SHELL_TOOL: McpToolDescriptor = {
     properties: {
       command: {
         type: 'string',
-        description: 'Executable name, for example npm, npx, pnpm, yarn, node, git, python, pwsh.',
+        description: 'Executable name, for example npm, npx, pnpm, yarn, node, git, python, pwsh. On Windows, simple Unix aliases like mv/cp/touch/mkdir/ls/pwd/cat are normalized to PowerShell equivalents.',
       },
       args: {
         type: 'array',
@@ -1073,7 +1045,41 @@ function parseRunCommandArgs(raw: Record<string, unknown>): { ok: true; args: Ru
   if (!command) return { ok: false, error: 'shell.run_command requires "command".' }
   if (!args) return { ok: false, error: 'shell.run_command requires "args" as an array of strings.' }
   if (!cwd) return { ok: false, error: 'shell.run_command requires "cwd".' }
-  return { ok: true, args: { command, args, cwd, timeoutMs } }
+  return { ok: true, args: normalizeRunCommandArgs({ command, args, cwd, timeoutMs }) }
+}
+
+function normalizeRunCommandArgs(args: RunCommandArgs): RunCommandArgs {
+  const commandName = normalizeCommandName(args.command)
+  if (commandName === 'mv' && args.args.length === 2) {
+    return powershellCommand(args, ['Move-Item', '-LiteralPath', args.args[0], '-Destination', args.args[1]])
+  }
+  if (commandName === 'cp' && args.args.length === 2) {
+    return powershellCommand(args, ['Copy-Item', '-LiteralPath', args.args[0], '-Destination', args.args[1]])
+  }
+  if (commandName === 'touch' && args.args.length === 1) {
+    return powershellCommand(args, ['New-Item', '-ItemType', 'File', '-Force', '-Path', args.args[0]])
+  }
+  if (commandName === 'mkdir') {
+    const path = args.args[0] === '-p' ? args.args[1] : args.args[0]
+    if (path && args.args.length <= 2) {
+      return powershellCommand(args, ['New-Item', '-ItemType', 'Directory', '-Force', '-Path', path])
+    }
+  }
+  if (commandName === 'pwd' && args.args.length === 0) {
+    return powershellCommand(args, ['Get-Location'])
+  }
+  if (commandName === 'cat' && args.args.length === 1) {
+    return powershellCommand(args, ['Get-Content', '-LiteralPath', args.args[0]])
+  }
+  return args
+}
+
+function powershellCommand(args: RunCommandArgs, commandArgs: string[]): RunCommandArgs {
+  return {
+    ...args,
+    command: 'powershell',
+    args: ['-NoProfile', '-NonInteractive', '-Command', ...commandArgs],
+  }
 }
 
 function parsePathArg(raw: Record<string, unknown>): { ok: true; path: string } | { ok: false; error: string } {

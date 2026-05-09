@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronRight, Copy, Edit2, RotateCw, Trash2, Brain, Wrench } from 'lucide-react'
 import type { AssistantRunPhase, ContentPart, Message } from '../types'
@@ -16,6 +16,8 @@ interface Props {
   onRetry?: () => void
   onCommandRetry?: () => void
   onEditResend?: (id: string) => void
+  isLast?: boolean
+  onQuickReply?: (text: string) => void
 }
 
 function StreamingDots() {
@@ -183,7 +185,7 @@ function CollapsibleToolCalls({ parts, isStreaming }: { parts: ContentPart[]; is
   )
 }
 
-function renderParts(parts: ContentPart[], opts: { isUser: boolean; isError: boolean }): ReactNode[] {
+function renderParts(parts: ContentPart[], opts: { isUser: boolean; isError: boolean; onQuickReply?: (text: string) => void }): ReactNode[] {
   return parts.map((part, idx) => {
     if (part.type === 'text') {
       if (opts.isUser || opts.isError) {
@@ -204,7 +206,7 @@ function renderParts(parts: ContentPart[], opts: { isUser: boolean; isError: boo
       )
     }
     if (part.type === 'project_analysis') {
-      return <ProjectAnalysisCard key={idx} analysis={part.analysis} />
+      return <ProjectAnalysisCard key={idx} analysis={part.analysis} onQuickReply={opts.onQuickReply} />
     }
     // tool_call
     return <ToolCallBubble key={idx} part={part} />
@@ -228,6 +230,8 @@ function MessageBubbleImpl({
   onRetry,
   onCommandRetry,
   onEditResend,
+  isLast,
+  onQuickReply,
 }: Props) {
   const { t } = useTranslation()
   const { state } = useStore()
@@ -251,13 +255,46 @@ function MessageBubbleImpl({
   const hasVisibleContent = textLen > 0 || hasAnyPart
   const hasToolCalls = message.content.some(p => p.type === 'tool_call')
 
+  const quickReplies = useMemo(() => {
+    if (isUser || !isLast || message.streaming) return []
+    const replies = new Set<string>()
+    const sentences = textContent.split(/(?<=[.!?。！？\n])\s+/)
+    const tailText = sentences.slice(-5).join(' ')
+    const asksForConfirmation = /请确认是否开始|请回复[「"']?确认|回复[「"']?确认|if correct.*confirm/i.test(tailText)
+    if (asksForConfirmation) return textContent.includes('请确认是否开始') ? ['确认'] : ['确认']
+
+    const optionSourceMatch = textContent.match(/(?:请选择一个选项|请选择|Options?|选项)\s*[:：]\s*([\s\S]+)/i)
+    const optionSource = (optionSourceMatch?.[1] ?? tailText).split(/\n\s*\n/)[0]
+
+    const asksForReply =
+      /回复|输入|选择|确认|选项|请选择|请回答|请直接回答/.test(tailText) ||
+      /\b(reply|type|choose|select|pick|confirm|option)\b/i.test(tailText)
+
+    if (asksForReply) {
+      const matches = Array.from(optionSource.matchAll(/[「『"'`]([^」』"'\n`]{1,120})[」』"'`]/g))
+      if (matches.length > 0) {
+        for (const match of matches) {
+          const option = match[1].trim()
+          if (option && (option.length > 1 || /[\w\u4e00-\u9fa5]/.test(option))) {
+            replies.add(option)
+          }
+        }
+      } else {
+        // Fallback: if "confirm" or "确认" is present without quotes, suggest the word itself
+        if (tailText.includes('确认')) replies.add('确认')
+        if (tailText.toLowerCase().includes('confirm')) replies.add('Confirm')
+      }
+    }
+    return Array.from(replies)
+  }, [textContent, isUser, isLast, message.streaming])
+
   // For assistant messages: render text+image parts only (tool calls are rendered by CollapsibleToolCalls).
   // For user messages: render everything via renderParts.
   const renderTextAndImageParts = isUser
-    ? renderParts(message.content, { isUser, isError })
+    ? renderParts(message.content, { isUser, isError, onQuickReply })
     : renderParts(
         message.content.filter(p => p.type !== 'tool_call'),
-        { isUser, isError },
+        { isUser, isError, onQuickReply },
       )
 
   const handleCopy = async () => {
@@ -366,6 +403,20 @@ function MessageBubbleImpl({
             )}
             {isAborted && hasVisibleContent && (
               <div className="mt-1 text-xs text-text-3">（已中断）</div>
+            )}
+            {quickReplies.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2 pt-2 border-t border-border-subtle/50">
+                {quickReplies.map((reply, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => onQuickReply?.(reply)}
+                    className="px-4 py-1.5 text-[12px] font-semibold text-accent bg-accent/10 hover:bg-accent/20 border border-accent/20 rounded-full transition-all duration-200 hover:scale-105 active:scale-95 shadow-sm shadow-accent/5 cursor-pointer select-none"
+                  >
+                    {reply}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         </div>

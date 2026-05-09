@@ -18,9 +18,11 @@ import {
   makeUserMessage,
   partsToText,
   estimateContextUsage,
+  planningContextBudgetForProviders,
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
+import { shouldBlockLargeTaskWithoutPlan } from '../lib/agent/taskExecutionPolicy'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
 import {
@@ -64,14 +66,63 @@ interface PendingTaskIntake {
   attachments: string[]
   commandInvocation?: CommandInvocation
   analysis?: ProjectAnalysis
+  stage?: 'clarifying' | 'awaiting_summary_confirm'
+  clarificationAnswers?: Array<{ question: string; answer: string }>
 }
 
 const TASK_INTAKE_INTENT_RE = /\b(build|create|make|generate|implement|fix|debug|refactor|modify|update|edit|write|add|remove|delete|site|app|component|page|feature|bug|code|html|css|javascript|typescript|react|three\.?js|3d)\b|创建|生成|实现|修复|调试|重构|修改|更新|添加|删除|网站|应用|组件|页面|功能|代码|三维|3d/i
 const LARGE_TASK_INTENT_RE = /\b(3d|three\.?js|animation|animated|site|website|landing page|app|full app|project|professional|production ready|complete|responsive|dashboard|frontend|ui|ux|migrate|refactor|implement feature|create|build|generate)\b|三维|动画|网站|站点|落地页|应用|完整|专业|响应式|前端|界面|迁移|重构|项目/i
-const CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run|执行|开始|继续|确认|可以|好的|好|没问题|就这样)\b/i
+const ENGLISH_CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run)\b/i
+const CHINESE_CONFIRM_TASK_RE = /^(执行|开始|继续|确认|可以|好的|好|没问题|就这样)$/i
 const FEATURE_TEST_RE = /^\s*\[AVA-FEATURE-TEST:([A-Za-z0-9_.-]+)\]/i
 const MAX_AUTO_CONTINUE_ROUNDS = 3
 const MAX_TASK_ENGINE_ROUNDS = 24
+
+function latestUserTextForTask(conversation: Conversation, taskId: string): string {
+  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
+    const message = conversation.messages[i]
+    if (message.role === 'system' && message.taskId === taskId) {
+      const match = partsToText(message.content).match(/^Task:\s*([\s\S]*?)(?:\nWorking directory:|\nIf interrupted,|$)/m)
+      if (match?.[1]?.trim()) return match[1].trim()
+    }
+  }
+  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
+    const message = conversation.messages[i]
+    if (message.role === 'user' && (!message.taskId || message.taskId === taskId)) {
+      return partsToText(message.content)
+    }
+  }
+  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
+    const message = conversation.messages[i]
+    if (message.role === 'user') return partsToText(message.content)
+  }
+  return ''
+}
+
+function canRebindTaskPlan(plan: TaskExecutionPlan, taskId: string, goal: string, workingDirectory?: string): boolean {
+  if (plan.taskId === taskId) return true
+  if (plan.status === 'completed' || plan.status === 'aborted') return false
+  if (workingDirectory && plan.workingDirectory !== workingDirectory) return false
+  return isCodingDesignBigTask(goal) && plan.kind === 'coding-design'
+}
+
+function retryableTaskPlan(plan: TaskExecutionPlan | undefined, taskId: string): TaskExecutionPlan | undefined {
+  if (!plan || plan.taskId !== taskId || plan.status !== 'blocked') return plan
+  const failedStep = plan.steps.find(step => step.status === 'failed' || step.status === 'running')
+  if (!failedStep) return { ...plan, status: 'running', updatedAt: Date.now() }
+
+  return {
+    ...plan,
+    status: 'running',
+    currentStepId: failedStep.id,
+    steps: plan.steps.map(step =>
+      step.id === failedStep.id
+        ? { ...step, status: 'pending', lastError: undefined }
+        : step
+    ),
+    updatedAt: Date.now(),
+  }
+}
 
 function shouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
   if (commandInvocation) return true
@@ -79,7 +130,117 @@ function shouldRequireTaskIntake(content: string, commandInvocation?: CommandInv
 }
 
 function isTaskConfirmation(content: string): boolean {
-  return CONFIRM_TASK_RE.test(content.trim())
+  const normalized = content.trim().replace(/[.!?。！？,，;；:：\s]+$/g, '')
+  return ENGLISH_CONFIRM_TASK_RE.test(normalized) || CHINESE_CONFIRM_TASK_RE.test(normalized)
+}
+
+function highPriorityUnknowns(analysis?: ProjectAnalysis): ProjectAnalysis['unknowns'] {
+  return analysis?.unknowns.filter(item => item.importance === 'high') ?? []
+}
+
+function answeredQuestions(pending: PendingTaskIntake): Set<string> {
+  return new Set((pending.clarificationAnswers ?? []).map(item => item.question))
+}
+
+function nextClarification(pending: PendingTaskIntake): ProjectAnalysis['unknowns'][number] | null {
+  const answered = answeredQuestions(pending)
+  return highPriorityUnknowns(pending.analysis).find(item => !answered.has(item.question)) ?? null
+}
+
+function clarificationQuestionText(question: ProjectAnalysis['unknowns'][number], index: number, total: number): string {
+  const options = question.options?.filter(Boolean) ?? []
+  return [
+    `需要先确认 1 个问题（${index}/${total}）：`,
+    '',
+    question.question,
+    '',
+    options.length > 0
+      ? `请选择一个选项：${options.map(item => `「${item}」`).join('、')}`
+      : '请直接回答这个问题。',
+  ].join('\n')
+}
+
+function resolvedGoal(pending: PendingTaskIntake): string {
+  const answers = pending.clarificationAnswers ?? []
+  if (answers.length === 0) return pending.content
+  return [
+    pending.content,
+    '',
+    'Clarified requirements:',
+    ...answers.map((item, idx) => `${idx + 1}. ${item.question}\nAnswer: ${item.answer}`),
+  ].join('\n')
+}
+
+function analysisSummaryText(pending: PendingTaskIntake, workingDirectory?: string): string {
+  const analysis = pending.analysis
+  const answers = pending.clarificationAnswers ?? []
+  return [
+    '需求已澄清完毕，请确认下面 summary 是否正确。',
+    '',
+    `目标：${analysis?.projectSummary || pending.content}`,
+    `工作目录：${workingDirectory || '(未关联工作目录)'}`,
+    analysis?.architecture ? `架构判断：${analysis.architecture}` : '',
+    answers.length > 0 ? '\n已确认：' : '',
+    ...answers.map((item, idx) => `${idx + 1}. ${item.question}\n   答案：${item.answer}`),
+    analysis?.risks?.length ? '\n主要风险：' : '',
+    ...(analysis?.risks ?? []).map((risk, idx) => `${idx + 1}. ${risk.risk}\n   处理：${risk.mitigation}`),
+    '',
+    '如果正确，请回复「确认」。如果不正确，请直接补充要修改的地方。',
+  ].filter(Boolean).join('\n')
+}
+
+function pendingWithAnswer(pending: PendingTaskIntake, answer: string): PendingTaskIntake {
+  const question = nextClarification(pending)
+  if (!question) return pending
+  return {
+    ...pending,
+    clarificationAnswers: [
+      ...(pending.clarificationAnswers ?? []),
+      { question: question.question, answer },
+    ],
+  }
+}
+
+function hasWorkingDirectoryQuestion(analysis?: ProjectAnalysis): boolean {
+  return Boolean(analysis?.unknowns.some(item =>
+    /(working\s*directory|project\s*(folder|directory|path|location)|where.*(create|use)|folder|directory|path|工作目录|项目.*(目录|路径|位置)|创建.*(目录|路径|位置))/i.test(item.question),
+  ))
+}
+
+function withRequiredWorkingDirectoryUnknown(
+  analysis: ProjectAnalysis | null,
+  content: string,
+  conversation: Conversation,
+): ProjectAnalysis | null {
+  if (!isCodingDesignBigTask(content) || conversation.folderPath || extractWorkingDirectoryFromText(content)) {
+    return analysis
+  }
+  if (hasWorkingDirectoryQuestion(analysis ?? undefined)) return analysis
+
+  const requiredQuestion: ProjectAnalysis['unknowns'][number] = {
+    question: 'Where should Ava create or use this code project? Provide a full Windows path.',
+    options: ['D:\\Apps\\TestProject', 'I will provide another full path'],
+    importance: 'high',
+  }
+  const base: ProjectAnalysis = analysis ?? {
+    projectSummary: content.trim().split('\n')[0] || content,
+    architecture: 'Unknown until the project folder is selected.',
+    unknowns: [],
+    risks: [{
+      risk: 'Ava cannot safely create or inspect project files without a confirmed working directory.',
+      mitigation: 'Ask for the project path before planning or executing tools.',
+      impact: 'high',
+    }],
+  }
+  return {
+    ...base,
+    unknowns: [requiredQuestion, ...base.unknowns],
+  }
+}
+
+function planningTraitsFor(content: string, conversation: Conversation): string[] {
+  if (isCodingDesignBigTask(content)) return ['code']
+  return conversation.traits?.length ? conversation.traits : detectTraitsFromText(content)
 }
 
 function makeTaskIntakeText(content: string, conversation: Conversation): string {
@@ -156,6 +317,40 @@ function stopReasonText(stopReason: string): string {
   if (stopReason === 'tool_loop_limit') return 'tool loop limit reached'
   if (stopReason === 'raw_command_no_tool') return 'model output raw command instead of tool call'
   return stopReason
+}
+
+function recentToolSummary(parts: ContentPart[], count = 5): string {
+  return parts
+    .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+    .slice(-count)
+    .map(part => {
+      const args = JSON.stringify(part.args).slice(0, 180)
+      const result = part.status === 'ok'
+        ? `ok: ${JSON.stringify(part.result).slice(0, 220)}`
+        : part.error ?? part.status
+      return `- ${part.name}(${args}): ${result}`
+    })
+    .join('\n')
+}
+
+function toolLoopUserMessage(parts: ContentPart[], taskStepTitle?: string): string {
+  const recent = recentToolSummary(parts)
+  return [
+    'Stopped: tool loop limit exceeded.',
+    taskStepTitle ? `Current step: ${taskStepTitle}` : '',
+    '',
+    'Ava stopped because the model kept using tools without reaching a stable next state. I did not keep executing commands to avoid an infinite loop or repeated filesystem changes.',
+    '',
+    recent ? `Recent tool calls:\n${recent}` : 'Recent tool calls: none recorded.',
+    '',
+    'What you can try:',
+    '1. Click 「Inspect project state」 so Ava reads the current files before trying more changes.',
+    '2. Click 「Retry with smaller step」 to ask Ava to do only the current missing action.',
+    '3. If a command or dev server is stuck, stop the dev server and retry.',
+    '4. If the same tool keeps failing, switch to a model with better tool-call support.',
+    '',
+    'Options: 「Inspect project state」 「Retry with smaller step」 「Stop task」',
+  ].filter(Boolean).join('\n')
 }
 
 function taskRoundSummary(stepTitle: string, parts: ContentPart[]): string {
@@ -654,7 +849,49 @@ export function ChatView() {
       let accumulatedParts: ContentPart[] = []
       let continuationRound = 0
       let taskPlan = initialTaskPlan ?? conversationSnapshot.activeTaskPlan
-      if (taskPlan?.taskId !== activeTaskId) taskPlan = undefined
+      const latestTaskText = latestUserTextForTask(conversationSnapshot, activeTaskId)
+      const isLargeTaskRun = isCodingDesignBigTask(latestTaskText)
+      const workingDirectory = conversationSnapshot.folderPath || extractWorkingDirectoryFromText(latestTaskText)
+      if (taskPlan?.taskId !== activeTaskId) {
+        taskPlan = taskPlan && canRebindTaskPlan(taskPlan, activeTaskId, latestTaskText, workingDirectory)
+          ? { ...taskPlan, taskId: activeTaskId, goal: latestTaskText || taskPlan.goal, updatedAt: Date.now() }
+          : undefined
+      }
+      if (isLargeTaskRun && !taskPlan && workingDirectory) {
+        taskPlan = createCodingDesignTaskPlan({
+          taskId: activeTaskId,
+          goal: latestTaskText,
+          workingDirectory,
+        })
+        dispatch({ type: 'START_TASK_PLAN', conversationId, plan: taskPlan })
+      }
+      if (taskPlan?.status === 'blocked') {
+        const error = `Task plan is blocked: ${taskPlan.steps.find(step => step.status === 'failed')?.lastError ?? 'no recovery step is available.'}`
+        dispatch({
+          type: 'UPDATE_MESSAGE',
+          conversationId,
+          messageId: placeholderId,
+          patch: { streaming: false, error, runPhase: 'error' },
+        })
+        setIsStreaming(false)
+        return
+      }
+      const planDecision = shouldBlockLargeTaskWithoutPlan({
+        isLargeTask: isLargeTaskRun,
+        hasTaskPlan: Boolean(taskPlan),
+        hasActiveStep: Boolean(taskPlan ? nextTaskStep(taskPlan) : null),
+      })
+      if (planDecision.block) {
+        const error = planDecision.reason ?? 'Large task execution requires an active task plan.'
+        dispatch({
+          type: 'UPDATE_MESSAGE',
+          conversationId,
+          messageId: placeholderId,
+          patch: { streaming: false, error, runPhase: 'error' },
+        })
+        setIsStreaming(false)
+        return
+      }
       let taskEngineRound = 0
       const featureTestRequest = (() => {
         for (let i = conversationSnapshot.messages.length - 1; i >= 0; i -= 1) {
@@ -909,11 +1146,7 @@ export function ChatView() {
               if (result.stopReason === 'tool_loop_limit' && continuationRound < 1) {
                 continuationRound += 1
                 // Summarise the last few tool calls so the model can see what it was repeating
-                const recentToolCalls = accumulatedParts
-                  .filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
-                  .slice(-3)
-                  .map(p => `- ${p.name}(${JSON.stringify(p.args).slice(0, 200)}): ${p.status === 'ok' ? JSON.stringify(p.result).slice(0, 300) : p.error ?? p.status}`)
-                  .join('\n')
+                const recentToolCalls = recentToolSummary(accumulatedParts, 4)
 
                 const loopBreakMsg: Message = {
                   id: makeMessageId(),
@@ -928,7 +1161,7 @@ export function ChatView() {
                     '1. Do NOT call the same tool with the same arguments again.',
                     '2. Diagnose the root cause from the error output above.',
                     '3. Try a fundamentally different approach (e.g. check if the resource exists first, use a different tool, or read files before writing).',
-                    '4. If you cannot resolve this, output a brief explanation of why you are stuck and stop.',
+                    '4. If you cannot resolve this, output a visible explanation with options for the user instead of calling another tool.',
                   ].join('\n') }],
                   createdAt: Date.now(),
                 }
@@ -965,11 +1198,7 @@ export function ChatView() {
               // step to inspect the actual filesystem state before acting.
               if (result.stopReason === 'tool_loop_limit' && taskPlan && activeStep) {
                 taskEngineRound += 1
-                const recentLoopedTools = accumulatedParts
-                  .filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
-                  .slice(-4)
-                  .map(p => `- ${p.name}: ${p.status === 'ok' ? 'ok' : (p.error ?? p.status)}`)
-                  .join('\n')
+                const recentLoopedTools = recentToolSummary(accumulatedParts, 4)
 
                 // Mark the stuck step as skipped (not failed) — partial success is assumed
                 taskPlan = markStepSkipped(taskPlan, activeStep.id)
@@ -1009,15 +1238,9 @@ export function ChatView() {
                     : result.stopReason === 'raw_command_no_tool'
                       ? 'Stopped: model output a raw command instead of calling a tool. Ava did not execute the plain text command; please retry or switch to a model/profile that follows tool-call format.'
                       : result.stopReason === 'tool_loop_limit'
-                        ? [
-                            'Stopped: Tool loop limit exceeded.',
-                            'The model was stuck calling the same tool repeatedly. This often happens if:',
-                            '1. A file is locked by another process (e.g., your dev server is running).',
-                            '2. The directory already exists and the command cannot overwrite it.',
-                            '3. There is a persistent permission issue.',
-                            '',
-                            '💡 Suggestion: Close your dev server, manually delete the problematic folder, or click "Retry" after switching to a different model.',
-                          ].join('\n')
+                      ? [
+                          toolLoopUserMessage(accumulatedParts, activeStep?.title),
+                        ].join('\n')
                         : `Stopped: ${stopReasonText(result.stopReason)}.`
               dispatch({
                 type: 'UPDATE_MESSAGE',
@@ -1184,36 +1407,52 @@ export function ChatView() {
           ],
         })
         
+        const providers = getEnabledProviders(state.settings)
         const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(nextText)
         const analysis = await runAnalyzePhase({
           taskId,
           goal: nextText,
           workingDirectory,
-          providers: getEnabledProviders(state.settings),
+          providers,
           settings: state.settings,
-          contextBudget: 8000,
+          contextBudget: planningContextBudgetForProviders(providers, planningTraitsFor(nextText, conversation)),
+          messages: conversation.messages,
         })
+        const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, nextText, conversation)
+
+        const pendingBase: PendingTaskIntake = {
+          conversationId,
+          taskId,
+          content: nextText,
+          attachments,
+          commandInvocation: original.commandInvocation,
+          analysis: preparedAnalysis || undefined,
+          clarificationAnswers: [],
+        }
+        const nextQuestion = nextClarification(pendingBase)
+        const finalContent: ContentPart[] = preparedAnalysis
+          ? nextQuestion
+            ? [{
+                type: 'text',
+                text: clarificationQuestionText(nextQuestion, 1, highPriorityUnknowns(preparedAnalysis).length),
+              }]
+            : [{ type: 'text', text: analysisSummaryText(pendingBase, workingDirectory) }]
+          : [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.\n\nThe LLM could not parse the project constraints. Please try re-sending your request, or check your API key and model settings.` }]
 
         dispatch({
           type: 'UPDATE_MESSAGE',
           conversationId,
           messageId: intakeMsg.id,
           patch: {
-            content: analysis 
-              ? [{ type: 'project_analysis', analysis }] 
-              : [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.\n\nThe LLM could not parse the project constraints. Please try re-sending your request, or check your API key and model settings.` }],
+            content: finalContent,
             streaming: false,
             runPhase: 'completed',
           }
         })
 
         setPendingTaskIntake({
-          conversationId,
-          taskId,
-          content: nextText,
-          attachments,
-          commandInvocation: original.commandInvocation,
-          analysis: analysis || undefined
+          ...pendingBase,
+          stage: preparedAnalysis && nextQuestion ? 'clarifying' : 'awaiting_summary_confirm',
         })
         return
       }
@@ -1258,21 +1497,23 @@ export function ChatView() {
       if (
         pendingTaskIntake &&
         pendingTaskIntake.conversationId === conversation.id &&
+        pendingTaskIntake.stage === 'awaiting_summary_confirm' &&
         isTaskConfirmation(content)
       ) {
         const pending = pendingTaskIntake
         const placeholder = makeAssistantPlaceholder(pending.taskId)
+        const finalGoal = resolvedGoal(pending)
         const confirmationContext = {
           id: `ctx_${pending.taskId}_confirmed`,
           taskId: pending.taskId,
           role: 'system' as const,
-          content: [{ type: 'text' as const, text: makeConfirmedTaskPlanPrompt(pending.content, conversation) }],
+          content: [{ type: 'text' as const, text: makeConfirmedTaskPlanPrompt(finalGoal, conversation) }],
           createdAt: Date.now(),
         }
-        const isBigTask = isCodingDesignBigTask(pending.content)
+        const isBigTask = isCodingDesignBigTask(finalGoal)
         let taskPlan = undefined
         if (isBigTask) {
-          const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(pending.content)
+          const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(finalGoal)
           if (!workingDirectory) {
             dispatch({
               type: 'ADD_MESSAGE',
@@ -1312,11 +1553,16 @@ export function ChatView() {
 
           taskPlan = await generateDynamicTaskPlan({
             taskId: pending.taskId,
-            goal: pending.content,
+            goal: finalGoal,
             workingDirectory,
             projectBrief,
             providers: getEnabledProviders(state.settings),
             settings: state.settings,
+            traits: planningTraitsFor(finalGoal, conversation),
+            analysis: pending.analysis
+              ? { ...pending.analysis, unknowns: [] }
+              : null,
+            skipAnalysis: true,
           })
 
           dispatch({
@@ -1371,46 +1617,169 @@ export function ChatView() {
           }
         }
         
+        const providers = getEnabledProviders(state.settings)
         const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(content)
         const analysis = await runAnalyzePhase({
           taskId,
           goal: content,
           workingDirectory,
-          providers: getEnabledProviders(state.settings),
+          providers,
           settings: state.settings,
-          contextBudget: 8000,
+          contextBudget: planningContextBudgetForProviders(providers, planningTraitsFor(content, conversation)),
+          messages: conversation.messages,
         })
+        const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, content, conversation)
+
+        let finalContent: ContentPart[] = []
+        const pendingBase: PendingTaskIntake = {
+          conversationId,
+          taskId,
+          content,
+          attachments: attachments ?? [],
+          commandInvocation,
+          analysis: preparedAnalysis || undefined,
+          clarificationAnswers: [],
+        }
+
+        if (preparedAnalysis) {
+          const nextQuestion = nextClarification(pendingBase)
+          if (nextQuestion) {
+            const total = highPriorityUnknowns(preparedAnalysis).length
+            const index = 1
+            finalContent = [{ type: 'text', text: clarificationQuestionText(nextQuestion, index, total) }]
+          } else {
+            finalContent = [{ type: 'text', text: analysisSummaryText(pendingBase, workingDirectory) }]
+          }
+        } else {
+          finalContent = [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.` }]
+        }
 
         dispatch({
           type: 'UPDATE_MESSAGE',
           conversationId,
           messageId: intakeMsg.id,
           patch: {
-            content: analysis 
-              ? [{ type: 'project_analysis', analysis }] 
-              : [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.\n\nThe LLM could not parse the project constraints. Please try re-sending your request, or check your API key and model settings.` }],
+            content: finalContent,
             streaming: false,
             runPhase: 'completed',
           }
         })
 
         setPendingTaskIntake({
-          conversationId,
-          taskId,
-          content,
-          attachments: attachments ?? [],
-          commandInvocation,
-          analysis: analysis || undefined
+          ...pendingBase,
+          stage: preparedAnalysis && nextClarification(pendingBase) ? 'clarifying' : 'awaiting_summary_confirm',
         })
         return
       }
 
+
+
       if (
         pendingTaskIntake &&
-        pendingTaskIntake.conversationId === conversation.id &&
-        !isTaskConfirmation(content)
+        pendingTaskIntake.conversationId === conversation.id
       ) {
-        setPendingTaskIntake(null)
+        const taskId = pendingTaskIntake.taskId
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+
+        const intakeMsgId = makeMessageId()
+        const isSummaryFeedback = pendingTaskIntake.stage === 'awaiting_summary_confirm'
+        dispatch({
+          type: 'ADD_MESSAGE',
+          conversationId: conversation.id,
+          message: {
+            id: intakeMsgId,
+            role: 'assistant',
+            content: [{ type: 'text', text: isSummaryFeedback ? '🔍 Updating summary with your feedback...' : '🔍 Recording your answer...' }],
+            streaming: true,
+            runPhase: 'generating',
+            createdAt: Date.now(),
+          },
+        })
+
+        if (!isSummaryFeedback) {
+          const answeredPending = pendingWithAnswer(pendingTaskIntake, content)
+          const nextQuestion = nextClarification(answeredPending)
+          const finalContent: ContentPart[] = nextQuestion
+            ? [{
+                type: 'text',
+                text: clarificationQuestionText(
+                  nextQuestion,
+                  (answeredPending.clarificationAnswers?.length ?? 0) + 1,
+                  highPriorityUnknowns(answeredPending.analysis).length,
+                ),
+              }]
+            : [{ type: 'text' as const, text: analysisSummaryText(answeredPending, conversation.folderPath || extractWorkingDirectoryFromText(resolvedGoal(answeredPending))) }]
+
+          dispatch({
+            type: 'UPDATE_MESSAGE',
+            conversationId: conversation.id,
+            messageId: intakeMsgId,
+            patch: {
+              content: finalContent,
+              streaming: false,
+              runPhase: 'completed',
+            }
+          })
+
+          setPendingTaskIntake({
+            ...answeredPending,
+            stage: nextQuestion ? 'clarifying' : 'awaiting_summary_confirm',
+          })
+          return
+        }
+
+        const combinedGoal = `${resolvedGoal(pendingTaskIntake)}\n\nUser correction before confirmation: ${content}`
+        const providers = getEnabledProviders(state.settings)
+        const analysis = await runAnalyzePhase({
+          taskId,
+          goal: combinedGoal,
+          workingDirectory: conversation.folderPath || extractWorkingDirectoryFromText(combinedGoal),
+          providers,
+          settings: state.settings,
+          contextBudget: planningContextBudgetForProviders(providers, planningTraitsFor(combinedGoal, conversation)),
+          messages: conversation.messages,
+        })
+        const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, combinedGoal, conversation)
+
+        let finalContent: ContentPart[] = []
+        const nextPending: PendingTaskIntake = {
+          ...pendingTaskIntake,
+          content: combinedGoal,
+          analysis: preparedAnalysis || pendingTaskIntake.analysis,
+          clarificationAnswers: [],
+        }
+
+        if (preparedAnalysis) {
+          const nextQuestion = nextClarification(nextPending)
+          if (nextQuestion) {
+            finalContent = [{
+              type: 'text',
+              text: clarificationQuestionText(nextQuestion, 1, highPriorityUnknowns(preparedAnalysis).length),
+            }]
+          } else {
+            finalContent = [{ type: 'text', text: analysisSummaryText(nextPending, conversation.folderPath || extractWorkingDirectoryFromText(combinedGoal)) }]
+          }
+        } else {
+          finalContent = [{ type: 'text', text: '⚠️ Analysis refinement failed.' }]
+        }
+
+        dispatch({
+          type: 'UPDATE_MESSAGE',
+          conversationId: conversation.id,
+          messageId: intakeMsgId,
+          patch: {
+            content: finalContent,
+            streaming: false,
+            runPhase: 'completed',
+          }
+        })
+
+        setPendingTaskIntake({
+          ...nextPending,
+          stage: preparedAnalysis && nextClarification(nextPending) ? 'clarifying' : 'awaiting_summary_confirm',
+        })
+        return
       }
 
       runSend(content, attachments ?? [], conversation, commandInvocation)
@@ -1563,12 +1932,17 @@ export function ChatView() {
         })
       }
       dispatch({ type: 'ADD_MESSAGE', conversationId, message: placeholder })
+      const retryPlan = retryableTaskPlan(activeConversation.activeTaskPlan, taskId)
+      if (retryPlan && retryPlan !== activeConversation.activeTaskPlan) {
+        dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: retryPlan })
+      }
 
       await driveStream(
-        { ...activeConversation, messages: retryMessages },
+        { ...activeConversation, activeTaskPlan: retryPlan, messages: retryMessages },
         conversationId,
         placeholder.id,
         taskId,
+        retryPlan,
       )
     },
     [activeConversation, isStreaming, dispatch, driveStream],
@@ -1680,6 +2054,8 @@ export function ChatView() {
                       : undefined
                   }
                   onEditResend={!isStreaming && m.role === 'user' ? () => handleEditResend(m.id) : undefined}
+                  isLast={isLast}
+                  onQuickReply={(text) => handleSend(text)}
                 />
               )
             })}

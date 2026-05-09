@@ -242,6 +242,7 @@ export function defaultSettings(): Settings {
     mcpServers: DEFAULT_MCP_SERVERS.map(s => ({ ...s, args: [...s.args], allowedDirs: [...(s.allowedDirs ?? [])] })),
     pluginStates: {},
     modelToolFormatMap: {},
+    modelCapabilityMap: {},
     voice: {
       enabled: true,
       sttServerUrl: 'ws://127.0.0.1:8000/ws',

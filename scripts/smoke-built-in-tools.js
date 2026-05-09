@@ -7,18 +7,25 @@ const ts = require('typescript')
 
 const root = path.resolve(__dirname, '..')
 const sourcePath = path.join(root, 'apps/shell/electron/services/builtInTools.ts')
+const runtimeEnvironmentPath = path.join(root, 'apps/shell/electron/services/runtimeEnvironment.ts')
 const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ava-builtins-compiled-'))
 const outPath = path.join(outDir, 'builtInTools.cjs')
+const runtimeEnvironmentOutPath = path.join(outDir, 'runtimeEnvironment.js')
 
-const source = fs.readFileSync(sourcePath, 'utf8')
-const compiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    target: ts.ScriptTarget.ES2022,
-    esModuleInterop: true,
-  },
-}).outputText
-fs.writeFileSync(outPath, compiled, 'utf8')
+function compileTsToCjs(inputPath, outputPath) {
+  const source = fs.readFileSync(inputPath, 'utf8')
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText
+  fs.writeFileSync(outputPath, compiled, 'utf8')
+}
+
+compileTsToCjs(runtimeEnvironmentPath, runtimeEnvironmentOutPath)
+compileTsToCjs(sourcePath, outPath)
 
 const { builtInTools } = require(outPath)
 

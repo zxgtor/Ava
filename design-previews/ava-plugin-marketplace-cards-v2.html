@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ava Marketplace Cards V2</title>
+  <style>
+    :root {
+      --bg: #090b10;
+      --panel: #111722;
+      --panel2: #171f2d;
+      --line: rgba(255,255,255,.09);
+      --text: #eef3ff;
+      --muted: #8d98ad;
+      --green: #55e6a5;
+      --blue: #83aaff;
+      --gold: #ffd37a;
+      --pink: #ff8fd6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 16% 6%, rgba(85,230,165,.16), transparent 28%),
+        radial-gradient(circle at 88% 16%, rgba(131,170,255,.14), transparent 30%),
+        linear-gradient(135deg, #080a0f, #101826 58%, #090b10);
+      color: var(--text);
+      font-family: "Aptos", "Segoe UI", sans-serif;
+      padding: 30px;
+    }
+    .shell { max-width: 1220px; margin: 0 auto; }
+    .top {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    h1 { margin: 0; font-size: 28px; letter-spacing: -.035em; }
+    .sub { color: var(--muted); margin-top: 7px; font-size: 14px; }
+    .actions { display: flex; gap: 8px; }
+    .btn {
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.055);
+      border: 1px solid var(--line);
+      color: var(--text);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+    }
+    .btn.primary { background: rgba(85,230,165,.13); color: var(--green); border-color: rgba(85,230,165,.24); }
+    .market {
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      overflow: hidden;
+      background: rgba(17,23,34,.82);
+      box-shadow: 0 28px 80px rgba(0,0,0,.36);
+    }
+    .market-head {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(135deg, rgba(255,255,255,.035), rgba(255,255,255,.012));
+    }
+    .search-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 14px; }
+    .search {
+      height: 38px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #0d121c;
+      color: var(--muted);
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+    }
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .tab {
+      font-size: 11px;
+      color: #adb8cc;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.055);
+      border: 1px solid rgba(255,255,255,.04);
+    }
+    .tab.active { color: #d6ffe9; background: rgba(85,230,165,.12); border-color: rgba(85,230,165,.22); }
+    .content {
+      padding: 18px;
+      display: grid;
+      gap: 24px;
+    }
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 11px;
+    }
+    h2 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
+    .hint { color: var(--muted); font-size: 12px; }
+    .category { display: grid; gap: 12px; }
+    .category-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #c7d0e3;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 18px rgba(85,230,165,.55); }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .card {
+      min-height: 188px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      overflow: hidden;
+      background: rgba(255,255,255,.035);
+    }
+    .thumb {
+      height: 78px;
+      position: relative;
+      overflow: hidden;
+      background: #111827;
+      border-bottom: 1px solid var(--line);
+    }
+    .thumb.plugin-a { background:
+      radial-gradient(circle at 28% 30%, rgba(85,230,165,.45), transparent 24%),
+      linear-gradient(135deg, #122318, #15243a); }
+    .thumb.plugin-b { background:
+      radial-gradient(circle at 70% 20%, rgba(131,170,255,.52), transparent 28%),
+      linear-gradient(135deg, #111a32, #271a3b); }
+    .thumb.plugin-c { background:
+      linear-gradient(135deg, rgba(255,211,122,.35), rgba(255,143,214,.18)),
+      repeating-linear-gradient(45deg, rgba(255,255,255,.08) 0 1px, transparent 1px 10px); }
+    .thumb.skill-a { background:
+      linear-gradient(135deg, rgba(85,230,165,.18), rgba(255,255,255,.04)),
+      radial-gradient(circle at 80% 28%, rgba(85,230,165,.42), transparent 22%); }
+    .thumb.skill-b { background:
+      linear-gradient(135deg, rgba(131,170,255,.25), rgba(255,255,255,.04)),
+      radial-gradient(circle at 22% 24%, rgba(131,170,255,.48), transparent 20%); }
+    .thumb.skill-c { background:
+      linear-gradient(135deg, rgba(255,143,214,.25), rgba(255,211,122,.12)),
+      radial-gradient(circle at 62% 22%, rgba(255,143,214,.48), transparent 21%); }
+    .glyph {
+      position: absolute;
+      right: 14px;
+      bottom: 10px;
+      font-size: 28px;
+      font-weight: 800;
+      color: rgba(255,255,255,.88);
+      letter-spacing: -.08em;
+    }
+    .card-body { padding: 12px; }
+    .row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .name { font-size: 13px; font-weight: 750; }
+    .by { color: var(--muted); font-size: 10px; margin-top: 2px; }
+    .desc { color: #bac4d6; font-size: 11px; line-height: 1.36; margin-top: 8px; }
+    .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+    .chip { font-size: 10px; color: #aeb8cc; padding: 4px 6px; border-radius: 7px; background: rgba(255,255,255,.055); }
+    .install {
+      height: 27px;
+      padding: 0 9px;
+      border-radius: 9px;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      color: var(--green);
+      background: rgba(85,230,165,.12);
+      border: 1px solid rgba(85,230,165,.22);
+      white-space: nowrap;
+    }
+    .install.installed { color: var(--muted); background: rgba(255,255,255,.05); border-color: var(--line); }
+    .skill-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .skill-card { min-height: 170px; }
+    footer { color: var(--muted); margin-top: 16px; font-size: 13px; line-height: 1.5; }
+    @media (max-width: 1000px) {
+      .cards, .skill-layout { grid-template-columns: 1fr; }
+      .top, .search-row { grid-template-columns: 1fr; display: grid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="top">
+      <div>
+        <h1>Plugin Marketplace</h1>
+        <div class="sub">Separated Plugins and Skills, grouped by category, with thumbnails for quick scanning.</div>
+      </div>
+      <div class="actions">
+        <div class="btn">Refresh</div>
+        <div class="btn primary">Install from Git</div>
+      </div>
+    </div>
+
+    <div class="market">
+      <div class="market-head">
+        <div class="search-row">
+          <div class="search">Search marketplace: browser, github, brainstorming, 3D, design...</div>
+          <div class="btn">Sort: Recommended</div>
+        </div>
+        <div class="tabs">
+          <span class="tab active">All</span>
+          <span class="tab">Plugins</span>
+          <span class="tab">Skills</span>
+          <span class="tab">Installed</span>
+          <span class="tab">Updates</span>
+        </div>
+      </div>
+
+      <div class="content">
+        <section>
+          <div class="section-head">
+            <h2>Plugins</h2>
+            <div class="hint">Install capability packs: skills, MCP tools, commands, connectors.</div>
+          </div>
+          <div class="category">
+            <div class="category-title"><span class="dot"></span> Coding & Automation</div>
+            <div class="cards">
+              <article class="card">
+                <div class="thumb plugin-a"><div class="glyph">{}</div></div>
+                <div class="card-body">
+                  <div class="row"><div><div class="name">Superpowers</div><div class="by">OpenAI curated</div></div><div class="install">Install</div></div>
+                  <div class="desc">Disciplined agent workflows for large tasks: brainstorm, plan, implement, verify.</div>
+                  <div class="chips"><span class="chip">8 skills</span><span class="chip">workflow</span><span class="chip">recommended</span></div>
+                </div>
+              </article>
+              <article class="card">
+                <div class="thumb plugin-b"><div class="glyph">GH</div></div>
+                <div class="card-body">
+                  <div class="row"><div><div class="name">GitHub</div><div class="by">OpenAI curated</div></div><div class="install">Install</div></div>
+                  <div class="desc">PR review, CI repair, issue triage, and repository publishing workflows.</div>
+                  <div class="chips"><span class="chip">repo</span><span class="chip">ci</span><span class="chip">connector</span></div>
+                </div>
+              </article>
+              <article class="card">
+                <div class="thumb plugin-c"><div class="glyph">▶</div></div>
+                <div class="card-body">
+                  <div class="row"><div><div class="name">Browser Use</div><div class="by">OpenAI bundled</div></div><div class="install installed">Installed</div></div>
+                  <div class="desc">Open local previews, inspect browser output, capture console and screenshots.</div>
+                  <div class="chips"><span class="chip">preview</span><span class="chip">testing</span><span class="chip">browser</span></div>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-head">
+            <h2>Skills</h2>
+            <div class="hint">Install individual workflows without installing a full plugin pack.</div>
+          </div>
+          <div class="category">
+            <div class="category-title"><span class="dot" style="background:var(--blue);box-shadow:0 0 18px rgba(131,170,255,.55)"></span> Planning & Design</div>
+            <div class="skill-layout">
+              <article class="card skill-card">
+                <div class="thumb skill-a"><div class="glyph">?</div></div>
+                <div class="card-body">
+                  <div class="row"><div><div class="name">brainstorming</div><div class="by">Skill · Superpowers</div></div><div class="install">Install</div></div>
+                  <div class="desc">Turn rough ideas into approved design specs before implementation starts.</div>
+                  <div class="chips"><span class="chip">design gate</span><span class="chip">questions</span></div>
+                </div>
+              </article>
+              <article class="card skill-card">
+                <div class="thumb skill-b"><div class="glyph">#</div></div>
+                <div class="card-body">
+                  <div class="row"><div><div class="name">writing-plans</div><div class="by">Skill · Superpowers</div></div><div class="install">Install</div></div>
+                  <div class="desc">Create executable implementation plans from approved specs.</div>
+                  <div class="chips"><span class="chip">planning</span><span class="chip">tasks</span></div>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div class="category" style="margin-top:14px">
+            <div class="category-title"><span class="dot" style="background:var(--pink);box-shadow:0 0 18px rgba(255,143,214,.55)"></span> Frontend & Visual Work</div>
+            <div class="skill-layout">
+              <article class="card skill-card">
+                <div class="thumb skill-c"><div class="glyph">UI</div></div>
+                <div class="card-body">
+                  <div class="row"><div><div class="name">frontend-skill</div><div class="by">Skill · Local</div></div><div class="install installed">Installed</div></div>
+                  <div class="desc">Build stronger landing pages, prototypes, and interface concepts.</div>
+                  <div class="chips"><span class="chip">ui</span><span class="chip">visual</span><span class="chip">frontend</span></div>
+                </div>
+              </article>
+              <article class="card skill-card">
+                <div class="thumb plugin-c"><div class="glyph">3D</div></div>
+                <div class="card-body">
+                  <div class="row"><div><div class="name">image-to-3d-match</div><div class="by">Skill · Local</div></div><div class="install">Install</div></div>
+                  <div class="desc">Create or refine 3D assets from reference images.</div>
+                  <div class="chips"><span class="chip">3D</span><span class="chip">assets</span></div>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <footer>
+      Proposed behavior: top tabs switch between all/plugins/skills, category headers group content, thumbnails come from catalog metadata with generated fallback art when missing.
+    </footer>
+  </div>
+</body>
+</html>

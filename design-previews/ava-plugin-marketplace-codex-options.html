@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ava Plugin Marketplace Options</title>
+  <style>
+    :root {
+      --bg: #090b10;
+      --panel: #111722;
+      --panel2: #171f2d;
+      --line: rgba(255,255,255,.09);
+      --text: #eef3ff;
+      --muted: #8b95a8;
+      --green: #55e6a5;
+      --blue: #83aaff;
+      --yellow: #ffd37a;
+      --red: #ff7b7b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(85,230,165,.16), transparent 28%),
+        radial-gradient(circle at 90% 18%, rgba(131,170,255,.13), transparent 32%),
+        linear-gradient(135deg, #080a0f, #101826 56%, #090b10);
+      color: var(--text);
+      font-family: "Aptos", "Segoe UI", sans-serif;
+      padding: 30px;
+    }
+    header, main, footer { max-width: 1220px; margin: 0 auto; }
+    h1 { margin: 0; font-size: 28px; letter-spacing: -.035em; }
+    .sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+    .grid {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .option {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      overflow: hidden;
+      background: rgba(17,23,34,.85);
+      box-shadow: 0 26px 75px rgba(0,0,0,.36);
+    }
+    .head {
+      height: 58px;
+      padding: 0 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+    }
+    h2 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
+    .tag {
+      font-size: 10px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      color: var(--green);
+      background: rgba(85,230,165,.12);
+      border: 1px solid rgba(85,230,165,.2);
+    }
+    .mock { min-height: 600px; background: rgba(8,10,15,.7); }
+    .market-head {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .title-row { display:flex; align-items:center; justify-content:space-between; gap: 10px; }
+    .market-title { font-weight: 700; font-size: 17px; letter-spacing: -.025em; }
+    .market-desc { color: var(--muted); font-size: 11px; margin-top: 5px; line-height: 1.35; }
+    .search {
+      margin-top: 12px;
+      height: 34px;
+      border-radius: 11px;
+      border: 1px solid var(--line);
+      background: #0d121c;
+      color: var(--muted);
+      padding: 0 11px;
+      display: flex;
+      align-items: center;
+      font-size: 12px;
+    }
+    .filters { display:flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+    .filter {
+      font-size: 10px;
+      color: #aeb8cc;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.055);
+      border: 1px solid rgba(255,255,255,.04);
+    }
+    .filter.active { color: #cfe0ff; background: rgba(131,170,255,.13); border-color: rgba(131,170,255,.2); }
+    .cards { padding: 13px; display: grid; gap: 10px; }
+    .plugin {
+      padding: 13px;
+      border-radius: 15px;
+      background: rgba(255,255,255,.035);
+      border: 1px solid var(--line);
+    }
+    .plugin.featured { background: linear-gradient(135deg, rgba(85,230,165,.105), rgba(131,170,255,.06)); border-color: rgba(85,230,165,.22); }
+    .row { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; }
+    .icon {
+      width: 32px; height: 32px; border-radius: 10px;
+      display:grid; place-items:center;
+      background: rgba(85,230,165,.12);
+      color: var(--green);
+      font-weight: 800;
+      font-size: 14px;
+      flex: none;
+    }
+    .meta { min-width:0; }
+    .name { font-size: 13px; font-weight: 700; }
+    .by { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .desc { font-size: 11px; color: #b8c1d3; line-height: 1.35; margin-top: 9px; }
+    .chips { display:flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+    .chip { font-size: 10px; color: #aeb8cc; padding: 4px 6px; border-radius: 7px; background: rgba(255,255,255,.055); }
+    .button {
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 9px;
+      font-size: 11px;
+      display:flex; align-items:center;
+      white-space: nowrap;
+      background: rgba(85,230,165,.13);
+      color: var(--green);
+      border: 1px solid rgba(85,230,165,.24);
+    }
+    .button.installed { background: rgba(255,255,255,.055); color: var(--muted); border-color: var(--line); }
+    .split { display:grid; grid-template-columns: 42% 1fr; min-height: 600px; }
+    .left { border-right: 1px solid var(--line); }
+    .detail { padding: 16px; }
+    .hero {
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: radial-gradient(circle at top left, rgba(85,230,165,.16), rgba(255,255,255,.035) 48%, rgba(255,255,255,.02));
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .section-title { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin: 16px 0 8px; }
+    .mini-list { display:grid; gap: 7px; }
+    .mini { padding: 8px; border-radius: 10px; background: rgba(255,255,255,.04); color:#b8c1d3; font-size: 11px; }
+    footer { margin-top: 18px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ava Plugin Marketplace: Codex-style redesign</h1>
+    <div class="sub">This is for Settings → Plugin Marketplace, not local plugin management. Choose the product feel and layout.</div>
+  </header>
+
+  <main class="grid">
+    <section class="option">
+      <div class="head">
+        <h2>A. Curated Gallery</h2>
+        <span class="tag">Recommended</span>
+      </div>
+      <div class="mock">
+        <div class="market-head">
+          <div class="title-row">
+            <div>
+              <div class="market-title">Plugin Marketplace</div>
+              <div class="market-desc">Discover curated plugins that add skills, tools, and workflows to Ava.</div>
+            </div>
+            <div class="button">Refresh</div>
+          </div>
+          <div class="search">Search plugins, skills, tools...</div>
+          <div class="filters"><span class="filter active">Featured</span><span class="filter">Skills</span><span class="filter">MCP</span><span class="filter">Design</span><span class="filter">Coding</span></div>
+        </div>
+        <div class="cards">
+          <div class="plugin featured">
+            <div class="row">
+              <div style="display:flex;gap:10px;min-width:0"><div class="icon">{}</div><div class="meta"><div class="name">Superpowers</div><div class="by">by OpenAI · curated</div></div></div>
+              <div class="button">Install</div>
+            </div>
+            <div class="desc">Structured workflows for brainstorming, planning, implementation, and review.</div>
+            <div class="chips"><span class="chip">8 skills</span><span class="chip">workflow</span><span class="chip">recommended</span></div>
+          </div>
+          <div class="plugin">
+            <div class="row">
+              <div style="display:flex;gap:10px;min-width:0"><div class="icon">B</div><div class="meta"><div class="name">Browser Use</div><div class="by">by OpenAI · installed</div></div></div>
+              <div class="button installed">Installed</div>
+            </div>
+            <div class="desc">Open local previews, inspect pages, and capture screenshots for UI work.</div>
+            <div class="chips"><span class="chip">browser</span><span class="chip">preview</span></div>
+          </div>
+          <div class="plugin">
+            <div class="row">
+              <div style="display:flex;gap:10px;min-width:0"><div class="icon">G</div><div class="meta"><div class="name">GitHub</div><div class="by">by OpenAI · connector</div></div></div>
+              <div class="button">Install</div>
+            </div>
+            <div class="desc">Review PRs, inspect issues, and publish changes with GitHub-aware workflows.</div>
+            <div class="chips"><span class="chip">repo</span><span class="chip">ci</span><span class="chip">review</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="option">
+      <div class="head">
+        <h2>B. Gallery + Detail Pane</h2>
+        <span class="tag" style="color:var(--blue);background:rgba(131,170,255,.13);border-color:rgba(131,170,255,.22)">Codex-like</span>
+      </div>
+      <div class="mock split">
+        <div class="left">
+          <div class="market-head">
+            <div class="market-title">Marketplace</div>
+            <div class="search">Search</div>
+            <div class="filters"><span class="filter active">All</span><span class="filter">Installed</span></div>
+          </div>
+          <div class="cards">
+            <div class="plugin featured"><div class="name">Superpowers</div><div class="desc">Workflow skills</div></div>
+            <div class="plugin"><div class="name">Browser Use</div><div class="desc">Preview automation</div></div>
+            <div class="plugin"><div class="name">GitHub</div><div class="desc">Repo workflows</div></div>
+          </div>
+        </div>
+        <div class="detail">
+          <div class="hero">
+            <div class="row">
+              <div style="display:flex;gap:10px"><div class="icon">{}</div><div><div class="name" style="font-size:16px">Superpowers</div><div class="by">openai-curated/superpowers</div></div></div>
+              <div class="button">Install</div>
+            </div>
+            <div class="desc">Adds disciplined agent workflows. Best for large tasks where Ava must ask, plan, implement, verify, and report.</div>
+            <div class="chips"><span class="chip">Skills: 8</span><span class="chip">MCP: 0</span><span class="chip">Commands: 0</span></div>
+          </div>
+          <div class="section-title">Included Skills</div>
+          <div class="mini-list"><div class="mini">brainstorming</div><div class="mini">writing-plans</div><div class="mini">implementation</div></div>
+          <div class="section-title">Install Source</div>
+          <div class="mini">Git URL, version, author, safety note, install progress and errors appear here.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="option">
+      <div class="head">
+        <h2>C. App Store Landing</h2>
+        <span class="tag" style="color:var(--yellow);background:rgba(255,211,122,.12);border-color:rgba(255,211,122,.22)">More visual</span>
+      </div>
+      <div class="mock">
+        <div class="market-head">
+          <div class="hero" style="margin:0">
+            <div class="market-title">Extend Ava</div>
+            <div class="market-desc">Install curated capability packs for coding, research, design, browser work, and repo automation.</div>
+            <div class="filters"><span class="filter active">Popular</span><span class="filter">New</span><span class="filter">For Coding</span></div>
+          </div>
+        </div>
+        <div class="cards">
+          <div class="plugin featured"><div class="row"><div><div class="name">Starter Pack</div><div class="desc">Browser Use + GitHub + Superpowers</div></div><div class="button">Install all</div></div></div>
+          <div class="plugin"><div class="name">Design Tools</div><div class="desc">Frontend, browser preview, screenshot, image generation.</div><div class="chips"><span class="chip">bundle</span><span class="chip">4 plugins</span></div></div>
+          <div class="plugin"><div class="name">Coding Tools</div><div class="desc">GitHub workflows, code review, CI fix, local project tools.</div><div class="chips"><span class="chip">bundle</span><span class="chip">5 plugins</span></div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Recommendation: B if you want closest Codex-like behavior. A if you want simpler Marketplace now. C is visually strong but needs bundle/catalog work first.
+  </footer>
+</body>
+</html>

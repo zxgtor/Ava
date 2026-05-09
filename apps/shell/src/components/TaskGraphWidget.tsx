@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react'
-import { Check, Clock, AlertTriangle, Loader2, GitBranch, ArrowRight, XCircle } from 'lucide-react'
+import React, { useMemo, useState } from 'react'
+import { Check, Clock, AlertTriangle, Loader2, GitBranch, ArrowRight, XCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import type { TaskExecutionPlan, TaskExecutionStep } from '../types'
 import { getNodesByLayer } from '../lib/agent/taskExecution'
 import { useStore } from '../store'
@@ -43,6 +43,7 @@ function WorkflowBadge({ type }: { type?: string }) {
 export function TaskGraphWidget({ plan }: Props) {
   const layers = useMemo(() => getNodesByLayer(plan), [plan])
   const { activeConversation, dispatch } = useStore()
+  const [collapsed, setCollapsed] = useState(false)
 
   const handleAbort = () => {
     if (activeConversation) {
@@ -51,6 +52,11 @@ export function TaskGraphWidget({ plan }: Props) {
   }
 
   const isTerminal = plan.status === 'completed' || plan.status === 'aborted' || plan.status === 'failed'
+  const completedSteps = plan.steps.filter(s => s.status === 'done' || s.status === 'skipped').length
+  const progress = plan.steps.length > 0 ? (completedSteps / plan.steps.length) * 100 : 0
+  const activeStep = plan.steps.find(step => step.status === 'running')
+    ?? plan.steps.find(step => step.id === plan.currentStepId)
+    ?? plan.steps.find(step => step.status === 'pending')
 
   return (
     <div className="w-full bg-surface-1 border-b border-border/40 overflow-hidden shadow-sm shadow-black/10 z-30 transition-all duration-300 relative">
@@ -58,30 +64,52 @@ export function TaskGraphWidget({ plan }: Props) {
       <div className="absolute top-0 left-0 right-0 h-0.5 bg-surface-2">
         <div 
           className="h-full bg-accent transition-all duration-500" 
-          style={{ 
-            width: `${(plan.steps.filter(s => s.status === 'done' || s.status === 'skipped').length / plan.steps.length) * 100}%` 
-          }} 
+          style={{ width: `${progress}%` }} 
         />
       </div>
 
-      <div className="px-6 py-4 flex flex-col gap-4 max-h-[300px] overflow-y-auto custom-scrollbar">
+      <div className={`px-6 ${collapsed ? 'py-2' : 'py-4'} flex flex-col gap-4 ${collapsed ? '' : 'max-h-[300px] overflow-y-auto custom-scrollbar'}`}>
         <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-text-2 font-semibold text-sm truncate">
+          <div className="flex min-w-0 items-center gap-2 text-text-2 font-semibold text-sm truncate">
             <GitBranch size={16} className="text-accent shrink-0" />
             <span className="truncate">Agent OS Plan: {plan.goal}</span>
+            {collapsed && activeStep && (
+              <span className="hidden sm:inline text-[11px] font-medium text-text-3 shrink-0">
+                {completedSteps}/{plan.steps.length} · {activeStep.title}
+              </span>
+            )}
           </div>
-          {!isTerminal && (
-            <button 
-              onClick={handleAbort}
-              className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-error hover:bg-error/10 border border-transparent hover:border-error/20 rounded transition-colors shrink-0"
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setCollapsed(value => !value)}
+              className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-text-2 hover:bg-surface-2 border border-border/40 rounded transition-colors"
+              title={collapsed ? 'Show plan' : 'Minimize plan'}
             >
-              <XCircle size={12} />
-              Abort Plan
+              {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+              {collapsed ? 'Show' : 'Minimize'}
             </button>
-          )}
+            {!isTerminal && (
+              <button 
+                onClick={handleAbort}
+                className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-error hover:bg-error/10 border border-transparent hover:border-error/20 rounded transition-colors"
+              >
+                <XCircle size={12} />
+                Abort Plan
+              </button>
+            )}
+          </div>
         </div>
+
+        {collapsed && (
+          <div className="flex items-center gap-3 text-[11px] text-text-3">
+            <div className="h-1.5 flex-1 rounded-full bg-surface-2 overflow-hidden">
+              <div className="h-full bg-accent transition-all duration-500" style={{ width: `${progress}%` }} />
+            </div>
+            <span className="shrink-0">{completedSteps}/{plan.steps.length}</span>
+          </div>
+        )}
         
-        <div className="flex flex-col gap-6">
+        {!collapsed && <div className="flex flex-col gap-6">
           {layers.map((layer, layerIdx) => (
             <div key={layerIdx} className="flex items-start gap-4 relative">
               {/* Connector line from previous layer */}
@@ -137,7 +165,7 @@ export function TaskGraphWidget({ plan }: Props) {
               </div>
             </div>
           ))}
-        </div>
+        </div>}
       </div>
     </div>
   )
