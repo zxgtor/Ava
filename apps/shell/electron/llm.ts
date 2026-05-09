@@ -1107,7 +1107,18 @@ async function runToolLoop(
           detectedToolFormat,
         }
       }
-      const failText = '模型超过 hidden reasoning 预算后仍没有返回可显示的最终答案。当前模型 profile 可能只输出 reasoning_content，请换用 chat/instruct profile 或关闭该模型模板的 thinking 输出。'
+      const failText = [
+        'Model produced only hidden reasoning (chain-of-thought) and no visible content or tool call, even after a recovery attempt with reasoning disabled.',
+        'This is almost always a model template / profile mismatch — the model is emitting content into a reasoning_content channel that Ava cannot use to drive tools.',
+        '',
+        'How to fix:',
+        '1. In Ava → Settings → Providers, set reasoningMode = "off" for this model.',
+        '2. In LM Studio (or your provider), switch to a non-thinking variant (Instruct / Chat build) of the same model.',
+        '3. As a last resort, edit the model\'s chat template to flush <think> blocks before the final answer.',
+        '',
+        '模型只输出了 reasoning_content（思考链），即便在关闭 reasoning 后重试也没有返回可显示的最终答案或工具调用。',
+        '请把该 provider 的 reasoningMode 设为 "off"，或在 LM Studio 中切换到非 thinking 版本（Instruct / Chat），或修改聊天模板让 <think> 块在最终答案前结束。',
+      ].join('\n')
       fullContent += failText
       parts.push({ type: 'text', text: failText })
       if (!webContents.isDestroyed()) {
