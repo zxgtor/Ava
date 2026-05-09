@@ -56,6 +56,22 @@ export interface TaskExecutionStep {
   subtasks?: TaskExecutionStep[]
   /** Specific template workflow type for this step (e.g. 'scaffold', 'debug'). Defaults to 'feature' if omitted. */
   workflowType?: 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research'
+  /**
+   * Engine behavior tag. Drives completion gates, repair routing, and final-report gating.
+   * Independent of `workflowType` (which only selects an executor prompt template).
+   * Steps with no `role` use the generic completion gate (any required tool succeeds).
+   */
+  role?:
+    | 'inspect'
+    | 'scaffold'
+    | 'install'
+    | 'feature'
+    | 'preview'
+    | 'console'
+    | 'screenshot'
+    | 'repair'
+    | 'validate'
+    | 'final_report'
 }
 
 export type AgentRole = 'planner' | 'executor' | 'critic' | 'orchestrator'
