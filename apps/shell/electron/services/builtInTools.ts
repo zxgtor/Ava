@@ -498,7 +498,25 @@ class BuiltInTools {
     if (guard) return { ok: false, error: guard }
 
     const maxChars = clampNumber(rawArgs.maxChars, 1, MAX_FILE_READ_CHARS, MAX_FILE_READ_CHARS)
-    const content = await readFile(parsed.path, 'utf8')
+    let content: string
+    try {
+      content = await readFile(parsed.path, 'utf8')
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'ENOENT') {
+        return {
+          ok: false,
+          error: `File "${resolvePath(parsed.path)}" does not exist. If you intended to create it, call file.write_text with this path and the new content. If you wanted to discover what files exist, call file.list_dir or project.map first.`,
+        }
+      }
+      if (code === 'EISDIR') {
+        return {
+          ok: false,
+          error: `Path "${resolvePath(parsed.path)}" is a directory, not a file. Use file.list_dir to inspect its contents.`,
+        }
+      }
+      throw err
+    }
     return {
       ok: true,
       content: {
@@ -593,7 +611,19 @@ class BuiltInTools {
     if (guard) return { ok: false, error: guard }
 
     const expected = clampNumber(rawArgs.expectedReplacements, 1, 1000, 1)
-    const content = await readFile(parsed.path, 'utf8')
+    let content: string
+    try {
+      content = await readFile(parsed.path, 'utf8')
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'ENOENT') {
+        return {
+          ok: false,
+          error: `File "${resolvePath(parsed.path)}" does not exist, so it cannot be patched. Call file.write_text to create it with the desired content.`,
+        }
+      }
+      throw err
+    }
     const count = content.split(oldText).length - 1
     if (count !== expected) {
       return {
