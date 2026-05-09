@@ -47,16 +47,36 @@ export function createCodingDesignTaskPlan(input: {
       buildChecked: false,
     },
     steps: [
-      step('inspect_project', 'Inspect project state', ['project.map', 'project.detect', 'file.list_dir', 'file.read_text', 'shell.run_command'], ['project mapped']),
-      step('setup_project', 'Initialize or complete project structure', ['shell.run_command', 'file.create_dir', 'file.write_text'], ['project structure ready']),
-      step('install_dependencies', 'Install or confirm required dependencies', ['shell.run_command', 'project.detect'], ['dependencies ready']),
-      step('write_core_files', 'Write core app, 3D scene, loader, controls, and styles', ['file.write_text', 'file.patch'], ['core files written']),
-      step('start_preview', 'Start development server', ['devserver.start'], ['dev server started']),
-      step('check_console', 'Check browser console', ['preview.console'], ['console checked']),
-      step('check_screenshot', 'Capture preview screenshot', ['preview.screenshot'], ['screenshot checked']),
-      step('repair', 'Repair detected console, build, or visual issues', ['file.patch', 'file.write_text', 'shell.run_command'], ['issues repaired']),
-      step('validate', 'Validate build or typecheck', ['project.validate', 'shell.run_command'], ['project validated']),
-      step('final_report', 'Report changed files, validation result, and remaining risks', [], ['final report written']),
+      step('inspect_project', 'Inspect project state',
+        ['project.map', 'project.detect', 'file.list_dir', 'file.read_text', 'shell.run_command'],
+        ['project mapped'], 'inspect', 'research'),
+      step('setup_project', 'Initialize or complete project structure',
+        ['shell.run_command', 'file.create_dir', 'file.write_text', 'file.read_text'],
+        ['project structure ready'], 'scaffold', 'scaffold'),
+      step('install_dependencies', 'Install or confirm required dependencies',
+        ['shell.run_command', 'project.detect'],
+        ['dependencies ready'], 'install', 'scaffold'),
+      step('write_core_files', 'Write core app, 3D scene, loader, controls, and styles',
+        ['file.write_text', 'file.patch', 'file.read_text'],
+        ['core files written'], 'feature', 'feature'),
+      step('start_preview', 'Start development server',
+        ['devserver.start'],
+        ['dev server started'], 'preview', 'research'),
+      step('check_console', 'Check browser console',
+        ['preview.console'],
+        ['console checked'], 'console', 'debug'),
+      step('check_screenshot', 'Capture preview screenshot',
+        ['preview.screenshot'],
+        ['screenshot checked'], 'screenshot', 'research'),
+      step('repair', 'Repair detected console, build, or visual issues',
+        ['file.patch', 'file.write_text', 'shell.run_command'],
+        ['issues repaired'], 'repair', 'debug'),
+      step('validate', 'Validate build or typecheck',
+        ['project.validate', 'shell.run_command'],
+        ['project validated'], 'validate', 'debug'),
+      step('final_report', 'Report changed files, validation result, and remaining risks',
+        [],
+        ['final report written'], 'final_report', 'feature'),
     ],
     createdAt: now,
     updatedAt: now,
@@ -339,8 +359,15 @@ export function finalValidationGateSatisfied(
   return consoleOk && screenshotOk && buildOk
 }
 
-function step(id: string, title: string, requiredTools: string[], completionSignals: string[]): TaskExecutionStep {
-  return { id, title, status: 'pending', requiredTools, completionSignals, attempts: 0 }
+function step(
+  id: string,
+  title: string,
+  requiredTools: string[],
+  completionSignals: string[],
+  role?: TaskExecutionStep['role'],
+  workflowType?: TaskExecutionStep['workflowType'],
+): TaskExecutionStep {
+  return { id, title, status: 'pending', requiredTools, completionSignals, attempts: 0, role, workflowType }
 }
 
 function updateStep(
