@@ -208,49 +208,46 @@ export function evaluateStepCompletion(input: {
   fullContent: string
 }): { complete: boolean; blocked?: string; needsRepair?: string } {
   const { plan, step, parts, fullContent } = input
-  if (step.id === 'repair' && validationHasFailureSignal(plan.validation) === false) return { complete: true }
-  if (step.id === 'final_report') {
-    if (!finalValidationGateSatisfied(plan.validation)) {
-      return { complete: false, blocked: 'Final report is blocked until console, screenshot, and validation checks run.' }
+  const role = stepRole(step)
+
+  if (role === 'repair') return { complete: true }
+
+  if (role === 'final_report') {
+    if (!finalValidationGateSatisfied(plan.validation, plan)) {
+      return { complete: false, blocked: finalReportBlockedReason(plan) }
     }
     return { complete: fullContent.trim().length > 0 }
   }
 
-  // ── Special handling for the validate step ──
+  // ── Special handling for validate ──
   // A failed project.validate is NOT a blocker — it means we have build errors
   // and should route back to repair with the error details.
-  if (step.id === 'validate') {
+  if (role === 'validate') {
     const okTools = okToolParts(parts)
     const failedValidate = failedToolParts(parts).filter(p =>
       p.name === 'project.validate' || (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args))
     )
 
     if (okTools.some(p => p.name === 'project.validate' || (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args)))) {
-      // Validate succeeded
       return { complete: true }
     }
 
     if (failedValidate.length > 0) {
-      // Validate ran but failed — extract the error and request repair
+      const errSummary = failedValidate
+        .map(p => p.error ?? JSON.stringify(p.result).slice(0, 600))
+        .join('\n---\n')
       if (step.attempts >= MAX_VALIDATE_REPAIR_CYCLES) {
-        const errSummary = failedValidate
-          .map(p => p.error ?? JSON.stringify(p.result).slice(0, 600))
-          .join('\n---\n')
         return {
           complete: false,
           blocked: `Validation failed after ${MAX_VALIDATE_REPAIR_CYCLES} repair cycle(s). Build errors:\n${errSummary}`,
         }
       }
-      const errSummary = failedValidate
-        .map(p => p.error ?? JSON.stringify(p.result).slice(0, 600))
-        .join('\n---\n')
       return {
         complete: false,
         needsRepair: `project.validate failed with the following errors — fix them before retrying:\n${errSummary}`,
       }
     }
 
-    // No validate tool was called at all
     if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
       return { complete: false, blocked: `Step "${step.title}" did not call project.validate after ${MAX_STEP_ATTEMPTS} attempt(s).` }
     }
@@ -266,6 +263,37 @@ export function evaluateStepCompletion(input: {
     return { complete: false, blocked: `Step "${step.title}" did not complete after ${MAX_STEP_ATTEMPTS} attempt(s). Missing tool: ${step.requiredTools.join(' or ')}.` }
   }
   return { complete: false }
+}
+
+/**
+ * Bridges legacy static-plan steps (which keyed off step.id) to the new role
+ * taxonomy. Prefers `step.role`; falls back to id-name matching for plans
+ * created before this change reached production.
+ */
+function stepRole(step: TaskExecutionStep): TaskExecutionStep['role'] | undefined {
+  if (step.role) return step.role
+  switch (step.id) {
+    case 'repair': return 'repair'
+    case 'validate': return 'validate'
+    case 'final_report': return 'final_report'
+    case 'check_console': return 'console'
+    case 'check_screenshot': return 'screenshot'
+    case 'start_preview': return 'preview'
+    default: return undefined
+  }
+}
+
+function finalReportBlockedReason(plan: TaskExecutionPlan): string {
+  const missing: string[] = []
+  if (planHasRole(plan, 'console') && !plan.validation.consoleChecked) missing.push('console check')
+  if (planHasRole(plan, 'screenshot') && !plan.validation.screenshotChecked) missing.push('screenshot check')
+  if (planHasRole(plan, 'validate') && !plan.validation.buildChecked) missing.push('validation/build')
+  if (missing.length === 0) return 'Final report is blocked.'
+  return `Final report is blocked until these checks run: ${missing.join(', ')}.`
+}
+
+function planHasRole(plan: TaskExecutionPlan, role: NonNullable<TaskExecutionStep['role']>): boolean {
+  return plan.steps.some(s => stepRole(s) === role)
 }
 
 export function markStepRunning(plan: TaskExecutionPlan, stepId: string): TaskExecutionPlan {
@@ -301,8 +329,14 @@ export function withValidation(plan: TaskExecutionPlan, validation: TaskExecutio
   return { ...plan, validation, updatedAt: Date.now() }
 }
 
-export function finalValidationGateSatisfied(validation: TaskExecutionValidation): boolean {
-  return validation.consoleChecked && validation.screenshotChecked && validation.buildChecked
+export function finalValidationGateSatisfied(
+  validation: TaskExecutionValidation,
+  plan: TaskExecutionPlan,
+): boolean {
+  const consoleOk = !planHasRole(plan, 'console') || validation.consoleChecked
+  const screenshotOk = !planHasRole(plan, 'screenshot') || validation.screenshotChecked
+  const buildOk = !planHasRole(plan, 'validate') || validation.buildChecked
+  return consoleOk && screenshotOk && buildOk
 }
 
 function step(id: string, title: string, requiredTools: string[], completionSignals: string[]): TaskExecutionStep {
@@ -336,6 +370,3 @@ function looksLikeValidationCommand(args: Record<string, unknown>): boolean {
   return /\b(build|typecheck|test|lint|tsc)\b/i.test(rawArgs)
 }
 
-function validationHasFailureSignal(_validation: TaskExecutionValidation): boolean {
-  return false
-}

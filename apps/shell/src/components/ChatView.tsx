@@ -965,7 +965,9 @@ export function ChatView() {
             activeTaskId,
             activeTaskPlan: taskPlan,
             activeStep: activeStep ?? undefined,
-            finalReportAllowed: activeStep?.id === 'final_report' && taskPlan ? finalValidationGateSatisfied(taskPlan.validation) : false,
+            finalReportAllowed: activeStep && taskPlan && (activeStep.role === 'final_report' || activeStep.id === 'final_report')
+              ? finalValidationGateSatisfied(taskPlan.validation, taskPlan)
+              : false,
             onStatus: ({ taskId, phase }) => {
               if (taskId && taskId !== activeTaskId) return
               dispatch({
