@@ -197,9 +197,14 @@ export class OpenAiAdapter extends LlmAdapter {
     }
 
     let visibleText = pusher.fullContent
-    if (!visibleText && sawHiddenReasoning && !hiddenReasoningExceeded) {
-      visibleText = '模型只生成了隐藏推理内容，没有返回可显示的最终答案。当前模型 profile 可能只输出 reasoning_content，请换用 chat/instruct profile 或关闭该模型模板的 thinking 输出。'
-      if (streamChunks) onChunk(visibleText)
+    if (!visibleText && sawHiddenReasoning && toolCalls.length === 0) {
+      // Model produced only reasoning_content with no visible content and no
+      // tool call. Signal hiddenReasoningExceeded so runToolLoop's bail-out
+      // path runs — it caches a "reasoning-broken" flag for this model so
+      // future calls auto-disable reasoning, and emits a single bilingual
+      // user-facing diagnostic. Substituting a chat message here would
+      // bypass that recovery and the user would loop on the same failure.
+      hiddenReasoningExceeded = true
     }
     let detected: ToolCallFormat = toolCalls.length > 0 ? 'openai' : 'none'
     if (toolCalls.length === 0 && args.tools.length > 0) {
