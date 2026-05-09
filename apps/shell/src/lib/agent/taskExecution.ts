@@ -51,13 +51,13 @@ export function createCodingDesignTaskPlan(input: {
         ['project.map', 'project.detect', 'file.list_dir', 'file.read_text', 'shell.run_command'],
         ['project mapped'], 'inspect', 'research'),
       step('setup_project', 'Initialize or complete project structure',
-        ['shell.run_command', 'file.create_dir', 'file.write_text', 'file.read_text'],
+        ['shell.run_command', 'file.create_dir', 'file.write_text'],
         ['project structure ready'], 'scaffold', 'scaffold'),
       step('install_dependencies', 'Install or confirm required dependencies',
         ['shell.run_command', 'project.detect'],
         ['dependencies ready'], 'install', 'scaffold'),
       step('write_core_files', 'Write core app, 3D scene, loader, controls, and styles',
-        ['file.write_text', 'file.patch', 'file.read_text'],
+        ['file.write_text', 'file.patch'],
         ['core files written'], 'feature', 'feature'),
       step('start_preview', 'Start development server',
         ['devserver.start'],
@@ -271,7 +271,11 @@ export function evaluateStepCompletion(input: {
     }
 
     if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
-      return { complete: false, blocked: `Step "${step.title}" did not call project.validate after ${MAX_STEP_ATTEMPTS} attempt(s).` }
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" did not call project.validate after ${MAX_STEP_ATTEMPTS} attempt(s).${summary ? `\n\n${summary}` : ''}`,
+      }
     }
     return { complete: false }
   }
@@ -282,9 +286,37 @@ export function evaluateStepCompletion(input: {
     : okTools.some(part => step.requiredTools.includes(part.name))
   if (complete) return { complete: true }
   if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
-    return { complete: false, blocked: `Step "${step.title}" did not complete after ${MAX_STEP_ATTEMPTS} attempt(s). Missing tool: ${step.requiredTools.join(' or ')}.` }
+    const summary = summarizeRoundForBlock(parts, fullContent)
+    return {
+      complete: false,
+      blocked: `Step "${step.title}" did not complete after ${MAX_STEP_ATTEMPTS} attempt(s). Required tool: ${step.requiredTools.join(' or ')}.${summary ? `\n\n${summary}` : ''}`,
+    }
   }
   return { complete: false }
+}
+
+function summarizeRoundForBlock(parts: ContentPart[], fullContent: string): string {
+  const lines: string[] = []
+  const tools = parts.filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
+  if (tools.length > 0) {
+    lines.push('Last attempt tool activity:')
+    for (const t of tools.slice(-5)) {
+      const args = JSON.stringify(t.args).slice(0, 120)
+      const status = t.status === 'ok'
+        ? 'ok'
+        : t.error
+          ? `error: ${t.error.slice(0, 200)}`
+          : t.status
+      lines.push(`  - ${t.name}(${args}) → ${status}`)
+    }
+  } else {
+    lines.push('Last attempt produced no tool calls.')
+  }
+  const text = fullContent.trim()
+  if (text) {
+    lines.push(`Last visible text: ${text.slice(0, 240)}${text.length > 240 ? '…' : ''}`)
+  }
+  return lines.join('\n')
 }
 
 /**
