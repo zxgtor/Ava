@@ -15,24 +15,44 @@ const STEP_BUDGETS: Array<{ pattern: RegExp; budget: number }> = [
   { pattern: /validate|build|test|typecheck/i, budget: 10 },
 ]
 
+const ROLE_BUDGETS: Record<NonNullable<TaskExecutionStep['role']>, number> = {
+  inspect: 10,
+  scaffold: 30,
+  install: 10,
+  feature: 30,
+  preview: 6,
+  console: 6,
+  screenshot: 6,
+  repair: 16,
+  validate: 10,
+  final_report: 4,
+}
+
 export interface LargeTaskPlanDecision {
   block: boolean
   reason?: string
 }
 
-export function toolLoopBudgetForStep(step?: Pick<TaskExecutionStep, 'id' | 'title'>, requestedBudget?: number): number {
+export function toolLoopBudgetForStep(
+  step?: Pick<TaskExecutionStep, 'id' | 'title' | 'role'>,
+  requestedBudget?: number,
+): number {
   if (typeof requestedBudget === 'number' && Number.isFinite(requestedBudget)) {
     return clampBudget(requestedBudget)
   }
   if (!step) return DEFAULT_TOOL_LOOP_BUDGET
+  if (step.role && ROLE_BUDGETS[step.role] !== undefined) return clampBudget(ROLE_BUDGETS[step.role])
 
   const key = `${step.id} ${step.title}`
   const matched = STEP_BUDGETS.find(item => item.pattern.test(key))
   return clampBudget(matched?.budget ?? DEFAULT_TOOL_LOOP_BUDGET)
 }
 
-export function finalReportReadBudgetForStep(step?: Pick<TaskExecutionStep, 'id' | 'title'>): number | undefined {
+export function finalReportReadBudgetForStep(
+  step?: Pick<TaskExecutionStep, 'id' | 'title' | 'role'>,
+): number | undefined {
   if (!step) return undefined
+  if (step.role) return step.role === 'final_report' ? FINAL_REPORT_READ_BUDGET : undefined
   return /final[_-]?report|report/i.test(`${step.id} ${step.title}`) ? FINAL_REPORT_READ_BUDGET : undefined
 }
 

@@ -29,6 +29,24 @@ test.after(async () => {
   await rm(tempDir, { recursive: true, force: true })
 })
 
+test('budget helper prefers role over title regex', () => {
+  const featureStep = step('arbitrary', 'inspect things', ['file.write_text'])
+  featureStep.role = 'feature'
+  assert.equal(toolLoopBudgetForStep(featureStep), 30)
+})
+
+test('final-report read budget keys off role first', () => {
+  const reportStep = step('wrap_up', 'Wrap up the task')
+  reportStep.role = 'final_report'
+  assert.equal(finalReportReadBudgetForStep(reportStep), 3)
+})
+
+test('final-report read budget undefined for non-final-report role', () => {
+  const inspectStep = step('inspect', 'Inspect project')
+  inspectStep.role = 'inspect'
+  assert.equal(finalReportReadBudgetForStep(inspectStep), undefined)
+})
+
 function step(id, title, requiredTools = []) {
   return {
     id,
