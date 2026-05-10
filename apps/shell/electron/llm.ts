@@ -144,7 +144,12 @@ const activeStreams = new Map<string, ActiveStream>()
 const ANTHROPIC_API_VERSION = '2023-06-01'
 const ANTHROPIC_MAX_TOKENS = 4096
 const DEFAULT_TOOL_LOOP = 25
-const MAX_TOOL_LOOP = 60
+// Hard ceiling — only a runaway-safety net. Real stops should come from
+// the smart-budget heuristics: unrecoverable_repeat (3× identical error)
+// or no_progress (no successful tool call in STAGNATION_WINDOW). As long
+// as the model keeps making progress every few rounds, we let the loop
+// keep going up to this ceiling.
+const MAX_TOOL_LOOP = 500
 const WINDOWS_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：、]+/g
 const WINDOWS_DRIVE_SCOPE_RE = /\b[A-Za-z]:\\?(?![^\s"'`<>|?*])/g
 const TOOL_INTENT_RE =
@@ -1001,7 +1006,9 @@ async function runToolLoop(
   const baseBudget = toolLoopBudgetFromArgs(args)
   let effectiveBudget = baseBudget
   let extensionsUsed = 0
-  const MAX_EXTENSIONS = 2
+  // No hard cap on extensions — as long as hasRecentProgress() is true we
+  // keep granting more rounds. The MAX_TOOL_LOOP ceiling and the
+  // unrecoverable_repeat / no_progress heuristics are the real stops.
   const EXTENSION_AMOUNT = 10
   // Sliding window of the most-recent tool-call fingerprints. Each entry is
   // `${name}|${argsKey}|${status}`. Two heuristics use this:
@@ -1426,17 +1433,17 @@ async function runToolLoop(
 
     // Smart-budget extension: if we're about to hit the budget and the
     // model is still making progress (recent ok tool calls), grant +10
-    // rounds (up to MAX_EXTENSIONS times). If there's no progress in the
-    // last STAGNATION_WINDOW calls, we let the tool_loop_limit fire — no
-    // sense throwing more budget at a stuck model.
-    if (round + 1 >= effectiveBudget && extensionsUsed < MAX_EXTENSIONS) {
+    // rounds. No cap on extensions — only MAX_TOOL_LOOP and the
+    // no_progress / unrecoverable_repeat heuristics actually stop us.
+    // If there's no progress in the last STAGNATION_WINDOW calls, bail.
+    if (round + 1 >= effectiveBudget && effectiveBudget < MAX_TOOL_LOOP) {
       if (hasRecentProgress()) {
-        effectiveBudget += EXTENSION_AMOUNT
+        effectiveBudget = Math.min(effectiveBudget + EXTENSION_AMOUNT, MAX_TOOL_LOOP)
         extensionsUsed += 1
         console.warn('[ava-debug] tool-loop budget extended', {
           newBudget: effectiveBudget,
           extensionsUsed,
-          maxExtensions: MAX_EXTENSIONS,
+          ceiling: MAX_TOOL_LOOP,
         })
       } else {
         earlyStopReason = 'no_progress'
@@ -1455,14 +1462,30 @@ async function runToolLoop(
       return `- ${part.name}(${argText}): ${statusText}`
     })
     .join('\n')
+  // Pull the last failing tool call so we can show its error in the stop
+  // message — useful for telling apart "model gave bad args" (LLM bug) vs
+  // "tool returned a malformed result every time" (Ava bug).
+  const lastFailingPart = [...parts]
+    .reverse()
+    .find((p): p is ToolCallPart => p.type === 'tool_call' && p.status === 'error')
+  const lastErrorText = lastFailingPart
+    ? `${lastFailingPart.name}: ${lastFailingPart.error ?? '(no message)'}`
+    : ''
+  // Heuristic: if the same tool keeps returning an error that matches a
+  // known Ava-side pattern, ask the user to file a bug.
+  const looksLikeAvaBug = lastFailingPart && /(expected \d+ replacement.*found 0|Unknown tool|not registered|tool name not recognized)/i.test(lastFailingPart.error ?? '')
   const headline =
     earlyStopReason === 'unrecoverable_repeat'
-      ? 'Stopped: same tool call failed repeatedly with no recovery — likely a permission, missing path, or wrong-tool-name issue. Look at the last error and try a different approach.'
+      ? 'Stopped: same tool call failed repeatedly with no recovery — likely a permission, missing path, or wrong-tool-name issue.'
       : earlyStopReason === 'no_progress'
         ? 'Stopped: no tool call has succeeded recently — the model appears stuck without making progress.'
-        : `Tool loop exceeded after ${effectiveBudget} round(s), stopping.`
+        : `Tool loop reached the safety ceiling of ${effectiveBudget} rounds. The model may still be productive — re-send to continue, or stop here.`
   const stopText = [
     headline,
+    lastErrorText ? `Last error → ${lastErrorText}` : '',
+    looksLikeAvaBug
+      ? 'NOTE: this error pattern often points to an Ava internal bug (tool dispatch / patch normalization). Please file an Ava bug report with the recent tool calls below.'
+      : '',
     recentTools ? `Recent tool calls:\n${recentTools}` : '',
     '',
     'Ava stopped to avoid repeating the same action indefinitely.',

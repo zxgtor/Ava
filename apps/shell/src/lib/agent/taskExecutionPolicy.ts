@@ -1,7 +1,10 @@
 import type { TaskExecutionStep } from '../../types'
 
 const DEFAULT_TOOL_LOOP_BUDGET = 10
-const MAX_TOOL_LOOP_BUDGET = 50
+// Hard ceiling for any per-step budget. The smart-budget heuristics in
+// llm.ts (no_progress / unrecoverable_repeat / progress-based extension)
+// are the real stops; this is just a runaway-safety net.
+const MAX_TOOL_LOOP_BUDGET = 500
 const FINAL_REPORT_READ_BUDGET = 3
 
 const STEP_BUDGETS: Array<{ pattern: RegExp; budget: number }> = [
