@@ -1,5 +1,5 @@
 import type { TaskExecutionPlan, TaskExecutionStep, Message, ModelProvider, Settings } from '../../../types'
-import { EXECUTOR_SCAFFOLD, EXECUTOR_FEATURE, EXECUTOR_DEBUG, EXECUTOR_REFACTOR } from '../prompts/templates'
+import { EXECUTOR_SCAFFOLD, EXECUTOR_FEATURE, EXECUTOR_DEBUG, EXECUTOR_REFACTOR, EXECUTOR_VALIDATE } from '../prompts/templates'
 
 export interface ExecutorInput {
   plan: TaskExecutionPlan
@@ -27,7 +27,12 @@ function requiresWrite(step: ExecutorInput['step']): boolean {
 }
 
 export function buildExecutorSystemPrompt(input: ExecutorInput): string {
-  const template = getExecutorTemplate(input.step.workflowType)
+  // Role takes precedence over workflowType. A "validate" step is functionally
+  // a verify-only loop and needs a strict prompt that forbids scaffold/init
+  // commands — without this, models often re-run `npm create vite` because
+  // the planner labeled the step workflowType="feature" but role="validate".
+  const isValidate = input.step.role === 'validate'
+  const template = isValidate ? EXECUTOR_VALIDATE : getExecutorTemplate(input.step.workflowType)
   const sections = [
     template,
     `Goal for this step: ${input.step.title}`,

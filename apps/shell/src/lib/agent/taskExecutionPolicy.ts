@@ -11,8 +11,11 @@ const STEP_BUDGETS: Array<{ pattern: RegExp; budget: number }> = [
   { pattern: /install|depend/i, budget: 10 },
   { pattern: /preview|server|start/i, budget: 6 },
   { pattern: /console|screenshot|check/i, budget: 6 },
-  { pattern: /repair|fix/i, budget: 16 },
-  { pattern: /validate|build|test|typecheck/i, budget: 10 },
+  { pattern: /repair|fix/i, budget: 25 },
+  // Validate steps run build/typecheck, then need patch + revalidate cycles
+  // for each error. With 6 type errors, that's 12+ tool calls. 10 was too
+  // tight — bump to 30 to allow the full fix-revalidate loop.
+  { pattern: /validate|build|test|typecheck/i, budget: 30 },
 ]
 
 const ROLE_BUDGETS: Record<NonNullable<TaskExecutionStep['role']>, number> = {
@@ -23,8 +26,8 @@ const ROLE_BUDGETS: Record<NonNullable<TaskExecutionStep['role']>, number> = {
   preview: 6,
   console: 6,
   screenshot: 6,
-  repair: 16,
-  validate: 10,
+  repair: 25,
+  validate: 30,
   final_report: 4,
 }
 

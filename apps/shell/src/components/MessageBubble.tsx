@@ -263,6 +263,13 @@ function MessageBubbleImpl({
     const asksForConfirmation = /请确认是否开始|请回复[「"']?确认|回复[「"']?确认|if correct.*confirm/i.test(tailText)
     if (asksForConfirmation) return textContent.includes('请确认是否开始') ? ['确认'] : ['确认']
 
+    // If the message looks like code / tool output / JSON, skip chip extraction
+    // entirely. Otherwise [..]/"..." inside JSON, HTML, escaped strings, or raw
+    // <tool_call> blocks gets mis-extracted as fake option buttons.
+    const looksLikeCode =
+      /```|<tool_call>|<\/?[a-z][^>]*>|\\n|\bfunction\b|\bconst\s|\blet\s|\bimport\s|\{[\s\S]*?"[^"]+"\s*:/.test(textContent)
+    if (looksLikeCode) return []
+
     const optionSourceMatch = textContent.match(/(?:请选择一个选项|请选择|Options?|选项)\s*[:：]\s*([\s\S]+)/i)
     const optionSource = (optionSourceMatch?.[1] ?? tailText).split(/\n\s*\n/)[0]
 
@@ -271,10 +278,22 @@ function MessageBubbleImpl({
       /\b(reply|type|choose|select|pick|confirm|option)\b/i.test(tailText)
 
     if (asksForReply) {
-      const matches = Array.from(optionSource.matchAll(/[「『"'`]([^」』"'\n`]{1,120})[」』"'`]/g))
+      // Quoted-phrase patterns: 「opt」, 『opt』, "opt", 'opt', `opt`,
+      // and bracketed [opt] (commonly emitted by models for option labels).
+      const quotedMatches = Array.from(optionSource.matchAll(/[「『"'`]([^」』"'\n`]{1,120})[」』"'`]/g))
+      const bracketMatches = Array.from(optionSource.matchAll(/\[([^\]\n\[]{1,80})\]/g))
+      const matches = [...quotedMatches, ...bracketMatches]
+      const isLabelLike = (s: string) =>
+        s.length >= 1 &&
+        s.length <= 80 &&
+        !/[\\<>{}=:/]/.test(s) &&
+        !/\\n|\\t|\\r/.test(s) &&
+        !/^[,;.\s]+$/.test(s)
       if (matches.length > 0) {
         for (const match of matches) {
           const option = match[1].trim()
+          if (!isLabelLike(option)) continue
+          if (replies.size >= 6) break
           if (option && (option.length > 1 || /[\w\u4e00-\u9fa5]/.test(option))) {
             replies.add(option)
           }

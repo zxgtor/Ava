@@ -998,13 +998,53 @@ async function runToolLoop(
   let sawFirstToken = false
   let rawCommandCorrectionIssued = false
   let actionCorrectionCount = 0
-  const loopBudget = toolLoopBudgetFromArgs(args)
+  const baseBudget = toolLoopBudgetFromArgs(args)
+  let effectiveBudget = baseBudget
+  let extensionsUsed = 0
+  const MAX_EXTENSIONS = 2
+  const EXTENSION_AMOUNT = 10
+  // Sliding window of the most-recent tool-call fingerprints. Each entry is
+  // `${name}|${argsKey}|${status}`. Two heuristics use this:
+  //   1. Unrecoverable repeat — last 3 entries identical AND status=error
+  //      means the model is hammering the same broken call. Stop early.
+  //   2. Stagnation — none of the last 5 entries succeeded. The model is
+  //      thrashing without progress. Don't grant any budget extensions.
+  const recentSignatures: string[] = []
+  const SIG_WINDOW = 8
+  const REPEAT_LIMIT = 3
+  const STAGNATION_WINDOW = 5
+  // Typed as string | null so TS doesn't narrow it based on which branches
+  // assign which literal — the recordSignature closure assigns
+  // 'unrecoverable_repeat' which the outer flow can't see otherwise.
+  let earlyStopReason: string | null = null
+  const recordSignature = (name: string, args: unknown, status: 'ok' | 'error'): void => {
+    let argsKey: string
+    try {
+      const s = JSON.stringify(args ?? {})
+      argsKey = s.length > 200 ? s.slice(0, 200) : s
+    } catch { argsKey = '?' }
+    recentSignatures.push(`${name}|${argsKey}|${status}`)
+    if (recentSignatures.length > SIG_WINDOW) recentSignatures.shift()
+    // Check 1: identical error repeated REPEAT_LIMIT times in a row.
+    if (recentSignatures.length >= REPEAT_LIMIT) {
+      const tail = recentSignatures.slice(-REPEAT_LIMIT)
+      const allSame = tail.every(s => s === tail[0])
+      if (allSame && tail[0].endsWith('|error')) {
+        earlyStopReason = 'unrecoverable_repeat'
+      }
+    }
+  }
+  const hasRecentProgress = (): boolean => {
+    if (recentSignatures.length === 0) return true
+    const window = recentSignatures.slice(-STAGNATION_WINDOW)
+    return window.some(s => s.endsWith('|ok'))
+  }
   const finalReportReadBudget = typeof args.finalReportReadBudget === 'number'
     ? Math.max(0, Math.floor(args.finalReportReadBudget))
     : undefined
   let finalReportReadCalls = 0
 
-  for (let round = 0; round < loopBudget; round += 1) {
+  for (let round = 0; round < effectiveBudget; round += 1) {
     if (controller.signal.aborted) throw new Error('aborted')
     sendRunStatus(webContents, args, provider, model, round === 0 ? 'waiting_first_token' : 'generating')
     let bufferedVisibleText = ''
@@ -1351,6 +1391,14 @@ async function runToolLoop(
         content: toolText,
       })
 
+      // Smart-budget signal: did this call succeed or fail? Used by the
+      // outer loop to detect unrecoverable repetition / no progress.
+      recordSignature(
+        toolCall.name,
+        toolCall.args,
+        result.ok && !result.isError ? 'ok' : 'error',
+      )
+
       if (
         args.activeStepRequiredTools?.length &&
         result.ok &&
@@ -1368,6 +1416,32 @@ async function runToolLoop(
       }
     }
     sendRunStatus(webContents, args, provider, model, 'generating')
+
+    // Smart-budget early stop: same tool+args+error happened REPEAT_LIMIT
+    // times in a row. Wasted rounds are guaranteed; bail now.
+    if (earlyStopReason) {
+      console.warn('[ava-debug] tool-loop early stop', earlyStopReason, recentSignatures.slice(-REPEAT_LIMIT))
+      break
+    }
+
+    // Smart-budget extension: if we're about to hit the budget and the
+    // model is still making progress (recent ok tool calls), grant +10
+    // rounds (up to MAX_EXTENSIONS times). If there's no progress in the
+    // last STAGNATION_WINDOW calls, we let the tool_loop_limit fire — no
+    // sense throwing more budget at a stuck model.
+    if (round + 1 >= effectiveBudget && extensionsUsed < MAX_EXTENSIONS) {
+      if (hasRecentProgress()) {
+        effectiveBudget += EXTENSION_AMOUNT
+        extensionsUsed += 1
+        console.warn('[ava-debug] tool-loop budget extended', {
+          newBudget: effectiveBudget,
+          extensionsUsed,
+          maxExtensions: MAX_EXTENSIONS,
+        })
+      } else {
+        earlyStopReason = 'no_progress'
+      }
+    }
   }
 
   const recentTools = parts
@@ -1381,8 +1455,14 @@ async function runToolLoop(
       return `- ${part.name}(${argText}): ${statusText}`
     })
     .join('\n')
+  const headline =
+    earlyStopReason === 'unrecoverable_repeat'
+      ? 'Stopped: same tool call failed repeatedly with no recovery — likely a permission, missing path, or wrong-tool-name issue. Look at the last error and try a different approach.'
+      : earlyStopReason === 'no_progress'
+        ? 'Stopped: no tool call has succeeded recently — the model appears stuck without making progress.'
+        : `Tool loop exceeded after ${effectiveBudget} round(s), stopping.`
   const stopText = [
-    `Tool loop exceeded after ${loopBudget} round(s), stopping.`,
+    headline,
     recentTools ? `Recent tool calls:\n${recentTools}` : '',
     '',
     'Ava stopped to avoid repeating the same action indefinitely.',
@@ -1397,7 +1477,7 @@ async function runToolLoop(
     parts,
     model,
     toolCallsIssued,
-    loopRounds: loopBudget,
+    loopRounds: effectiveBudget,
     detectedToolFormat,
     stopReason: 'tool_loop_limit',
   }
