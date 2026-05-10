@@ -932,10 +932,22 @@ class BuiltInTools {
     }
     this.devServers.set(server.id, server)
 
+    let openedInBrowser = false
     const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
       const text = chunk.toString('utf8')
       if (!server.url) server.url = extractLocalUrl(text)
-      if (server.url) server.status = 'running'
+      if (server.url) {
+        server.status = 'running'
+        // Auto-open the dev URL in the user's default browser the first time
+        // we detect it. Saves the manual "click the link" step at the end of
+        // every coding-design task. Errors are swallowed — failure to launch
+        // a browser must not crash the dev-server tool call.
+        if (!openedInBrowser) {
+          openedInBrowser = true
+          const url = server.url
+          import('electron').then(e => e.shell.openExternal(url)).catch(() => { /* non-fatal */ })
+        }
+      }
       if (kind === 'stdout') server.stdout = appendRolling(server.stdout, text, MAX_DEVSERVER_LOG_CHARS)
       else server.stderr = appendRolling(server.stderr, text, MAX_DEVSERVER_LOG_CHARS)
     }

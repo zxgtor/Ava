@@ -30,12 +30,30 @@ function killTree(pid) {
   }
 }
 
-const pids = pidsOnPorts()
-if (pids.length === 0) {
+function pidsOfStaleElectron() {
+  // Kill leftover electron / electron-vite processes from previous runs whose
+  // main process is no longer listening on a port (so pidsOnPorts misses them)
+  // but is still keeping renderer windows alive. We scope by:
+  //   • CommandLine containing 'electron-vite' OR
+  //   • ExecutablePath inside this repo's node_modules\\electron
+  if (!isWin) return []
+  const repoElectron = require('path').resolve(__dirname, '..', 'node_modules', 'electron').toLowerCase()
+  const ps = `Get-CimInstance Win32_Process | Where-Object { ` +
+    `($_.CommandLine -match 'electron-vite') -or ` +
+    `($_.ExecutablePath -and $_.ExecutablePath.ToLower().StartsWith('${repoElectron.replace(/\\/g, '\\\\')}')) ` +
+    `} | Select-Object -ExpandProperty ProcessId`
+  const out = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8' }).stdout || ''
+  return out.split(/\s+/).filter(Boolean)
+}
+
+const portPids = pidsOnPorts()
+const stalePids = pidsOfStaleElectron()
+const allPids = [...new Set([...portPids, ...stalePids])]
+if (allPids.length === 0) {
   console.log('[dev-fresh] no stale dev servers on', PORTS.join(','))
 } else {
-  console.log('[dev-fresh] killing stale tree(s):', pids.join(', '))
-  for (const pid of pids) killTree(pid)
+  console.log('[dev-fresh] killing stale tree(s):', allPids.join(', '))
+  for (const pid of allPids) killTree(pid)
 }
 
 console.log('[dev-fresh] starting npm run dev')
