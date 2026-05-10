@@ -45,16 +45,16 @@ export function PreviewView() {
       {/* 沉浸式标题栏：强化拖拽逻辑 */}
       <div
         className="h-11 shrink-0 flex items-center justify-between px-4 pr-[140px] border-b border-white/5 bg-surface/40 backdrop-blur-xl relative z-50"
-        style={{ webkitAppRegion: 'drag' } as any}
+        style={{ WebkitAppRegion: 'drag' } as any}
       >
-        <div className="flex items-center gap-3 relative z-[60]" style={{ webkitAppRegion: 'no-drag' } as any}>
+        <div className="flex items-center gap-3 relative z-[60]" style={{ WebkitAppRegion: 'no-drag' } as any}>
            <span className="text-[10px] font-bold text-white/40 tracking-[0.2em] uppercase">Preview Canvas</span>
            <span className="px-1.5 py-0.5 rounded bg-white/5 text-[8px] text-white/30 border border-white/5">
              RECV: {msgCount}
            </span>
         </div>
 
-        <div className="flex items-center gap-2 relative z-[60]" style={{ webkitAppRegion: 'no-drag' } as any}>
+        <div className="flex items-center gap-2 relative z-[60]" style={{ WebkitAppRegion: 'no-drag' } as any}>
           {lastUpdate && (
             <span className="text-[8px] text-white/20 uppercase tracking-tighter">
               {lastUpdate.toLocaleTimeString()}

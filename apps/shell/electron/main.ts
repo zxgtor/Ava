@@ -575,9 +575,13 @@ function registerIpc(): void {
     } catch (err) {
       const code = err && typeof err === 'object' && 'code' in err ? (err as { code?: unknown }).code : undefined
       if (code === 'ENOENT') {
+        // Return default content WITHOUT writing it to disk. Auto-creating
+        // TASKS.md at the project root made `npm create vite@latest .` and
+        // similar scaffolders refuse to run because the directory was no
+        // longer empty. The caller still sees the default text via this
+        // return — it just isn't persisted.
         const defaultContent = defaultProjectFileContent(basename(path))
         if (defaultContent !== null) {
-          await fs.writeFile(path, defaultContent, 'utf8')
           return defaultContent
         }
       }

@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import {
   mergeMcpServers,
@@ -35,17 +35,21 @@ export function SettingsView() {
     refreshPlugins()
   }, [refreshPlugins])
 
+  const settingsRef = useRef(state.settings)
+  useEffect(() => { settingsRef.current = state.settings }, [state.settings])
+
   const update = useCallback(
     (producer: (draft: Settings) => Settings) => {
-      const next = producer(structuredClone(state.settings))
+      const next = producer(structuredClone(settingsRef.current))
       // Re-sanitize providers + chain
       next.modelProviders = mergeModelProviders(next.modelProviders)
       next.primaryModelChain = normalizeProviderChain(next.primaryModelChain, next.modelProviders)
       next.mcpServers = mergeMcpServers(next.mcpServers)
       next.pluginStates = next.pluginStates ?? {}
+      settingsRef.current = next
       dispatch({ type: 'UPDATE_SETTINGS', settings: next })
     },
-    [dispatch, state.settings],
+    [dispatch],
   )
 
   return (

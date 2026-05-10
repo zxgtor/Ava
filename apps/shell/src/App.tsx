@@ -3,6 +3,7 @@ import { StoreProvider, useStore } from './store'
 import { ChatView } from './components/ChatView'
 import { SettingsView } from './components/SettingsView'
 import { ConversationSidebar } from './components/ConversationSidebar'
+import { RightPanel } from './components/RightPanel'
 import { PreviewView } from './components/PreviewView'
 import { ChatHeader } from './components/ChatHeader'
 import { UnitTestView } from './components/UnitTestView'
@@ -53,6 +54,8 @@ function Shell() {
         onNewConversation={createConversation}
         onOpenSettings={() => dispatch({ type: 'SET_VIEW', view: 'settings' })}
         onDeleteConversation={activeConversation ? () => dispatch({ type: 'DELETE_CONVERSATION', id: activeConversation.id }) : undefined}
+        rightPanelOpen={state.rightPanelOpen}
+        onToggleRightPanel={state.viewMode === 'chat' ? () => dispatch({ type: 'TOGGLE_RIGHT_PANEL' }) : undefined}
       />
 
       <div className="flex flex-row flex-1 min-h-0 relative">
@@ -64,6 +67,7 @@ function Shell() {
               ? <UnitTestView />
               : <ChatView />}
         </div>
+        {state.rightPanelOpen && state.viewMode === 'chat' && <RightPanel />}
       </div>
     </div>
   )

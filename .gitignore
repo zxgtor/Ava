@@ -35,3 +35,7 @@ logs/
 
 # Architecture scratchpad
 .tmp-*
+
+# Local agent runtime
+.omc/
+Ava/

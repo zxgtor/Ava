@@ -143,8 +143,8 @@ const activeStreams = new Map<string, ActiveStream>()
 
 const ANTHROPIC_API_VERSION = '2023-06-01'
 const ANTHROPIC_MAX_TOKENS = 4096
-const DEFAULT_TOOL_LOOP = 10
-const MAX_TOOL_LOOP = 50
+const DEFAULT_TOOL_LOOP = 25
+const MAX_TOOL_LOOP = 60
 const WINDOWS_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：、]+/g
 const WINDOWS_DRIVE_SCOPE_RE = /\b[A-Za-z]:\\?(?![^\s"'`<>|?*])/g
 const TOOL_INTENT_RE =
@@ -345,6 +345,16 @@ function chooseHiddenReasoningBudgetChars(mode: 'off' | 'on', currentTask: strin
   if (mode === 'off') return 0
   if (REASONING_INTENT_RE.test(currentTask) || toolsExposed) return 10_000
   return 4_000
+}
+
+function isInlineThinkingOnly(text: string): boolean {
+  if (!text) return false
+  if (!/<think\b/i.test(text)) return false
+  const stripped = text
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+    .trim()
+  return stripped.length === 0
 }
 
 function withFinalizePrompt(messages: LlmMessage[]): LlmMessage[] {
@@ -1098,7 +1108,26 @@ async function runToolLoop(
       }
     }
 
-    if (step.visibleText && toolCalls.length === 0) {
+    const inlineThinkingOnly =
+      toolCalls.length === 0 && step.visibleText ? isInlineThinkingOnly(step.visibleText) : false
+
+    if (toolCalls.length === 0) {
+      console.warn('[ava-debug] no-tool-call round', {
+        provider: provider.id,
+        model,
+        finishReason: step.finishReason,
+        hiddenReasoningExceeded: step.hiddenReasoningExceeded,
+        hiddenReasoningChars: step.hiddenReasoningChars,
+        visibleTextLen: step.visibleText?.length ?? 0,
+        visibleTextSample: (step.visibleText ?? '').slice(0, 300),
+        inlineThinkingOnly,
+        toolsExposedCount: tools.length,
+        reasoningMode: effectiveProvider.reasoningMode,
+        round,
+      })
+    }
+
+    if (step.visibleText && toolCalls.length === 0 && !inlineThinkingOnly) {
       fullContent += step.visibleText
       parts.push({ type: 'text', text: step.visibleText })
       if (tools.length > 0 && bufferedVisibleText && !webContents.isDestroyed()) {
@@ -1106,7 +1135,15 @@ async function runToolLoop(
       }
     }
 
-    if (step.hiddenReasoningExceeded && !step.visibleText && toolCalls.length === 0) {
+    // Treat any inline-thinking-only response with no tool call as a reasoning
+    // failure regardless of finishReason. The model spent its budget thinking
+    // and produced no actionable output — same recovery path as
+    // hiddenReasoningExceeded (retry with reasoning off, then mark broken).
+    const reasoningExceededLikely =
+      step.hiddenReasoningExceeded ||
+      (inlineThinkingOnly && toolCalls.length === 0)
+
+    if (reasoningExceededLikely && (!step.visibleText || inlineThinkingOnly) && toolCalls.length === 0) {
       const finalizeProvider: ModelProvider = { ...effectiveProvider, reasoningMode: 'off' }
       const finalizeMessages = withFinalizePrompt(workingMessages)
       const finalizeStep = await streamFromProvider(

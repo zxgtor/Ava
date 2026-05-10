@@ -9,7 +9,6 @@ import { useStore } from '../store'
 import { EmptyState } from './EmptyState'
 import { MessageBubble } from './MessageBubble'
 import { PromptInput } from './PromptInput'
-import { TaskGraphWidget } from './TaskGraphWidget'
 import {
   makeAssistantPlaceholder,
   makeMessageId,
@@ -2010,12 +2009,7 @@ export function ChatView() {
       {/* Top Blur Overlay */}
       <div className="absolute top-10 left-0 right-0 h-8 z-20 pointer-events-none bg-gradient-to-b from-bg/80 via-bg/40 to-transparent backdrop-blur-md [mask-image:linear-gradient(to_bottom,black,transparent)]" />
 
-      {/* Task Graph Overlay (Option A: Sticky Top) */}
-      {activeConversation?.activeTaskPlan && (
-        <div className="w-full z-40 bg-bg sticky top-0 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.5)]">
-          <TaskGraphWidget plan={activeConversation.activeTaskPlan} />
-        </div>
-      )}
+      {/* Task plan now lives exclusively in the right panel. */}
 
       {isDragging && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-bg/80 backdrop-blur-sm border-2 border-dashed border-accent m-4 rounded-3xl pointer-events-none transition-all animate-in fade-in zoom-in duration-200">

@@ -42,6 +42,7 @@ interface AppState {
   unitTestSection: UnitTestSection
   viewMode: ViewMode
   sidebarOpen: boolean
+  rightPanelOpen: boolean
   projectBriefs: Record<string, ProjectBrief>
   hydrated: boolean
 }
@@ -53,6 +54,8 @@ type Action =
   | { type: 'SET_UNIT_TEST_SECTION'; section: UnitTestSection }
   | { type: 'SET_SIDEBAR'; open: boolean }
   | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'SET_RIGHT_PANEL'; open: boolean }
+  | { type: 'TOGGLE_RIGHT_PANEL' }
   | { type: 'CREATE_CONVERSATION'; conversation: Conversation }
   | { type: 'SELECT_CONVERSATION'; id: string }
   | { type: 'CLEAR_ACTIVE_CONVERSATION' }
@@ -107,6 +110,12 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarOpen: !state.sidebarOpen }
+
+    case 'SET_RIGHT_PANEL':
+      return { ...state, rightPanelOpen: action.open }
+
+    case 'TOGGLE_RIGHT_PANEL':
+      return { ...state, rightPanelOpen: !state.rightPanelOpen }
 
     case 'CREATE_CONVERSATION':
       return {
@@ -202,6 +211,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'BLOCK_TASK_PLAN':
       return {
         ...state,
+        rightPanelOpen: action.type === 'START_TASK_PLAN' ? true : state.rightPanelOpen,
         conversations: state.conversations.map(c =>
           c.id === action.conversationId
             ? { ...c, activeTaskPlan: action.plan, updatedAt: Date.now() }
@@ -439,6 +449,7 @@ function initialState(): AppState {
     unitTestSection: 'built-in',
     viewMode: 'chat',
     sidebarOpen: true,
+    rightPanelOpen: false,
     projectBriefs: {},
     hydrated: false,
   }

@@ -44,6 +44,30 @@ export function buildExecutorSystemPrompt(input: ExecutorInput): string {
     ].join('\n'))
   }
 
+  // File-write discipline — prevents the model from re-writing the same file
+  // every round. file.write_text overwrites blindly and gives no signal that
+  // the file already exists; file.patch is targeted and self-limiting (the
+  // second patch with the same oldText fails because oldText is gone).
+  sections.push([
+    'File-write rules:',
+    '- file.write_text: ONLY for creating a brand-new file that does not exist yet.',
+    '- file.patch: REQUIRED for any modification to an already-written or pre-existing file.',
+    '- Before writing again to a path you already wrote in this conversation, switch to file.patch (or stop if the previous write fully covered your intent).',
+    '- Never call file.write_text twice on the same path in one step — that is a loop, not progress.',
+  ].join('\n'))
+
+  // Stop discipline — local agent models tend to keep emitting tool_calls
+  // forever. Make "stop and summarize" the explicit success path so the
+  // tool loop exits naturally instead of hitting the round-budget limit.
+  sections.push([
+    'Stop conditions — you MUST stop calling tools and return a final assistant message (no tool_call) when ANY of these are true:',
+    '- All required tools for this step have produced a successful result.',
+    '- The intended files have been created/modified successfully and verified by their tool results.',
+    '- You catch yourself about to repeat a tool call you already made successfully — stop instead.',
+    '',
+    'When stopping, reply with one short sentence summarizing what you did. Do not output more code in the chat — the files are already on disk.',
+  ].join('\n'))
+
   sections.push('Self-Correction: If a tool fails, read the error message, adjust, and retry. Maximum retries: 2.')
   return sections.join('\n\n')
 }

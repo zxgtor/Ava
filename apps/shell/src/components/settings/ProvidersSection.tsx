@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Brain, ChevronDown, ChevronRight, Eye, HelpCircle, Wrench } from 'lucide-react'
 import type { ModelCapabilityProfile, ModelProvider, Settings } from '../../types'
@@ -81,24 +81,38 @@ function ProviderRow({
     }
   }
 
+  const probeSeqRef = useRef(0)
+  const probeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (probeTimerRef.current) clearTimeout(probeTimerRef.current)
+  }, [])
+
   const probeCapabilities = async (model = provider.defaultModel) => {
     if (!provider.baseUrl || !model) return
+    const seq = ++probeSeqRef.current
+    setProbeResult(null)
     setCapProbing(true)
     try {
       const result = await window.ava.llm.probeModelCapabilities({
         provider: { ...provider, defaultModel: model },
         model,
       })
+      if (seq !== probeSeqRef.current) return
       onCapability(result.profile)
       if (!result.ok) setProbeResult(`✗ ${result.error}`)
     } finally {
-      setCapProbing(false)
+      if (seq === probeSeqRef.current) setCapProbing(false)
     }
   }
 
   const changeModel = (model: string) => {
     onChange({ ...provider, defaultModel: model })
-    void probeCapabilities(model)
+    if (probeTimerRef.current) clearTimeout(probeTimerRef.current)
+    if (!provider.baseUrl || !model) return
+    const known = provider.models.includes(model)
+    const delay = known ? 0 : 600
+    probeTimerRef.current = setTimeout(() => { void probeCapabilities(model) }, delay)
   }
 
   return (
@@ -157,7 +171,7 @@ function ProviderRow({
                     ? e.target.value
                     : 'auto',
               })}
-              className="w-full px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60"
+              className="w-full px-3 py-1.5 text-sm text-text bg-bg border border-border-subtle rounded-md outline-none focus:border-accent/60 [&>option]:bg-surface [&>option]:text-text"
             >
               <option value="auto">Auto decide</option>
               <option value="off">Always off</option>

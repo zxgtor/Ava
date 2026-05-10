@@ -232,6 +232,16 @@ export function evaluateStepCompletion(input: {
   const { plan, step, parts, fullContent } = input
   const role = stepRole(step)
 
+  // Diagnostic: surface what evaluateStepCompletion actually sees so we can
+  // tell whether a "step did not complete" failure is a real missing tool
+  // call vs. a part.status update race.
+  const _toolSummary = parts
+    .filter(p => p.type === 'tool_call')
+    .map(p => `${(p as any).name}=${(p as any).status}`)
+  console.warn(
+    `[ava-debug] evaluateStepCompletion step="${step.title}" role=${role} attempts=${step.attempts} required=[${step.requiredTools.join(',')}] tools=[${_toolSummary.join(' | ')}]`,
+  )
+
   if (role === 'repair') return { complete: true }
 
   if (role === 'final_report') {
@@ -281,9 +291,39 @@ export function evaluateStepCompletion(input: {
   }
 
   const okTools = okToolParts(parts)
+  // Inspect-role steps are satisfied by ANY successful read-only inspection
+  // tool, not just the planner's preferred one. The planner's `requiredTools`
+  // is a hint; the model often picks an equivalent sibling (e.g. project.map
+  // instead of file.list_dir). Forcing the exact match wastes loop budget on
+  // semantically-complete work.
+  const inspectionEquivalents = new Set([
+    'file.read_text',
+    'file.list_dir',
+    'file.stat',
+    'project.map',
+    'project.detect',
+    'search.ripgrep',
+  ])
+  const isInspectRole = role === 'inspect'
+
+  // ── IPC race-condition workaround ──
+  // Renderer's part.status is updated via 'partUpdate' IPC events that may
+  // not arrive before evaluateStepCompletion runs. A required tool whose
+  // call we already started (status === 'running') is functionally a
+  // completion signal — the model emitted the tool call and the engine
+  // dispatched it. If the call later errors, the next attempt will surface
+  // it. Without this, valid steps get falsely marked "not complete" when
+  // they finish on the same micro-tick.
+  const inFlightTools = parts.filter(
+    (p): p is Extract<ContentPart, { type: 'tool_call' }> =>
+      p.type === 'tool_call' && p.status === 'running',
+  )
+  const matchesRequired = (name: string) =>
+    step.requiredTools.includes(name) || (isInspectRole && inspectionEquivalents.has(name))
   const complete = step.requiredTools.length === 0
     ? fullContent.trim().length > 0
-    : okTools.some(part => step.requiredTools.includes(part.name))
+    : okTools.some(part => matchesRequired(part.name)) ||
+      inFlightTools.some(part => matchesRequired(part.name))
   if (complete) return { complete: true }
   if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
     const summary = summarizeRoundForBlock(parts, fullContent)

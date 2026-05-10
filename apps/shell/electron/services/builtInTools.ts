@@ -6,6 +6,22 @@ import { resolve as resolvePath, basename, dirname } from 'node:path'
 import type { McpToolDescriptor, CallToolError, CallToolResult } from './mcpSupervisor'
 import { COMMAND_ALLOWLIST, DEVSERVER_COMMAND_ALLOWLIST } from './runtimeEnvironment'
 
+// Bundled ripgrep — works regardless of whether the user has `rg` on PATH.
+// Resolved lazily so a missing/corrupt install surfaces as a clear error
+// instead of crashing the main process at import time.
+let cachedRgPath: string | null | undefined
+function resolveBundledRgPath(): string | null {
+  if (cachedRgPath !== undefined) return cachedRgPath
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('@vscode/ripgrep') as { rgPath?: string }
+    cachedRgPath = mod.rgPath && existsSync(mod.rgPath) ? mod.rgPath : null
+  } catch {
+    cachedRgPath = null
+  }
+  return cachedRgPath
+}
+
 const MAX_OUTPUT_CHARS = 24_000
 const MAX_DEVSERVER_LOG_CHARS = 12_000
 const MAX_FILE_READ_CHARS = 80_000
@@ -418,12 +434,33 @@ class BuiltInTools {
     return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS, ...PREVIEW_TOOLS]
   }
 
+  /**
+   * Recover the canonical Ava tool name from a possibly-sanitized version.
+   * The OpenAI adapter sanitizes dots to underscores when sending tools to
+   * LM Studio (because the OpenAI tool-calling spec forbids dots in names).
+   * Reverse-mapping is supposed to happen in the adapter, but if a model
+   * emits a sanitized name for a tool not exposed to the current step, the
+   * adapter's per-request inverse map misses and we get here with e.g.
+   * `shell_run_command` instead of `shell.run_command`. All built-in names
+   * follow `<category>.<snake_name>`, so converting the FIRST underscore to
+   * a dot is unambiguous.
+   */
+  private canonicalizeToolName(name: string): string {
+    if (!name) return name
+    if (name.includes('.')) return name
+    if (!name.includes('_')) return name
+    const guess = name.replace('_', '.')
+    return this.listTools().some(t => t.name === guess) ? guess : name
+  }
+
   resolveTool(name: string): { serverId: string; rawName: string } | null {
-    const tool = this.listTools().find(item => item.name === name)
+    const canonical = this.canonicalizeToolName(name)
+    const tool = this.listTools().find(item => item.name === canonical)
     return tool ? { serverId: 'builtin', rawName: tool.rawName } : null
   }
 
-  async callTool(name: string, rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+  async callTool(rawName: string, rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const name = this.canonicalizeToolName(rawName)
     try {
       if (name === SHELL_TOOL.name) return this.callRunCommand(rawArgs, context)
       if (name === 'file.read_text') return this.readText(rawArgs, context)
@@ -531,20 +568,71 @@ class BuiltInTools {
   private async writeText(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
     const parsed = parsePathArg(rawArgs)
     if (!parsed.ok) return { ok: false, error: parsed.error }
-    const content = typeof rawArgs.content === 'string' ? rawArgs.content : null
-    if (content === null) return { ok: false, error: 'file.write_text requires "content" as a string.' }
+    let content: string | null = typeof rawArgs.content === 'string' ? rawArgs.content : null
+
+    // Tolerance: models often pass JSON-file content as an object literal
+    // instead of a stringified JSON. For *.json / *.jsonc paths, auto-encode
+    // it. For other paths, keep strict rejection — we don't want to
+    // accidentally JSON.stringify .ts/.tsx code.
+    if (content === null && rawArgs.content && typeof rawArgs.content === 'object') {
+      const lowerPath = parsed.path.toLowerCase()
+      if (lowerPath.endsWith('.json') || lowerPath.endsWith('.jsonc')) {
+        try {
+          content = JSON.stringify(rawArgs.content, null, 2)
+        } catch {
+          content = null
+        }
+      }
+    }
+
+    if (content === null) {
+      const got = rawArgs.content
+      const gotType = got === null ? 'null' : Array.isArray(got) ? 'array' : typeof got
+      const preview = (() => {
+        try {
+          const s = JSON.stringify(got)
+          return s ? (s.length > 120 ? s.slice(0, 120) + '…' : s) : '<empty>'
+        } catch { return '<unstringifiable>' }
+      })()
+      return {
+        ok: false,
+        error: [
+          `file.write_text requires args.content to be a STRING (the full file body as plain text).`,
+          `Received content of type "${gotType}", value: ${preview}.`,
+          `Correct call shape: { "path": "<absolute or project-relative path>", "content": "<the entire file as a single string>" }.`,
+          `For source code (.ts/.tsx/.js/.css/.html etc.) pass the file text directly as a single string — do NOT wrap it in an object.`,
+        ].join(' '),
+      }
+    }
     const guard = validatePathAccess(parsed.path, context)
     if (guard) return { ok: false, error: guard }
 
+    const absolutePath = resolvePath(parsed.path)
+    const fileExisted = existsSync(absolutePath)
+    const overwriteRequested = rawArgs.overwrite === true
+
+    // Existing-file policy: allow the overwrite (otherwise the model loops
+    // when it can't figure out how to switch to file.patch), but signal
+    // explicitly in the result that the file already existed. The model
+    // sees a successful tool call AND a "you just overwrote an existing
+    // file — for surgical edits use file.patch" hint, which is a stronger
+    // teaching signal than a hard refusal that the model just retries.
     if (rawArgs.createDirs !== false) {
-      await mkdir(dirname(resolvePath(parsed.path)), { recursive: true })
+      await mkdir(dirname(absolutePath), { recursive: true })
     }
-    await writeFile(parsed.path, content, 'utf8')
+    await writeFile(absolutePath, content, 'utf8')
+    const action = fileExisted ? 'overwritten' : 'created'
+    const note = fileExisted && !overwriteRequested
+      ? 'NOTE: this path already existed — you just OVERWROTE the entire file. For incremental edits prefer file.patch (oldText/newText). Do NOT call file.write_text again on this same path in this step; you already wrote it.'
+      : undefined
     return {
       ok: true,
       content: {
-        path: resolvePath(parsed.path),
+        path: absolutePath,
         bytes: Buffer.byteLength(content, 'utf8'),
+        action,
+        existed: fileExisted,
+        ...(note ? { note } : {}),
       },
     }
   }
@@ -577,8 +665,34 @@ class BuiltInTools {
     const guard = validatePathAccess(parsed.path, context)
     if (guard) return { ok: false, error: guard }
 
-    await mkdir(parsed.path, { recursive: true })
-    return { ok: true, content: { path: resolvePath(parsed.path), created: true } }
+    const absolutePath = resolvePath(parsed.path)
+    const existedBefore = existsSync(absolutePath)
+    const allowExisting = rawArgs.allowExisting === true
+
+    // Hard rule (mirrors file.write_text): mkdir -p silently succeeds on
+    // already-existing directories, which gives the model no signal that
+    // it's repeating itself. Refuse by default so the model gets a clear
+    // "stop / move on" error instead of looping on create_dir.
+    if (existedBefore && !allowExisting) {
+      return {
+        ok: false,
+        error: [
+          `file.create_dir refused: "${absolutePath}" already exists.`,
+          'The directory is already there — proceed to write files inside it with file.write_text, or move on to the next step.',
+          'Pass allowExisting:true if you genuinely want to no-op confirm the directory exists.',
+        ].join(' '),
+      }
+    }
+
+    await mkdir(absolutePath, { recursive: true })
+    return {
+      ok: true,
+      content: {
+        path: absolutePath,
+        action: existedBefore ? 'already_exists' : 'created',
+        existed: existedBefore,
+      },
+    }
   }
 
   private async statPath(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
@@ -727,8 +841,9 @@ class BuiltInTools {
     }
     args.push(query, '.')
 
+    const rgCommand = resolveBundledRgPath() ?? 'rg'
     const result = await this.runCommand({
-      command: 'rg',
+      command: rgCommand,
       args,
       cwd: parsed.cwd,
       timeoutMs: 30_000,
