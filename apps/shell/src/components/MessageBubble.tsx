@@ -196,7 +196,16 @@ function renderParts(parts: ContentPart[], opts: { isUser: boolean; isError: boo
         )
       }
       if (!part.text) return <span key={idx} />
-      return <MarkdownContent key={idx} content={part.text} />
+      // Strip raw Hermes-style <tool_call>…</tool_call> blocks (and trailing
+      // open <tool_call> with no close) — these are the model's tool-call
+      // payloads leaking into chat text. Real tool calls are rendered by
+      // ToolCallBubble; the raw text version is noise that breaks markdown.
+      const cleaned = part.text
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+        .replace(/<tool_call>[\s\S]*$/g, '')
+        .trim()
+      if (!cleaned) return <span key={idx} />
+      return <MarkdownContent key={idx} content={cleaned} />
     }
     if (part.type === 'image_url') {
       return (

@@ -41,6 +41,18 @@ export function buildExecutorSystemPrompt(input: ExecutorInput): string {
     `Allowed Tools: ${input.step.requiredTools.join(', ') || 'All tools allowed'}`,
   ]
 
+  // Architectural constraints captured by the analyze phase. These are the
+  // user-confirmed visual style / framework / persistence decisions — feature
+  // steps MUST honor them or the result drifts back into a generic template.
+  if (input.plan.architectureConstraints && input.plan.architectureConstraints.trim()) {
+    sections.push([
+      'Constraints (from confirmed analysis — DO NOT DEVIATE):',
+      input.plan.architectureConstraints.trim(),
+      '',
+      'When the constraints contain a `visualStyle` JSON block, use those exact hex values, typography, spacing rhythm, radius/shadow, motion intensity, and grid layout. Do not invent your own palette or font choices.',
+    ].join('\n'))
+  }
+
   if (requiresWrite(input.step)) {
     sections.push([
       'This step expects a write/create tool call to make progress.',

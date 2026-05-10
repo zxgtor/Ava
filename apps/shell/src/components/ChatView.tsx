@@ -201,7 +201,12 @@ function pendingWithAnswer(pending: PendingTaskIntake, answer: string): PendingT
 }
 
 function hasWorkingDirectoryQuestion(analysis?: ProjectAnalysis): boolean {
+  // Only count it as "already asked" if there's a HIGH-importance folder question.
+  // Otherwise nextClarification (which filters to high) would skip a low/medium
+  // folder question and silently fall through to the confirm card without ever
+  // asking the user where to create the project.
   return Boolean(analysis?.unknowns.some(item =>
+    item.importance === 'high' &&
     /(working\s*directory|project\s*(folder|directory|path|location)|where.*(create|use)|folder|directory|path|工作目录|项目.*(目录|路径|位置)|创建.*(目录|路径|位置))/i.test(item.question),
   ))
 }

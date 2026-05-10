@@ -40,25 +40,64 @@ export interface PlannerInput {
 
 export async function runAnalyzePhase(input: PlannerInput): Promise<ProjectAnalysis | null> {
   const streamId = `analyze_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  
+
   const historyText = input.messages
     ? input.messages.slice(-10).map(m => `${m.role.toUpperCase()}: ${partsToText(m.content)}`).join('\n\n')
     : ''
 
-  const systemPrompt = [
+  // Extract design assets from the most recent user message:
+  // - image_url parts (mockups / screenshots) for vision-capable models
+  // - inline HTML reference (<!DOCTYPE / <html or <reference> blocks)
+  const lastUserMessage = [...(input.messages ?? [])].reverse().find(m => m.role === 'user')
+  const imageUrls: string[] = []
+  let referenceHtml = ''
+  if (lastUserMessage && Array.isArray(lastUserMessage.content)) {
+    for (const part of lastUserMessage.content) {
+      if (part.type === 'image_url' && part.image_url?.url) imageUrls.push(part.image_url.url)
+      if (part.type === 'text' && typeof part.text === 'string') {
+        const htmlMatch = part.text.match(/(<!DOCTYPE[\s\S]*?<\/html>|<html[\s\S]*?<\/html>|<reference[\s\S]*?<\/reference>)/i)
+        if (htmlMatch) referenceHtml = htmlMatch[0].slice(0, 8000)
+      }
+    }
+  }
+
+  // Vision capability lookup: if any provider/model on the active set is vision-capable, allow images.
+  const caps = input.settings.modelCapabilityMap || {}
+  const hasVisionModel = input.providers.some(p => {
+    const key = `${p.id}:${p.defaultModel}`
+    return caps[key]?.vision === 'yes'
+  })
+
+  const systemSections = [
     ANALYZE_TEMPLATE,
     `Conversation History:\n${historyText}`,
     `Context Budget: ${input.contextBudget} tokens. Ask only the questions required to make a safe executable plan for this budget.`,
     `Goal: ${input.goal}`,
-    `Working directory: ${input.workingDirectory || '(none)'}`
-  ].join('\n\n')
+    `Working directory: ${input.workingDirectory || '(none)'}`,
+  ]
+  if (referenceHtml) {
+    systemSections.push(`Reference HTML (treat as ground-truth design):\n${referenceHtml}`)
+  }
+  if (imageUrls.length > 0 && !hasVisionModel) {
+    systemSections.push('NOTE: User attached image(s) but the current model is not vision-capable. Add a high-importance unknown asking the user to describe the design in words.')
+  }
+  const systemPrompt = systemSections.join('\n\n')
+
+  // Build multimodal user content if vision-capable + images present.
+  const userContent: any =
+    imageUrls.length > 0 && hasVisionModel
+      ? [
+          { type: 'text', text: 'Please begin the project analysis. Use the attached image(s) as the visual ground truth.' },
+          ...imageUrls.map(url => ({ type: 'image_url', image_url: { url } })),
+        ]
+      : 'Please begin the project analysis.'
 
   try {
     const reply = await window.ava.llm.stream({
       streamId,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: 'Please begin the project analysis.' }
+        { role: 'user', content: userContent }
       ],
       providers: input.providers,
       temperature: 0.1,
@@ -140,6 +179,7 @@ export async function runPlanPhase(input: PlannerInput, analysis: ProjectAnalysi
         role: normalizeRole(s.role),
       })),
       validation: { devServerChecked: false, consoleChecked: false, screenshotChecked: false, buildChecked: false },
+      architectureConstraints: typeof analysis?.architecture === 'string' ? analysis.architecture : undefined,
       createdAt: now,
       updatedAt: now,
     }

@@ -23,14 +23,21 @@ export function isCodingDesignBigTask(content: string): boolean {
 }
 
 export function extractWorkingDirectoryFromText(content: string): string | undefined {
-  const match = content.match(/[A-Za-z]:[\\/][^\r\n"'`<>|]+/)
-  return match?.[0]?.trim().replace(/[.,;:，。；：]+$/, '')
+  // 1. Quoted/backticked path wins (lets user encode spaces, e.g. "C:\Program Files\X").
+  const quoted = content.match(/["'`]([A-Za-z]:[\\/][^"'`\r\n]+)["'`]/)
+  if (quoted?.[1]) return quoted[1].trim().replace(/[.,;:，。；：]+$/, '')
+
+  // 2. Bare path: stop at whitespace or any punctuation that doesn't belong in a path.
+  // Allowed: letters, digits, _, -, ., space-not-included, slashes, backslashes, parens.
+  const bare = content.match(/[A-Za-z]:[\\/][\w./\\()-]+/)
+  return bare?.[0]?.trim().replace(/[.,;:，。；：]+$/, '')
 }
 
 export function createCodingDesignTaskPlan(input: {
   taskId: string
   goal: string
   workingDirectory?: string
+  architectureConstraints?: string
 }): TaskExecutionPlan {
   const now = Date.now()
   return {
@@ -40,6 +47,7 @@ export function createCodingDesignTaskPlan(input: {
     workingDirectory: input.workingDirectory || '(no active folder)',
     kind: 'coding-design',
     currentStepId: 'inspect_project',
+    architectureConstraints: input.architectureConstraints,
     validation: {
       devServerChecked: false,
       consoleChecked: false,
@@ -97,7 +105,6 @@ export async function generateDynamicTaskPlan(input: {
   traits?: string[]
   messages?: Message[]
 }): Promise<TaskExecutionPlan> {
-  const fallbackPlan = createCodingDesignTaskPlan(input)
   const contextBudget = planningContextBudgetForProviders(input.providers, input.traits)
 
   // Phase 1: Analyze only before user confirmation. After the user confirms
@@ -137,6 +144,12 @@ export async function generateDynamicTaskPlan(input: {
   }
 
   console.warn('Dynamic planning failed, using fallback plan')
+  const fallbackPlan = createCodingDesignTaskPlan({
+    taskId: input.taskId,
+    goal: input.goal,
+    workingDirectory: input.workingDirectory,
+    architectureConstraints: typeof analysis?.architecture === 'string' ? analysis.architecture : undefined,
+  })
   return normalizeTaskExecutionPlan(fallbackPlan)
 }
 

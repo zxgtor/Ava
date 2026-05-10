@@ -249,7 +249,11 @@ export function PromptInput({
     const files = e.dataTransfer.files
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
-      if (file.type.startsWith('image/')) addAttachment(file)
+      // Accept images plus any text-like file (html, md, css, json, …).
+      // addAttachment itself decides how to read each one.
+      const isText = file.type.startsWith('text/') ||
+                     /\.(txt|md|js|ts|tsx|jsx|json|css|scss|less|html?|svg|py|go|rs|c|cpp|h|sh|yml|yaml|xml)$/i.test(file.name)
+      if (file.type.startsWith('image/') || isText) addAttachment(file)
     }
   }
 
@@ -269,8 +273,8 @@ export function PromptInput({
       reader.readAsDataURL(file)
     } else {
       // For text files, try to read content
-      const isText = type.startsWith('text/') || 
-                     /\.(txt|md|js|ts|tsx|json|css|py|go|rs|c|cpp|h|sh|yml|yaml|xml)$/i.test(name)
+      const isText = type.startsWith('text/') ||
+                     /\.(txt|md|js|ts|tsx|jsx|json|css|scss|less|html?|svg|py|go|rs|c|cpp|h|sh|yml|yaml|xml)$/i.test(name)
       
       if (isText && size < 1024 * 1024) { // Limit to 1MB
         const reader = new FileReader()

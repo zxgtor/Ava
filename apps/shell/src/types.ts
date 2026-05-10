@@ -111,6 +111,11 @@ export interface TaskExecutionPlan {
   currentStepId?: string
   steps: TaskExecutionStep[]
   validation: TaskExecutionValidation
+  /** Architectural constraints captured by the analyze phase (framework,
+   *  visualStyle JSON, layout, persistence, etc). Injected into the executor
+   *  system prompt as Constraints so feature steps don't drift from the
+   *  user's confirmed design. */
+  architectureConstraints?: string
   createdAt: number
   updatedAt: number
 }
