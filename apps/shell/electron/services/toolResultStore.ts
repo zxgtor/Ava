@@ -4,6 +4,8 @@ import { dirname, resolve as resolvePath } from 'node:path'
 
 const CONTEXT_RESULT_LIMIT_CHARS = 30_000
 const FIELD_PREVIEW_CHARS = 12_000
+const NESTED_FIELD_PREVIEW_CHARS = 2_000
+const MAX_COMPACT_DEPTH = 8
 const EMPTY_TOOL_OUTPUT = '(tool completed with no output)'
 
 export interface PersistedToolResultRef {
@@ -81,9 +83,9 @@ async function persistToolResult(
 
 async function writableToolResultBaseDir(activeFolderPath?: string): Promise<string> {
   const candidates = [
-    activeFolderPath ? resolvePath(activeFolderPath, '.ava', 'tool-results') : '',
     process.env.APPDATA ? resolvePath(process.env.APPDATA, 'Ava', 'tool-results') : '',
     resolvePath(tmpdir(), 'ava-tool-results'),
+    activeFolderPath ? resolvePath(activeFolderPath, '.ava', 'tool-results') : '',
   ].filter(Boolean)
 
   for (const candidate of candidates) {
@@ -113,24 +115,51 @@ function compactContent(content: unknown, persistedOutput: PersistedToolResultRe
     }
   }
 
-  const output = { ...(content as Record<string, unknown>) }
-  for (const key of Object.keys(output)) {
-    const value = output[key]
-    if (typeof value === 'string' && value.length > FIELD_PREVIEW_CHARS) {
-      output[key] = previewText(value, FIELD_PREVIEW_CHARS)
-      output[`${key}Truncated`] = true
-    }
-  }
+  const output = compactNestedValue(content, 0) as Record<string, unknown>
   output.persistedOutput = persistedOutput
   output.truncated = true
   return output
 }
 
 function hasLargeTextField(content: unknown): boolean {
-  if (!content || typeof content !== 'object' || Array.isArray(content)) return false
-  return Object.values(content as Record<string, unknown>).some(value =>
-    typeof value === 'string' && value.length > FIELD_PREVIEW_CHARS,
-  )
+  return hasLargeTextFieldDeep(content, 0)
+}
+
+function hasLargeTextFieldDeep(content: unknown, depth: number): boolean {
+  if (typeof content === 'string') return content.length > FIELD_PREVIEW_CHARS
+  if (!content || typeof content !== 'object') return false
+  if (depth >= MAX_COMPACT_DEPTH) return safeJsonStringify(content).length > FIELD_PREVIEW_CHARS
+  if (Array.isArray(content)) return content.some(item => hasLargeTextFieldDeep(item, depth + 1))
+  return Object.values(content as Record<string, unknown>).some(value => hasLargeTextFieldDeep(value, depth + 1))
+}
+
+function compactNestedValue(value: unknown, depth: number): unknown {
+  if (typeof value === 'string') {
+    return value.length > NESTED_FIELD_PREVIEW_CHARS
+      ? previewText(value, NESTED_FIELD_PREVIEW_CHARS)
+      : value
+  }
+  if (!value || typeof value !== 'object') return value
+  if (depth >= MAX_COMPACT_DEPTH) {
+    return {
+      preview: previewText(safeJsonStringify(value), NESTED_FIELD_PREVIEW_CHARS),
+      truncated: true,
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => compactNestedValue(item, depth + 1))
+  }
+
+  const output: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof child === 'string' && child.length > NESTED_FIELD_PREVIEW_CHARS) {
+      output[key] = previewText(child, NESTED_FIELD_PREVIEW_CHARS)
+      output[`${key}Truncated`] = true
+    } else {
+      output[key] = compactNestedValue(child, depth + 1)
+    }
+  }
+  return output
 }
 
 function previewText(text: string, limit: number): string {

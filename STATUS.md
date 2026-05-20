@@ -206,13 +206,14 @@ _Last updated: 2026-05-03 · Project Map + Local LLM Planning_
   - 测试通过真实 `ava.llm.stream`，由 LLM 生成 tool_call，再根据 tool result 显示 pass/fail
   - MCP/Skill 也可用同一页面做手动/半自动 smoke test
 
-- [ ] **Task Execution v2 P0 Review Addendum（执行前置修正）**：
+- [x] **Task Execution v2 P0 Review Addendum（执行前置修正）**：
   - 已追加到 `docs/superpowers/plans/2026-05-08-task-execution-v2-fixes.md`
   - [x] P0.1 step completion gate：`write_core_files` 需要编辑证据 + 项目验证证据，duplicate ignored 不再算成功
-  - [x] P0.2 shell output 完整持久化：`shell.run_command` 全量写入 `.ava/command-logs`，工具结果只返回 preview + `outputLogPath`
-  - 统一 tool progress/recovery policy，避免 main/renderer 对“有进展”的判断不一致
-  - duplicate tool call 需要先 dedupe，再进入 stale/error handling
-  - tool result compaction 需要处理嵌套大输出
+  - [x] P0.2 shell output 完整持久化：`shell.run_command` 全量写入 Ava app data command logs，工具结果只返回 preview + `outputLogPath`
+  - [x] P0.3 统一 tool progress/recovery policy：main `llm.ts` 和 renderer `agentRuntime.ts` 共用 `shared/agentProgressPolicy`
+  - [x] P0.4 duplicate tool call 先 dedupe，再进入 stale/error handling，避免重复 stale call 消耗 loop
+  - [x] P0.5 tool result compaction 递归处理嵌套大输出，避免 nested logs 重新塞回上下文
+  - [x] P0.6 持久化工具产物默认写入 Ava app data，避免污染用户项目 `.ava`
 
 ---
 

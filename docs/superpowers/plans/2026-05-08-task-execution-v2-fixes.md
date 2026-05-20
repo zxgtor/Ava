@@ -52,7 +52,7 @@ Tests to add/update:
 - A command producing output larger than `MAX_OUTPUT_CHARS` must return compact preview and a persisted full output reference.
 - The persisted file must contain text beyond the compact preview.
 
-- [ ] **P0.3 Centralize progress/recovery semantics**
+- [x] **P0.3 Centralize progress/recovery semantics**
 
 Current risk: `llm.ts` counts `project.map/file.stat/project.detect` as step progress, while renderer recovery only continues after file write/patch progress. This can create silent or inconsistent stops.
 
@@ -70,7 +70,7 @@ Tests to add/update:
 - Inspect progress (`project.map`) and file progress (`file.write_text`) produce consistent recovery behavior.
 - Tool loop limit after non-progress blocks with a useful reason.
 
-- [ ] **P0.4 Dedupe duplicate tool calls before stale/error handling**
+- [x] **P0.4 Dedupe duplicate tool calls before stale/error handling**
 
 Current risk: duplicate tool call ids are checked after stale/final-report-budget validation. A repeated stale tool call can still emit repeated stale errors and burn loop budget.
 
@@ -86,7 +86,7 @@ Tests to add/update:
 - Repeated stale tool call id is ignored after first resolution.
 - Ignored duplicate tool call does not advance the active step.
 
-- [ ] **P0.5 Recursively compact nested tool results**
+- [x] **P0.5 Recursively compact nested tool results**
 
 Current risk: `compactContent` only truncates top-level string fields. Nested logs or nested arrays can still be injected into the next LLM context.
 
@@ -101,7 +101,7 @@ Tests to add/update:
 - Nested large string fields are compacted.
 - Arrays/objects over the size threshold do not exceed the context-safe preview size.
 
-- [ ] **P0.6 Decide where persisted tool artifacts live**
+- [x] **P0.6 Decide where persisted tool artifacts live**
 
 Current risk: project-local `.ava/tool-results` may pollute user projects and Git status.
 

@@ -43,6 +43,11 @@ interface UnitTestLogEntry {
   fullContent?: string
 }
 
+interface LlmPreflightResult {
+  ok: boolean
+  error?: string
+}
+
 function defaultBuiltInRequest(toolName: string, cwd: string): string {
   const testDir = `${cwd}\\.ava-unit-test`
   const testFile = `${testDir}\\tool-write.txt`
@@ -240,7 +245,52 @@ export function UnitTestView() {
     }))
   }
 
-  const runTarget = async (target: TestTarget) => {
+  const checkLlmAvailable = useCallback(async (): Promise<LlmPreflightResult> => {
+    const providers = state.settings.modelProviders.filter(provider => provider.enabled)
+    if (providers.length === 0) {
+      return { ok: false, error: 'No enabled LLM provider. Enable a provider in Settings before running Unit Test.' }
+    }
+
+    const errors: string[] = []
+    for (const provider of providers) {
+      if (!provider.baseUrl) {
+        errors.push(`${provider.name}: missing baseUrl`)
+        continue
+      }
+      try {
+        const result = await window.ava.llm.probe({
+          baseUrl: provider.baseUrl,
+          apiKey: provider.apiKey,
+          providerId: provider.id,
+        })
+        if (result.ok) return { ok: true }
+        errors.push(`${provider.name}: ${result.error}`)
+      } catch (err) {
+        errors.push(`${provider.name}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    return {
+      ok: false,
+      error: [
+        'LLM server unavailable. Start LM Studio / Ollama / provider server, then run Unit Test again.',
+        errors.length ? `Provider check: ${errors.join('; ')}` : '',
+      ].filter(Boolean).join(' '),
+    }
+  }, [state.settings.modelProviders])
+
+  const markTargetsWaitingForLlm = (items: TestTarget[], message: string) => {
+    setTests(prev => {
+      const next = { ...prev }
+      for (const target of items) {
+        const request = next[target.id]?.request || target.defaultRequest
+        next[target.id] = { ...next[target.id], request, status: 'idle', message }
+      }
+      return next
+    })
+  }
+
+  const runTarget = async (target: TestTarget, options: { skipPreflight?: boolean } = {}) => {
     const request = tests[target.id]?.request || target.defaultRequest
     const startedAt = Date.now()
     const streamId = `ut_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -285,6 +335,13 @@ export function UnitTestView() {
     if (!cwd) {
       failBeforeStream('No test cwd available.')
       return
+    }
+    if (!options.skipPreflight) {
+      const preflight = await checkLlmAvailable()
+      if (!preflight.ok) {
+        failBeforeStream(preflight.error ?? 'LLM server unavailable.')
+        return
+      }
     }
 
     setTests(prev => ({ ...prev, [target.id]: { request, status: 'running', message: 'Waiting for LLM/tool result...' } }))
@@ -404,10 +461,19 @@ export function UnitTestView() {
   }
 
   const runVisibleTargets = async () => {
+    setError(null)
+    const preflight = await checkLlmAvailable()
+    if (!preflight.ok) {
+      const message = preflight.error ?? 'LLM server unavailable.'
+      setError(message)
+      markTargetsWaitingForLlm(visibleTargets, message)
+      return
+    }
+
     for (const target of visibleTargets) {
       setSelectedId(target.id)
       try {
-        await runTarget(target)
+        await runTarget(target, { skipPreflight: true })
       } catch (err) {
         const request = tests[target.id]?.request || target.defaultRequest
         setTests(prev => ({

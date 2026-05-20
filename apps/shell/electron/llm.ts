@@ -17,7 +17,8 @@ import { AnthropicAdapter } from './adapters/anthropic'
 import { LlmAdapter } from './adapters/base'
 import { classifyToolError } from './services/toolErrorClassifier'
 import { compactToolResultForContext, type PersistedToolResultRef } from './services/toolResultStore'
-import { toolRuntime } from './services/toolRuntime'
+import { duplicateToolResultPatch, toolRuntime } from './services/toolRuntime'
+import { madeStepProgress } from '../shared/agentProgressPolicy'
 
 export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
@@ -1782,16 +1783,18 @@ async function runToolLoop(
       sendRunStatus(webContents, args, provider, model, 'tool_running')
 
       const partIndex = parts.length
+      const duplicateToolCall = toolRuntime.hasResolvedToolCall(args.streamId, toolCall.id)
       const finalReportBudgetReason =
+        !duplicateToolCall &&
         finalReportReadBudget !== undefined &&
         isFinalReportReadTool(toolCall.name) &&
         finalReportReadCalls >= finalReportReadBudget
           ? finalReportBudgetError(finalReportReadBudget)
           : null
-      if (finalReportReadBudget !== undefined && isFinalReportReadTool(toolCall.name) && !finalReportBudgetReason) {
+      if (!duplicateToolCall && finalReportReadBudget !== undefined && isFinalReportReadTool(toolCall.name) && !finalReportBudgetReason) {
         finalReportReadCalls += 1
       }
-      const staleReason = finalReportBudgetReason ?? validateToolAgainstCurrentTask(toolCall, currentTask)
+      const staleReason = duplicateToolCall ? null : finalReportBudgetReason ?? validateToolAgainstCurrentTask(toolCall, currentTask)
       const builtInTool = builtInTools.resolveTool(toolCall.name)
       const resolvedTool = builtInTool ?? mcpSupervisor.resolveTool(toolCall.name)
       const serverRuntime = resolvedTool && !builtInTool ? mcpSupervisor.getServer(resolvedTool.serverId) : null
@@ -1809,6 +1812,18 @@ async function runToolLoop(
       parts.push(toolPart)
 
       toolRuntime.sendToolStarted(webContents, args, partIndex, toolPart)
+
+      if (duplicateToolCall) {
+        const duplicatePatch = duplicateToolResultPatch()
+        Object.assign(toolPart, duplicatePatch)
+        toolRuntime.sendToolResult(webContents, args, partIndex, toolCall.id, duplicatePatch)
+        workingMessages.push({
+          role: 'tool',
+          toolCallId: toolCall.id,
+          content: JSON.stringify(duplicatePatch.result, null, 2),
+        })
+        continue
+      }
 
       if (staleReason) {
         toolRuntime.rememberResolvedToolCall(args.streamId, toolCall.id)
@@ -1829,25 +1844,6 @@ async function runToolLoop(
           role: 'tool',
           toolCallId: toolCall.id,
           content: JSON.stringify({ error: staleReason }, null, 2),
-        })
-        continue
-      }
-
-      if (toolRuntime.hasResolvedToolCall(args.streamId, toolCall.id)) {
-        const duplicatePatch: Partial<ToolCallPart> = {
-          endedAt: Date.now(),
-          status: 'ok',
-          result: {
-            ignored: true,
-            reason: 'Duplicate tool_call_id was already resolved for this stream; Ava ignored the late duplicate to avoid executing the same tool twice.',
-          },
-        }
-        Object.assign(toolPart, duplicatePatch)
-        toolRuntime.sendToolResult(webContents, args, partIndex, toolCall.id, duplicatePatch)
-        workingMessages.push({
-          role: 'tool',
-          toolCallId: toolCall.id,
-          content: JSON.stringify(duplicatePatch.result, null, 2),
         })
         continue
       }
@@ -1975,12 +1971,10 @@ async function runToolLoop(
     }
   }
 
-  const madeStepProgress = Boolean(args.activeStepRole) && parts.some(part =>
-    part.type === 'tool_call' &&
-    part.status === 'ok' &&
-    (part.name === 'file.write_text' || part.name === 'file.patch' || part.name === 'file.stat' || part.name === 'project.map' || part.name === 'project.detect'),
-  )
-  if (madeStepProgress) {
+  if (
+    args.activeStepRole &&
+    madeStepProgress(parts.filter((part): part is ToolCallPart => part.type === 'tool_call'))
+  ) {
     return {
       fullContent,
       parts,

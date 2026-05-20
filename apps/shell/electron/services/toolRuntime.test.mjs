@@ -20,7 +20,7 @@ const tempDir = await mkdtemp(join(tmpdir(), 'ava-tool-runtime-'))
 const compiledPath = join(tempDir, 'toolRuntime.mjs')
 await writeFile(compiledPath, compiled, 'utf8')
 
-const { ToolRuntime } = await import(pathToFileURL(compiledPath).href)
+const { ToolRuntime, duplicateToolResultPatch } = await import(pathToFileURL(compiledPath).href)
 
 test.after(async () => {
   await rm(tempDir, { recursive: true, force: true })
@@ -46,4 +46,11 @@ test('emits structured event alongside legacy status event', () => {
   assert.deepEqual(sent.map(item => item.channel), ['ava:llm:chunk', 'ava:llm:event'])
   assert.equal(sent[1].payload.type, 'text_delta')
   assert.equal(sent[1].payload.text, 'hello')
+})
+
+test('duplicate tool result patch is ignored and not a success signal', () => {
+  const patch = duplicateToolResultPatch()
+  assert.equal(patch.status, 'ok')
+  assert.equal(patch.result.ignored, true)
+  assert.match(patch.result.reason, /Duplicate tool_call_id/)
 })

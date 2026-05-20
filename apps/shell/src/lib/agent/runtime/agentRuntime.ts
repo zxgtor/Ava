@@ -1,18 +1,18 @@
 import type { ContentPart, TaskExecutionStep } from '../../../types'
+import {
+  successfulWriteProgress as sharedSuccessfulWriteProgress,
+  shouldContinueAfterToolLimitForRole,
+} from '../../../../shared/agentProgressPolicy'
 
 export function successfulWriteProgress(parts: ContentPart[]): number {
-  return parts.filter(part =>
-    part.type === 'tool_call' &&
-    part.status === 'ok' &&
-    (part.name === 'file.write_text' || part.name === 'file.patch'),
-  ).length
+  return sharedSuccessfulWriteProgress(parts.filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call'))
 }
 
 export function shouldContinueAfterToolLimit(parts: ContentPart[], activeStep?: TaskExecutionStep): boolean {
-  if (successfulWriteProgress(parts) === 0) return false
-  if (!activeStep) return true
-  const role = activeStep.role
-  return role === 'feature' || role === 'scaffold' || role === 'repair' || role === 'install'
+  return shouldContinueAfterToolLimitForRole(
+    parts.filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call'),
+    activeStep?.role,
+  )
 }
 
 export function toolProgressContinuationText(stepTitle: string, parts: ContentPart[]): string {

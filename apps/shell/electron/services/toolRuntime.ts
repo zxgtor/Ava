@@ -9,6 +9,17 @@ import type {
 
 const MAX_RESOLVED_TOOL_CALL_IDS = 1_000
 
+export function duplicateToolResultPatch(): Partial<ToolCallPart> {
+  return {
+    endedAt: Date.now(),
+    status: 'ok',
+    result: {
+      ignored: true,
+      reason: 'Duplicate tool_call_id was already resolved for this stream; Ava ignored the late duplicate to avoid executing the same tool twice.',
+    },
+  }
+}
+
 export class ToolRuntime {
   private resolvedToolCallIds: string[] = []
   private resolvedToolCallIdSet = new Set<string>()

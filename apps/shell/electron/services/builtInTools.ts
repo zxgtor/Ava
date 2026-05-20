@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve as resolvePath, basename, dirname } from 'node:path'
 
 import type { McpToolDescriptor, CallToolError, CallToolResult } from './mcpSupervisor'
@@ -1438,7 +1439,9 @@ function normalizeWriteTextContent(content: unknown, path: string): string | nul
 }
 
 async function commandOutputLogPath(args: RunCommandArgs): Promise<string> {
-  const dir = resolvePath(args.cwd, '.ava', 'command-logs')
+  const dir = process.env.APPDATA
+    ? resolvePath(process.env.APPDATA, 'Ava', 'command-logs')
+    : resolvePath(tmpdir(), 'ava-command-logs')
   await mkdir(dir, { recursive: true })
   const safeCommand = normalizeCommandName(args.command).replace(/[^a-z0-9_.-]/gi, '_') || 'command'
   return resolvePath(dir, `${Date.now()}-${safeCommand}-${randomUUID()}.log`)
