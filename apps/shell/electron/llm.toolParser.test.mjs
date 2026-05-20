@@ -8,18 +8,24 @@ import ts from 'typescript'
 
 const sourcePath = new URL('./llm.ts', import.meta.url)
 let source = await readFile(sourcePath, 'utf8')
-source = source.replace(/import[\s\S]*?from ['"]electron['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/mcpSupervisor['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/pluginManager['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/toolAuditLog['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/builtInTools['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/runtimeEnvironment['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/adapters\/openai['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/adapters\/anthropic['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/adapters\/base['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/toolErrorClassifier['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/toolResultStore['"];?\n/g, '')
-source = source.replace(/import[\s\S]*?from ['"]\.\/services\/toolRuntime['"];?\n/g, '')
+const stripImportFrom = (specifier) => {
+  source = source.replace(new RegExp(`import\\s+[\\s\\S]*?\\s+from\\s+['"]${specifier}['"]\\s*;?\\r?\\n`, 'g'), '')
+}
+[
+  'electron',
+  '\\.\\/services\\/mcpSupervisor',
+  '\\.\\/services\\/pluginManager',
+  '\\.\\/services\\/toolAuditLog',
+  '\\.\\/services\\/builtInTools',
+  '\\.\\/services\\/runtimeEnvironment',
+  '\\.\\/adapters\\/openai',
+  '\\.\\/adapters\\/anthropic',
+  '\\.\\/adapters\\/base',
+  '\\.\\/services\\/toolErrorClassifier',
+  '\\.\\/services\\/toolResultStore',
+  '\\.\\/services\\/toolRuntime',
+  '\\.\\.\\/shared\\/agentProgressPolicy',
+].forEach(stripImportFrom)
 source += `
 const mcpSupervisor = {};
 const pluginManager = {};
@@ -29,8 +35,12 @@ const toolRuntime = {};
 function runtimeEnvironmentPrompt(){ return '' }
 function classifyToolError(error){ return { kind: 'unknown', message: String(error), recoveryHint: '' } }
 async function compactToolResultForContext(content){ return { content, compacted: false } }
+function duplicateToolResultPatch(){ return null }
+function madeStepProgress(){ return false }
+function previewValue(value){ return String(value) }
 class OpenAiAdapter {}
 class AnthropicAdapter {}
+class LlmAdapter {}
 `
 
 const compiled = ts.transpileModule(source, {

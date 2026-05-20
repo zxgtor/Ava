@@ -1216,9 +1216,9 @@ git commit -m "chore(agent): remove dead validationHasFailureSignal stub, ToolRo
 
 ### Task 10: Verification
 
-**Files:** none modified — read-only verification.
+**Files:** verification tests only.
 
-- [ ] **Step 1: Run all agent tests**
+- [x] **Step 1: Run all agent tests**
 
 Run:
 ```bash
@@ -1228,15 +1228,18 @@ node apps/shell/src/lib/agent/taskExecutionPolicy.test.mjs
 ```
 Expected: PASS for all suites.
 
-- [ ] **Step 2: Run typecheck**
+- [x] **Step 2: Run typecheck**
 
 Run: `npm run typecheck --workspace=@ava/shell`
 Expected: PASS, no new errors vs baseline.
 
-- [ ] **Step 3: Run built-in tools smoke test**
+- [x] **Step 3: Run built-in tools smoke test**
 
 Run: `npm run test:builtins`
 Expected: PASS.
+
+Additional UI smoke run: `npm run test:e2e`
+Expected: PASS for app start, settings, Unit Test pane, preview console/screenshot.
 
 - [ ] **Step 4: Manual coding-task smoke**
 

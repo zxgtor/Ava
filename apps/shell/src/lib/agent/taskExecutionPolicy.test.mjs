@@ -68,8 +68,8 @@ test('validate steps have more than the default chat loop budget', () => {
   assert.equal(toolLoopBudgetForStep(validateStep), 30)
 })
 
-test('caps dynamic loop budgets at 50 rounds', () => {
-  assert.equal(toolLoopBudgetForStep(step('custom', 'Huge custom step', ['file.write_text']), 90), 50)
+test('caps dynamic loop budgets at 500 rounds', () => {
+  assert.equal(toolLoopBudgetForStep(step('custom', 'Huge custom step', ['file.write_text']), 900), 500)
 })
 
 test('keeps final report loop budget small', () => {
