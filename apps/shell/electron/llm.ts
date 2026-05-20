@@ -1980,7 +1980,7 @@ async function runToolLoop(
       parts,
       model,
       toolCallsIssued,
-      loopRounds: loopBudget,
+      loopRounds: effectiveBudget,
       detectedToolFormat,
       stopReason: 'tool_loop_limit',
     }

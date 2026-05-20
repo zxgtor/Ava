@@ -40,9 +40,6 @@ export function SettingsView() {
     refreshPlugins()
   }, [refreshPlugins])
 
-  const settingsRef = useRef(state.settings)
-  useEffect(() => { settingsRef.current = state.settings }, [state.settings])
-
   const update = useCallback(
     (producer: (draft: Settings) => Settings) => {
       const next = producer(structuredClone(settingsRef.current))
