@@ -52,9 +52,8 @@ export function Logo({ size = 24, className = '' }: Props) {
 
 export function SyntaxBrand({ className = '' }: { className?: string }) {
   return (
-    <div className={`ava-brand-mark ${className}`} aria-label="Ava">
+    <div className={`ava-brand-mark ${className}`} aria-label="Ava logo">
       <span className="ava-brand-brace">{'{'}</span>
-      <span className="ava-brand-name">ava</span>
       <span className="ava-brand-dot" />
       <span className="ava-brand-brace">{'}'}</span>
     </div>

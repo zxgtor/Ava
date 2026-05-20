@@ -12,6 +12,7 @@ import {
   extractMessageToolCalls,
   parseHermesToolCalls,
   stripResidualToolMarkup,
+  hasUnterminatedToolCallMarkup,
   ToolCallAccumulator
 } from '../llm'
 import { LlmAdapter, AdapterOptions } from './base'
@@ -328,7 +329,15 @@ export class OpenAiAdapter extends LlmAdapter {
       hiddenReasoningExceeded = true
     }
     let detected: ToolCallFormat = toolCalls.length > 0 ? 'openai' : 'none'
-    if (toolCalls.length === 0 && args.tools.length > 0) {
+    const truncatedHermesToolCall =
+      args.tools.length > 0 &&
+      (finishReason === 'length' || finishReason === 'max_tokens') &&
+      hasUnterminatedToolCallMarkup(visibleText)
+    if (truncatedHermesToolCall) {
+      toolCalls = []
+      detected = 'hermes'
+      finishReason = 'tool_call_truncated'
+    } else if (toolCalls.length === 0 && args.tools.length > 0) {
       const hermes = parseHermesToolCalls(visibleText)
       if (hermes.toolCalls.length > 0) {
         toolCalls = hermes.toolCalls

@@ -99,6 +99,10 @@ const TOOL_ALIASES: Record<string, string> = {
   'filesystem.read_file': 'filesystem.read_text_file',
 }
 
+function isBrokenPipeError(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && (err as NodeJS.ErrnoException).code === 'EPIPE')
+}
+
 /**
  * Resolve a command to an absolute/runnable form on Windows, where
  * `spawn('npx', ...)` without shell:true does not find `.cmd` shims.
@@ -310,6 +314,16 @@ export class McpSupervisor extends EventEmitter {
         }
       }
       transport.onerror = (err: unknown) => {
+        if (isBrokenPipeError(err)) {
+          const current = this.entries.get(serverId)
+          if (current) {
+            current.status = 'error'
+            current.lastError = 'server stdio pipe closed unexpectedly (EPIPE)'
+            this.broadcast(serverId)
+          }
+          console.warn(`[mcp] ${serverId} stdio pipe closed unexpectedly (EPIPE)`)
+          return
+        }
         console.warn(`[mcp] ${serverId} transport error:`, err)
       }
 

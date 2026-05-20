@@ -25,12 +25,22 @@ export function isCodingDesignBigTask(content: string): boolean {
 export function extractWorkingDirectoryFromText(content: string): string | undefined {
   // 1. Quoted/backticked path wins (lets user encode spaces, e.g. "C:\Program Files\X").
   const quoted = content.match(/["'`]([A-Za-z]:[\\/][^"'`\r\n]+)["'`]/)
-  if (quoted?.[1]) return quoted[1].trim().replace(/[.,;:，。；：]+$/, '')
+  if (quoted?.[1]) return sanitizeWorkingDirectoryPath(quoted[1])
 
   // 2. Bare path: stop at whitespace or any punctuation that doesn't belong in a path.
   // Allowed: letters, digits, _, -, ., space-not-included, slashes, backslashes, parens.
   const bare = content.match(/[A-Za-z]:[\\/][\w./\\()-]+/)
-  return bare?.[0]?.trim().replace(/[.,;:，。；：]+$/, '')
+  return bare ? sanitizeWorkingDirectoryPath(bare[0]) : undefined
+}
+
+export function sanitizeWorkingDirectoryPath(path: string): string | undefined {
+  const cleaned = path
+    .trim()
+    .replace(/[.,;:!?，。；：！？\])}]+$/g, '')
+    .trim()
+  if (!/^[A-Za-z]:[\\/]/.test(cleaned)) return undefined
+  if (/[<>|?*"]/.test(cleaned)) return undefined
+  return cleaned
 }
 
 export function createCodingDesignTaskPlan(input: {
@@ -55,17 +65,17 @@ export function createCodingDesignTaskPlan(input: {
       buildChecked: false,
     },
     steps: [
-      step('inspect_project', 'Inspect project state',
-        ['project.map', 'project.detect', 'file.list_dir', 'file.read_text', 'shell.run_command'],
-        ['project mapped'], 'inspect', 'research'),
+      step('inspect_project', 'Ensure target directory exists and inspect project state',
+        ['file.create_dir', 'project.map', 'project.detect', 'file.list_dir', 'file.read_text', 'shell.run_command'],
+        ['target directory exists', 'project mapped'], 'inspect', 'research'),
       step('setup_project', 'Initialize or complete project structure',
-        ['shell.run_command', 'file.create_dir', 'file.write_text'],
+        ['shell.run_command', 'process.start', 'process.wait', 'file.create_dir', 'file.write_text'],
         ['project structure ready'], 'scaffold', 'scaffold'),
       step('install_dependencies', 'Install or confirm required dependencies',
-        ['shell.run_command', 'project.detect'],
+        ['shell.run_command', 'process.start', 'process.wait', 'project.detect'],
         ['dependencies ready'], 'install', 'scaffold'),
       step('write_core_files', 'Write core app, 3D scene, loader, controls, and styles',
-        ['file.write_text', 'file.patch'],
+        ['file.write_text', 'file.patch', 'project.map', 'file.stat', 'file.read_text'],
         ['core files written'], 'feature', 'feature'),
       step('start_preview', 'Start development server',
         ['devserver.start'],
@@ -80,7 +90,7 @@ export function createCodingDesignTaskPlan(input: {
         ['file.patch', 'file.write_text', 'shell.run_command'],
         ['issues repaired'], 'repair', 'debug'),
       step('validate', 'Validate build or typecheck',
-        ['project.validate', 'shell.run_command'],
+        ['project.validate', 'shell.run_command', 'process.start', 'process.wait'],
         ['project validated'], 'validate', 'debug'),
       step('final_report', 'Report changed files, validation result, and remaining risks',
         [],
@@ -217,11 +227,13 @@ export function buildTaskStepPrompt(plan: TaskExecutionPlan, step: TaskExecution
     `Current step: ${step.id} - ${step.title}`,
     `Allowed/expected tools for this step: ${allowed}`,
     `Completion signals: ${step.completionSignals.join(', ')}`,
+    step.lastToolSummary ? `Previous attempt summary: ${step.lastToolSummary}` : '',
+    step.lastProcessId ? `Previous background process id: ${step.lastProcessId}. Check it with process.status/process.logs/process.wait before repeating work.` : '',
     finalReportAllowed
       ? 'Final report is allowed now. Include changed files, validation result, and remaining risks.'
       : 'Do not provide a final report yet. Complete only the current step, preferably with one necessary tool call.',
     'If a tool is needed, call the tool instead of describing what you will do.',
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 export function updatePlanValidation(plan: TaskExecutionPlan, parts: ContentPart[]): TaskExecutionValidation {
@@ -231,6 +243,7 @@ export function updatePlanValidation(plan: TaskExecutionPlan, parts: ContentPart
     if (part.name === 'preview.console') validation.consoleChecked = true
     if (part.name === 'preview.screenshot') validation.screenshotChecked = true
     if (part.name === 'project.validate') validation.buildChecked = true
+    if (part.name === 'process.wait' && processWaitSucceeded(part.result)) validation.buildChecked = true
     if (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args)) validation.buildChecked = true
   }
   return validation
@@ -243,19 +256,21 @@ export function evaluateStepCompletion(input: {
   fullContent: string
 }): { complete: boolean; blocked?: string; needsRepair?: string } {
   const { plan, step, parts, fullContent } = input
+  const effectiveStep = plan.steps.find(candidate => candidate.id === step.id) ?? step
   const role = stepRole(step)
 
-  // Diagnostic: surface what evaluateStepCompletion actually sees so we can
-  // tell whether a "step did not complete" failure is a real missing tool
-  // call vs. a part.status update race.
-  const _toolSummary = parts
-    .filter(p => p.type === 'tool_call')
-    .map(p => `${(p as any).name}=${(p as any).status}`)
-  console.warn(
-    `[ava-debug] evaluateStepCompletion step="${step.title}" role=${role} attempts=${step.attempts} required=[${step.requiredTools.join(',')}] tools=[${_toolSummary.join(' | ')}]`,
-  )
-
-  if (role === 'repair') return { complete: true }
+  if ((role === 'scaffold' || role === 'install') && requiresPackageJsonEvidence(step)) {
+    const okTools = okToolParts(parts)
+    if (hasPackageJsonEvidence(okTools)) return { complete: true }
+    if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" did not prove package.json exists after ${MAX_STEP_ATTEMPTS} attempt(s). It must create/read/detect package.json before moving on.${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    return { complete: false }
+  }
 
   if (role === 'final_report') {
     if (!finalValidationGateSatisfied(plan.validation, plan)) {
@@ -270,15 +285,22 @@ export function evaluateStepCompletion(input: {
   if (role === 'validate') {
     const okTools = okToolParts(parts)
     const failedValidate = failedToolParts(parts).filter(p =>
-      p.name === 'project.validate' || (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args))
+      p.name === 'project.validate' ||
+      (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args))
     )
+    const failedProcessWait = okTools.filter(p => p.name === 'process.wait' && !processWaitSucceeded(p.result))
+    const allFailedValidate = [...failedValidate, ...failedProcessWait]
 
-    if (okTools.some(p => p.name === 'project.validate' || (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args)))) {
+    if (okTools.some(p =>
+      p.name === 'project.validate' ||
+      (p.name === 'process.wait' && processWaitSucceeded(p.result)) ||
+      (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args))
+    )) {
       return { complete: true }
     }
 
-    if (failedValidate.length > 0) {
-      const errSummary = failedValidate
+    if (allFailedValidate.length > 0) {
+      const errSummary = allFailedValidate
         .map(p => p.error ?? JSON.stringify(p.result).slice(0, 600))
         .join('\n---\n')
       if (step.attempts >= MAX_VALIDATE_REPAIR_CYCLES) {
@@ -303,6 +325,34 @@ export function evaluateStepCompletion(input: {
     return { complete: false }
   }
 
+  if (role === 'feature') {
+    const okTools = okToolParts(parts)
+    if (featureStepHasCompletionEvidence(effectiveStep, okTools)) return { complete: true }
+    if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" did not verify completed file changes after ${MAX_STEP_ATTEMPTS} attempt(s). It must edit files and then verify the project state with project.map, file.stat, or file.read_text before moving on.${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    return { complete: false }
+  }
+
+  if (role === 'repair') {
+    const okTools = okToolParts(parts)
+    if (okTools.some(part => part.name === 'file.write_text' || part.name === 'file.patch' || (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args)))) {
+      return { complete: true }
+    }
+    if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" did not perform a repair action after ${MAX_STEP_ATTEMPTS} attempt(s). It must write, patch, or run a repair/validation command before moving on.${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    return { complete: false }
+  }
+
   const okTools = okToolParts(parts)
   // Inspect-role steps are satisfied by ANY successful read-only inspection
   // tool, not just the planner's preferred one. The planner's `requiredTools`
@@ -319,24 +369,13 @@ export function evaluateStepCompletion(input: {
   ])
   const isInspectRole = role === 'inspect'
 
-  // ── IPC race-condition workaround ──
-  // Renderer's part.status is updated via 'partUpdate' IPC events that may
-  // not arrive before evaluateStepCompletion runs. A required tool whose
-  // call we already started (status === 'running') is functionally a
-  // completion signal — the model emitted the tool call and the engine
-  // dispatched it. If the call later errors, the next attempt will surface
-  // it. Without this, valid steps get falsely marked "not complete" when
-  // they finish on the same micro-tick.
-  const inFlightTools = parts.filter(
-    (p): p is Extract<ContentPart, { type: 'tool_call' }> =>
-      p.type === 'tool_call' && p.status === 'running',
-  )
   const matchesRequired = (name: string) =>
     step.requiredTools.includes(name) || (isInspectRole && inspectionEquivalents.has(name))
   const complete = step.requiredTools.length === 0
     ? fullContent.trim().length > 0
-    : okTools.some(part => matchesRequired(part.name)) ||
-      inFlightTools.some(part => matchesRequired(part.name))
+    : step.requiredTools.includes('process.wait')
+      ? okTools.some(part => part.name === 'process.wait' && processWaitSucceeded(part.result))
+      : okTools.some(part => matchesRequired(part.name))
   if (complete) return { complete: true }
   if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
     const summary = summarizeRoundForBlock(parts, fullContent)
@@ -346,6 +385,56 @@ export function evaluateStepCompletion(input: {
     }
   }
   return { complete: false }
+}
+
+export function recoverStepFromRound(plan: TaskExecutionPlan, stepId: string, parts: ContentPart[], fullContent: string): TaskExecutionPlan {
+  const recovery = taskStepRecovery(parts, fullContent)
+  const evidence = taskStepEvidence(parts)
+  if (!recovery && evidence.length === 0) return plan
+  return updateStep(plan, stepId, step => ({
+    ...step,
+    lastToolSummary: recovery?.summary ?? step.lastToolSummary,
+    lastProcessId: recovery?.processId ?? step.lastProcessId,
+    lastCommand: recovery?.command ?? step.lastCommand,
+    lastExitCode: recovery?.exitCode ?? step.lastExitCode,
+    lastRecoveredAt: Date.now(),
+    evidence: [...(step.evidence ?? []), ...evidence].slice(-20),
+  }))
+}
+
+function taskStepEvidence(parts: ContentPart[]): NonNullable<TaskExecutionStep['evidence']> {
+  return parts
+    .filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
+    .map(part => ({
+      toolName: part.name,
+      toolCallId: part.id,
+      status: part.status,
+      timestamp: part.endedAt ?? part.startedAt ?? Date.now(),
+      summary: toolEvidenceSummary(part),
+      processId: extractProcessId(part.result),
+      command: commandSummary(part),
+      exitCode: extractExitCode(part.result),
+      persistedOutputPath: extractPersistedOutputPath(part),
+    }))
+}
+
+export function taskStepRecovery(parts: ContentPart[], fullContent: string): {
+  summary: string
+  processId?: string
+  command?: string
+  exitCode?: number | null
+} | null {
+  const tools = parts.filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
+  if (tools.length === 0 && !fullContent.trim()) return null
+  const latestProcess = [...tools].reverse().find(p => p.name.startsWith('process.') || p.name === 'devserver.start')
+  const latestCommand = [...tools].reverse().find(p => p.name === 'shell.run_command' || p.name === 'process.start')
+  const view = latestProcess?.result ?? latestCommand?.result
+  return {
+    summary: summarizeRoundForBlock(parts, fullContent).slice(0, 1200),
+    processId: extractProcessId(view),
+    command: commandSummary(latestCommand),
+    exitCode: extractExitCode(view),
+  }
 }
 
 function summarizeRoundForBlock(parts: ContentPart[], fullContent: string): string {
@@ -469,8 +558,12 @@ function updateStep(
 
 function okToolParts(parts: ContentPart[]): Array<Extract<ContentPart, { type: 'tool_call' }>> {
   return parts.filter((part): part is Extract<ContentPart, { type: 'tool_call' }> =>
-    part.type === 'tool_call' && part.status === 'ok',
+    part.type === 'tool_call' && part.status === 'ok' && !toolResultWasIgnored(part.result),
   )
+}
+
+function toolResultWasIgnored(result: unknown): boolean {
+  return Boolean(result && typeof result === 'object' && (result as Record<string, unknown>).ignored === true)
 }
 
 function failedToolParts(parts: ContentPart[]): Array<Extract<ContentPart, { type: 'tool_call' }>> {
@@ -484,3 +577,107 @@ function looksLikeValidationCommand(args: Record<string, unknown>): boolean {
   return /\b(build|typecheck|test|lint|tsc)\b/i.test(rawArgs)
 }
 
+function processWaitSucceeded(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false
+  const record = result as Record<string, unknown>
+  return record.status === 'exited' && record.exitCode === 0
+}
+
+function requiresPackageJsonEvidence(step: TaskExecutionStep): boolean {
+  const text = `${step.id} ${step.title}`.toLowerCase()
+  if (/\b(init|initialize|setup|install|deps|dependencies|package|vite|npm)\b/.test(text)) return true
+  return step.requiredTools.some(tool => tool === 'project.detect' || tool === 'project.map')
+}
+
+function hasPackageJsonEvidence(parts: Array<Extract<ContentPart, { type: 'tool_call' }>>): boolean {
+  return parts.some(part => {
+    if ((part.name === 'file.read_text' || part.name === 'file.write_text' || part.name === 'file.stat') && pathArgEndsWithPackageJson(part.args)) {
+      return true
+    }
+    if (part.name === 'project.detect' || part.name === 'project.map') {
+      return projectResultIncludesPackageJson(part.result)
+    }
+    return false
+  })
+}
+
+function featureStepHasCompletionEvidence(
+  step: TaskExecutionStep,
+  currentOkTools: Array<Extract<ContentPart, { type: 'tool_call' }>>,
+): boolean {
+  const cumulative = [
+    ...(step.evidence ?? []).filter(evidence => evidence.status === 'ok'),
+    ...currentOkTools.map(part => ({ toolName: part.name })),
+  ]
+  const hasEdit = cumulative.some(evidence =>
+    evidence.toolName === 'file.write_text' || evidence.toolName === 'file.patch',
+  )
+  const hasVerification = cumulative.some(evidence =>
+    evidence.toolName === 'project.map' ||
+    evidence.toolName === 'project.detect' ||
+    evidence.toolName === 'file.stat' ||
+    evidence.toolName === 'file.read_text' ||
+    evidence.toolName === 'file.list_dir',
+  )
+  return hasEdit && hasVerification
+}
+
+function pathArgEndsWithPackageJson(args: Record<string, unknown>): boolean {
+  const path = typeof args.path === 'string' ? args.path.replace(/\\/g, '/').toLowerCase() : ''
+  return path.endsWith('/package.json')
+}
+
+function projectResultIncludesPackageJson(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false
+  const record = result as Record<string, unknown>
+  let files: unknown[] = []
+  if (Array.isArray(record.files)) {
+    files = record.files
+  } else if (record.detected && typeof record.detected === 'object') {
+    const detected = record.detected as Record<string, unknown>
+    if (Array.isArray(detected.files)) files = detected.files
+  }
+  return files.some((file: unknown) => typeof file === 'string' && file.replace(/\\/g, '/').toLowerCase().endsWith('package.json'))
+}
+
+function extractProcessId(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined
+  const record = result as Record<string, unknown>
+  const id = record.processId ?? record.id
+  return typeof id === 'string' ? id : undefined
+}
+
+function extractExitCode(result: unknown): number | null | undefined {
+  if (!result || typeof result !== 'object') return undefined
+  const record = result as Record<string, unknown>
+  return typeof record.exitCode === 'number' || record.exitCode === null ? record.exitCode : undefined
+}
+
+function extractPersistedOutputPath(part: Extract<ContentPart, { type: 'tool_call' }>): string | undefined {
+  if (part.persistedOutput?.path) return part.persistedOutput.path
+  if (!part.result || typeof part.result !== 'object') return undefined
+  const persisted = (part.result as Record<string, unknown>).persistedOutput
+  if (!persisted || typeof persisted !== 'object') return undefined
+  const path = (persisted as Record<string, unknown>).path
+  return typeof path === 'string' ? path : undefined
+}
+
+function toolEvidenceSummary(part: Extract<ContentPart, { type: 'tool_call' }>): string {
+  const bits = [`${part.name}: ${part.status}`]
+  const command = commandSummary(part)
+  if (command && command !== part.name) bits.push(command)
+  const exitCode = extractExitCode(part.result)
+  if (exitCode !== undefined) bits.push(`exitCode=${exitCode}`)
+  const processId = extractProcessId(part.result)
+  if (processId) bits.push(`processId=${processId}`)
+  const persistedOutputPath = extractPersistedOutputPath(part)
+  if (persistedOutputPath) bits.push(`persisted=${persistedOutputPath}`)
+  return bits.join(' | ').slice(0, 500)
+}
+
+function commandSummary(part?: Extract<ContentPart, { type: 'tool_call' }>): string | undefined {
+  if (!part) return undefined
+  const command = typeof part.args.command === 'string' ? part.args.command : undefined
+  const args = Array.isArray(part.args.args) ? part.args.args.map(String) : []
+  return command ? [command, ...args].join(' ') : part.name
+}

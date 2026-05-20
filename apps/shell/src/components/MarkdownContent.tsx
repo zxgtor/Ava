@@ -8,6 +8,71 @@ interface Props {
   content: string
 }
 
+function stripResidualToolMarkup(content: string): string {
+  return stripBracketToolMarkup(content
+    .replace(/<(?:tool_call|tool_code)>[\s\S]*?(?:<\/(?:tool_call|tool_code)>|$)/g, '')
+    .replace(/<function=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/function>|$)/g, '')
+    .replace(/<parameter=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/parameter>|$)/g, '')
+    .replace(/<\/?(tool_call|tool_code|function|parameter)>/g, '')
+    .trim())
+}
+
+function findBracketToolCallEnd(text: string, start: number): number {
+  let quote: string | null = null
+  let escaped = false
+  let depth = 0
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (quote) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === quote) quote = null
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char === '[') {
+      depth += 1
+      continue
+    }
+    if (char === ']') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
+}
+
+function stripBracketToolMarkup(content: string): string {
+  let output = ''
+  let cursor = 0
+  while (cursor < content.length) {
+    const start = content.indexOf('[', cursor)
+    if (start < 0) {
+      output += content.slice(cursor)
+      break
+    }
+    output += content.slice(cursor, start)
+    const head = content.slice(start + 1).match(/^([A-Za-z0-9_.-]+)\s+/)
+    const name = head?.[1] ?? ''
+    if (!head || (!name.includes('.') && !name.includes('_'))) {
+      output += content[start]
+      cursor = start + 1
+      continue
+    }
+    const end = findBracketToolCallEnd(content, start)
+    if (end < 0) {
+      const lineEnd = content.indexOf('\n', start)
+      cursor = lineEnd < 0 ? content.length : lineEnd + 1
+    } else {
+      cursor = end + 1
+    }
+  }
+  return output.trim()
+}
+
 function getPlainText(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map(getPlainText).join('')
@@ -117,6 +182,8 @@ const COMPONENTS: Components = {
 }
 
 function MarkdownContentImpl({ content }: Props) {
+  const safeContent = stripResidualToolMarkup(content)
+  if (!safeContent) return null
   return (
     <div className="markdown-body w-fit">
       <ReactMarkdown
@@ -124,7 +191,7 @@ function MarkdownContentImpl({ content }: Props) {
         rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
         components={COMPONENTS}
       >
-        {content}
+        {safeContent}
       </ReactMarkdown>
     </div>
   )

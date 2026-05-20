@@ -32,7 +32,7 @@ test.after(async () => {
 test('budget helper prefers role over title regex', () => {
   const featureStep = step('arbitrary', 'inspect things', ['file.write_text'])
   featureStep.role = 'feature'
-  assert.equal(toolLoopBudgetForStep(featureStep), 30)
+  assert.equal(toolLoopBudgetForStep(featureStep), 50)
 })
 
 test('final-report read budget keys off role first', () => {
@@ -59,7 +59,13 @@ function step(id, title, requiredTools = []) {
 }
 
 test('assigns larger loop budget to write-heavy steps', () => {
-  assert.equal(toolLoopBudgetForStep(step('write_core_files', 'Write files', ['file.write_text'])), 30)
+  assert.equal(toolLoopBudgetForStep(step('write_core_files', 'Write files', ['file.write_text'])), 50)
+})
+
+test('validate steps have more than the default chat loop budget', () => {
+  const validateStep = step('validate_build', 'Validate build and type checking')
+  validateStep.role = 'validate'
+  assert.equal(toolLoopBudgetForStep(validateStep), 30)
 })
 
 test('caps dynamic loop budgets at 50 rounds', () => {

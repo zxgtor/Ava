@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, ChevronRight, Copy, Edit2, RotateCw, Trash2, Brain, Wrench } from 'lucide-react'
+import { Check, ChevronRight, Copy, Edit2, RotateCw, Trash2, Brain, Wrench, Send } from 'lucide-react'
 import type { AssistantRunPhase, ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
 import { ToolCallBubble } from './ToolCallBubble'
@@ -229,6 +229,48 @@ function formatMessageTime(dateMs: number) {
   }).format(new Date(dateMs))
 }
 
+function InlineReplyBox({
+  placeholder,
+  onSubmit,
+}: {
+  placeholder: string
+  onSubmit?: (text: string) => void
+}) {
+  const [value, setValue] = useState('')
+  const submit = useCallback(() => {
+    const text = value.trim()
+    if (!text) return
+    onSubmit?.(text)
+    setValue('')
+  }, [onSubmit, value])
+
+  return (
+    <div className="mt-3 flex w-full min-w-[280px] max-w-xl items-center gap-2 rounded-2xl border border-border-subtle/70 bg-bg/45 px-2.5 py-2 shadow-inner shadow-black/10">
+      <input
+        value={value}
+        onChange={event => setValue(event.target.value)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault()
+            submit()
+          }
+        }}
+        placeholder={placeholder}
+        className="min-w-0 flex-1 bg-transparent px-1 text-[13px] text-text outline-none placeholder:text-text-3"
+      />
+      <button
+        type="button"
+        onClick={submit}
+        disabled={!value.trim()}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-accent text-bg transition-all hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40"
+        title="Send"
+      >
+        <Send size={14} />
+      </button>
+    </div>
+  )
+}
+
 // ── Main bubble ──────────────────────────────────────────────────────
 
 function MessageBubbleImpl({
@@ -315,6 +357,18 @@ function MessageBubbleImpl({
     }
     return Array.from(replies)
   }, [textContent, isUser, isLast, message.streaming])
+
+  const inlineReply = useMemo(() => {
+    if (isUser || !isLast || message.streaming) return null
+    const tail = textContent.split(/(?<=[.!?。！？\n])\s+/).slice(-6).join(' ')
+    const asksForInput =
+      /请.*(提供|输入|回答|补充)|请直接回答|请直接输入|完整.*路径|full .*path|provide .*path|provide .*info|type .*path|enter .*path|answer .*question/i.test(tail)
+    if (!asksForInput) return null
+    if (/完整.*路径|full .*path|provide .*path|type .*path|enter .*path|working directory|项目路径|工作目录/i.test(tail)) {
+      return 'Enter full path, e.g. D:\\Apps\\GLBViewer'
+    }
+    return 'Type your answer...'
+  }, [isLast, isUser, message.streaming, textContent])
 
   // For assistant messages: render text+image parts only (tool calls are rendered by CollapsibleToolCalls).
   // For user messages: render everything via renderParts.
@@ -445,6 +499,9 @@ function MessageBubbleImpl({
                   </button>
                 ))}
               </div>
+            )}
+            {inlineReply && (
+              <InlineReplyBox placeholder={inlineReply} onSubmit={onQuickReply} />
             )}
           </div>
         </div>

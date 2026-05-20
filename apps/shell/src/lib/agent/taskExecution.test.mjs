@@ -38,7 +38,7 @@ await writeFile(join(tempDir, 'toolNames.mjs'), 'export function normalizeRequir
 const patched = compiled.replace(/from\s+['"]\.\/toolNames['"]/g, "from './toolNames.mjs'")
 await writeFile(compiledPath, patched, 'utf8')
 
-const { evaluateStepCompletion, finalValidationGateSatisfied } =
+const { evaluateStepCompletion, extractWorkingDirectoryFromText, finalValidationGateSatisfied, recoverStepFromRound, taskStepRecovery } =
   await import(pathToFileURL(compiledPath).href)
 
 test.after(async () => { await rm(tempDir, { recursive: true, force: true }) })
@@ -69,14 +69,76 @@ function plan(overrides = {}) {
   }
 }
 
-test('repair role completes immediately on first attempt (reactive only)', () => {
+test('repair role requires an actual repair tool call', () => {
   const result = evaluateStepCompletion({
     plan: plan(),
-    step: step({ id: 'whatever', role: 'repair' }),
+    step: step({ id: 'repair', role: 'repair', requiredTools: ['file.write_text', 'file.patch'] }),
     parts: [],
     fullContent: '',
   })
+  assert.equal(result.complete, false)
+})
+
+test('extractWorkingDirectoryFromText trims trailing question punctuation', () => {
+  assert.equal(extractWorkingDirectoryFromText('Use D:\\apps\\GLBViewer?'), 'D:\\apps\\GLBViewer')
+})
+
+test('repair role completes after a file edit tool succeeds', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'repair', role: 'repair', requiredTools: ['file.write_text', 'file.patch'] }),
+    parts: [{ type: 'tool_call', name: 'file.write_text', args: {}, status: 'ok', result: {} }],
+    fullContent: '',
+  })
   assert.equal(result.complete, true)
+})
+
+test('feature write step does not complete after a single file write without verification evidence', () => {
+  const result = evaluateStepCompletion({
+    plan: plan({
+      steps: [step({ id: 'write_core_files', role: 'feature', requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'] })],
+    }),
+    step: step({ id: 'write_core_files', role: 'feature', requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'] }),
+    parts: [{ type: 'tool_call', name: 'file.write_text', args: { path: 'D:\\x\\src\\App.tsx' }, status: 'ok', result: { bytes: 100 } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+})
+
+test('feature write step completes after edit evidence and project verification evidence', () => {
+  const result = evaluateStepCompletion({
+    plan: plan({
+      steps: [step({
+        id: 'write_core_files',
+        role: 'feature',
+        requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'],
+        evidence: [
+          { toolName: 'file.write_text', toolCallId: 'call_write', status: 'ok', timestamp: 1 },
+          { toolName: 'project.map', toolCallId: 'call_map', status: 'ok', timestamp: 2 },
+        ],
+      })],
+    }),
+    step: step({ id: 'write_core_files', role: 'feature', requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'] }),
+    parts: [{ type: 'tool_call', name: 'project.map', args: { path: 'D:\\x' }, status: 'ok', result: { files: ['src/App.tsx'] } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
+})
+
+test('ignored duplicate tool result does not satisfy step completion', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'x', requiredTools: ['file.write_text'] }),
+    parts: [{
+      type: 'tool_call',
+      name: 'file.write_text',
+      status: 'ok',
+      args: {},
+      result: { ignored: true, reason: 'duplicate' },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
 })
 
 test('validate role with failed project.validate triggers needsRepair', () => {
@@ -90,6 +152,57 @@ test('validate role with failed project.validate triggers needsRepair', () => {
   })
   assert.equal(result.complete, false)
   assert.match(result.needsRepair, /TS2322/)
+})
+
+test('setup scaffold step does not complete on shell success without package.json evidence', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({
+      id: 'init_project',
+      title: 'Initialize project',
+      role: 'scaffold',
+      requiredTools: ['shell.run_command'],
+    }),
+    parts: [
+      { type: 'tool_call', name: 'shell.run_command', status: 'ok', args: { command: 'npx', args: ['create', 'vite@latest', '.'] }, result: { exitCode: 0 } },
+    ],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+})
+
+test('setup scaffold step completes when package.json was written', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({
+      id: 'init_project',
+      title: 'Initialize project',
+      role: 'scaffold',
+      requiredTools: ['shell.run_command', 'file.write_text'],
+    }),
+    parts: [
+      { type: 'tool_call', name: 'file.write_text', status: 'ok', args: { path: 'D:\\x\\package.json' }, result: { bytes: 20 } },
+    ],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
+})
+
+test('plain directory scaffold step can complete on file.create_dir', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({
+      id: 'create_app_structure',
+      title: 'Create app structure',
+      role: 'scaffold',
+      requiredTools: ['file.create_dir'],
+    }),
+    parts: [
+      { type: 'tool_call', name: 'file.create_dir', status: 'ok', args: { path: 'D:\\x\\src' }, result: {} },
+    ],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
 })
 
 test('validate role with successful project.validate completes', () => {
@@ -168,11 +281,67 @@ test('generic step with required tool completes when that tool succeeds', () => 
   assert.equal(result.complete, true)
 })
 
-test('legacy static-plan step.id="repair" still routes via stepRole fallback', () => {
+test('step requiring process.wait does not complete on process.start alone', () => {
   const result = evaluateStepCompletion({
     plan: plan(),
-    step: step({ id: 'repair' /* no role */ }),
-    parts: [],
+    step: step({ id: 'install', requiredTools: ['process.start', 'process.wait'] }),
+    parts: [{ type: 'tool_call', name: 'process.start', status: 'ok', args: {}, result: { processId: 'proc_1', status: 'running' } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+})
+
+test('step requiring process.wait completes when process exits successfully', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'install', requiredTools: ['process.start', 'process.wait'] }),
+    parts: [{ type: 'tool_call', name: 'process.wait', status: 'ok', args: { id: 'proc_1' }, result: { id: 'proc_1', status: 'exited', exitCode: 0 } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
+})
+
+test('taskStepRecovery captures process id and command summary', () => {
+  const recovery = taskStepRecovery([
+    { type: 'tool_call', name: 'process.start', status: 'ok', args: { command: 'npm', args: ['install'] }, result: { processId: 'proc_abc', status: 'running' } },
+  ], '')
+  assert.ok(recovery)
+  assert.equal(recovery.processId, 'proc_abc')
+  assert.equal(recovery.command, 'npm install')
+})
+
+test('recoverStepFromRound persists tool evidence for task memory', () => {
+  const inputPlan = plan({
+    steps: [step({ id: 'install', status: 'running' })],
+    currentStepId: 'install',
+  })
+  const next = recoverStepFromRound(inputPlan, 'install', [
+    {
+      type: 'tool_call',
+      id: 'call_1',
+      name: 'shell.run_command',
+      status: 'ok',
+      args: { command: 'npm', args: ['install'] },
+      result: {
+        exitCode: 0,
+        persistedOutput: { path: 'D:\\x\\.ava\\tool-results\\install.json' },
+      },
+      endedAt: 123,
+    },
+  ], '')
+  const evidence = next.steps[0].evidence
+  assert.equal(evidence.length, 1)
+  assert.equal(evidence[0].toolCallId, 'call_1')
+  assert.equal(evidence[0].command, 'npm install')
+  assert.equal(evidence[0].exitCode, 0)
+  assert.match(evidence[0].persistedOutputPath, /install\.json/)
+})
+
+test('legacy static-plan step.id="repair" still requires an actual repair action', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'repair' /* no role */, requiredTools: ['file.patch'] }),
+    parts: [{ type: 'tool_call', name: 'file.patch', status: 'ok', args: {}, result: {} }],
     fullContent: '',
   })
   assert.equal(result.complete, true)

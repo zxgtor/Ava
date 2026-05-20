@@ -31,6 +31,26 @@ const TITLE_BAR_HEIGHT = 36
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
 
+function isBrokenPipeError(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && (err as NodeJS.ErrnoException).code === 'EPIPE')
+}
+
+process.on('uncaughtException', err => {
+  if (isBrokenPipeError(err)) {
+    console.warn('[main] ignored broken pipe from closed child process/stdout')
+    return
+  }
+  throw err
+})
+
+process.on('unhandledRejection', reason => {
+  if (isBrokenPipeError(reason)) {
+    console.warn('[main] ignored broken pipe rejection from closed child process/stdout')
+    return
+  }
+  console.error('[main] unhandled rejection:', reason)
+})
+
 type CapabilityValue = 'yes' | 'no' | 'unknown'
 type CapabilityToolFormat = 'openai' | 'hermes' | 'json' | 'none' | 'unknown'
 
@@ -395,7 +415,14 @@ function registerIpc(): void {
   ipcMain.handle('ava:settings:save', async (_e, data: unknown) => {
     await saveSettings(data)
     const mcpServers = await readRuntimeMcpServers(data)
-    if (mcpServers) await mcpSupervisor.applyConfigs(mcpServers)
+    if (mcpServers) {
+      try {
+        await mcpSupervisor.applyConfigs(mcpServers)
+      } catch (err) {
+        if (!isBrokenPipeError(err)) throw err
+        console.warn('[mcp] ignored EPIPE while applying settings; server process likely closed its stdio pipe.')
+      }
+    }
     return true
   })
 

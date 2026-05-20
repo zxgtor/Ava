@@ -19,10 +19,21 @@ export interface ToolCallPart {
   status: ToolCallStatus
   /** Result payload (arbitrary JSON) once the tool call completes. */
   result?: unknown
+  /** Full result location when large tool output was compacted for context safety. */
+  persistedOutput?: PersistedToolResultRef
   /** Error message when status = 'error'. */
   error?: string
   startedAt?: number
   endedAt?: number
+}
+
+export interface PersistedToolResultRef {
+  path: string
+  preview: string
+  originalBytes: number
+  truncated: true
+  mime: 'application/json' | 'text/plain'
+  createdAt: number
 }
 
 export interface ImagePart {
@@ -50,6 +61,13 @@ export interface TaskExecutionStep {
   completionSignals: string[]
   attempts: number
   lastError?: string
+  lastToolSummary?: string
+  lastProcessId?: string
+  lastCommand?: string
+  lastExitCode?: number | null
+  lastRecoveredAt?: number
+  /** Runtime proof collected from tool calls; used to prevent steps advancing on text-only promises. */
+  evidence?: TaskExecutionEvidence[]
   /** DAG dependency graph: list of step IDs that must be 'done' before this step can start. */
   dependsOn?: string[]
   /** Dynamic decomposition: if a task is too large, it can be broken down into subtasks. */
@@ -72,6 +90,18 @@ export interface TaskExecutionStep {
     | 'repair'
     | 'validate'
     | 'final_report'
+}
+
+export interface TaskExecutionEvidence {
+  toolName: string
+  toolCallId: string
+  status: ToolCallStatus
+  timestamp: number
+  summary?: string
+  processId?: string
+  command?: string
+  exitCode?: number | null
+  persistedOutputPath?: string
 }
 
 export type AgentRole = 'planner' | 'executor' | 'critic' | 'orchestrator'

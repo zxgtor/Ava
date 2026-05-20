@@ -684,6 +684,49 @@ function sanitizeTaskExecutionPlan(raw: unknown): TaskExecutionPlan | undefined 
         completionSignals: Array.isArray(step.completionSignals) ? step.completionSignals.filter((item): item is string => typeof item === 'string') : [],
         attempts: typeof step.attempts === 'number' ? step.attempts : 0,
         lastError: typeof step.lastError === 'string' ? step.lastError : undefined,
+        lastToolSummary: typeof step.lastToolSummary === 'string' ? step.lastToolSummary : undefined,
+        lastProcessId: typeof step.lastProcessId === 'string' ? step.lastProcessId : undefined,
+        lastCommand: typeof step.lastCommand === 'string' ? step.lastCommand : undefined,
+        lastExitCode: typeof step.lastExitCode === 'number' || step.lastExitCode === null ? step.lastExitCode : undefined,
+        lastRecoveredAt: typeof step.lastRecoveredAt === 'number' ? step.lastRecoveredAt : undefined,
+        evidence: Array.isArray(step.evidence)
+          ? step.evidence
+              .filter(item => item && typeof item === 'object')
+              .map(item => item as unknown as Record<string, unknown>)
+              .filter(item => typeof item.toolName === 'string' && typeof item.toolCallId === 'string')
+              .map(item => ({
+                toolName: item.toolName as string,
+                toolCallId: item.toolCallId as string,
+                status: sanitizeToolCallStatus(item.status),
+                timestamp: typeof item.timestamp === 'number' ? item.timestamp : Date.now(),
+                summary: typeof item.summary === 'string' ? item.summary : undefined,
+                processId: typeof item.processId === 'string' ? item.processId : undefined,
+                command: typeof item.command === 'string' ? item.command : undefined,
+                exitCode: typeof item.exitCode === 'number' || item.exitCode === null ? item.exitCode : undefined,
+                persistedOutputPath: typeof item.persistedOutputPath === 'string' ? item.persistedOutputPath : undefined,
+              }))
+              .slice(-20)
+          : undefined,
+        dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn.filter((item): item is string => typeof item === 'string') : undefined,
+        workflowType: step.workflowType === 'scaffold' ||
+          step.workflowType === 'feature' ||
+          step.workflowType === 'debug' ||
+          step.workflowType === 'refactor' ||
+          step.workflowType === 'research'
+          ? step.workflowType
+          : undefined,
+        role: step.role === 'inspect' ||
+          step.role === 'scaffold' ||
+          step.role === 'install' ||
+          step.role === 'feature' ||
+          step.role === 'preview' ||
+          step.role === 'console' ||
+          step.role === 'screenshot' ||
+          step.role === 'repair' ||
+          step.role === 'validate' ||
+          step.role === 'final_report'
+          ? step.role
+          : undefined,
       })
     }
   }
@@ -708,6 +751,16 @@ function sanitizeTaskExecutionPlan(raw: unknown): TaskExecutionPlan | undefined 
     createdAt: typeof src.createdAt === 'number' ? src.createdAt : Date.now(),
     updatedAt: typeof src.updatedAt === 'number' ? src.updatedAt : Date.now(),
   }
+}
+
+function sanitizeToolCallStatus(raw: unknown): ToolCallStatus {
+  return raw === 'pending' ||
+    raw === 'running' ||
+    raw === 'ok' ||
+    raw === 'error' ||
+    raw === 'aborted'
+    ? raw
+    : 'error'
 }
 
 function sanitizeConversation(raw: unknown): Conversation | null {

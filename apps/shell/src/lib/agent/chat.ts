@@ -53,6 +53,7 @@ const TRAIT_PROMPTS: Record<string, string[]> = {
     'When a task requires project initialization, dependency installation, build, test, git, node, npm, or python execution, use the available shell.run_command tool instead of only saying what you will run.',
     'Never output raw commands such as dir, npm install, or npm run dev as plain text; call the appropriate tool.',
     'For frontend preview tasks, use devserver.start/status/stop, preview.open, preview.console, and preview.screenshot to inspect runtime and visual results.',
+    'For long-running non-devserver commands, use process.start and recover with process.wait/process.status/process.logs instead of blocking the agent loop.',
     'Before final reporting on coding tasks, validate with project.validate or an equivalent build/test/typecheck command when available.',
     'Use shell.run_command with structured command and args, never as one combined shell string.',
     'Split large web/app tasks into small files or clear sections (for example index.html, styles.css, main.js) unless the user explicitly asks for one file.',
@@ -153,6 +154,30 @@ function buildProjectContext(folderPath: string, brief: ProjectBrief): string {
   ]
   if (brief.tasksTotal > 0) {
     lines.push(`Task progress: ${brief.tasksDone}/${brief.tasksTotal} completed`)
+  }
+  return lines.join('\n')
+}
+
+function buildTaskMemoryState(plan: TaskExecutionPlan): string {
+  const lines = [
+    `Task goal: ${plan.goal}`,
+    `Working directory: ${plan.workingDirectory}`,
+    `Plan status: ${plan.status}`,
+    `Current step: ${plan.currentStepId ?? '(none)'}`,
+    `Validation: devServer=${plan.validation.devServerChecked}, console=${plan.validation.consoleChecked}, screenshot=${plan.validation.screenshotChecked}, build=${plan.validation.buildChecked}`,
+  ]
+  const completed = plan.steps.filter(step => step.status === 'done' || step.status === 'skipped')
+  if (completed.length > 0) {
+    lines.push('Completed steps:')
+    for (const step of completed.slice(-8)) {
+      const evidence = step.evidence?.slice(-3).map(item => item.summary ?? `${item.toolName}: ${item.status}`).join('; ')
+      lines.push(`- ${step.title}: ${evidence || step.lastToolSummary || step.status}`)
+    }
+  }
+  const active = plan.steps.find(step => step.id === plan.currentStepId)
+  if (active) {
+    lines.push(`Active step evidence: ${(active.evidence ?? []).slice(-5).map(item => item.summary ?? `${item.toolName}: ${item.status}`).join('; ') || '(none)'}`)
+    if (active.lastError) lines.push(`Active step last error: ${active.lastError}`)
   }
   return lines.join('\n')
 }
@@ -281,11 +306,10 @@ function conversationToLlmMessages(
   }
 
   if (taskPlan && activeStep) {
-    const memoryState = '' // TODO: Inject from ContextManager
     const prompt = buildExecutorSystemPrompt({
       plan: taskPlan,
       step: activeStep,
-      memoryState,
+      memoryState: buildTaskMemoryState(taskPlan),
       providers: [], // Providers are used elsewhere
       settings
     })
@@ -439,6 +463,7 @@ export interface SendOptions {
 export interface SendResult {
   ok: true
   fullContent: string
+  parts: ContentPart[]
   providerId: string
   provider: string
   model: string
@@ -526,11 +551,13 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       providers,
       activeTaskId: options.activeTaskId,
       activeFolderPath,
+      taskAllowedDirs: options.activeTaskPlan?.workingDirectory ? [options.activeTaskPlan.workingDirectory] : undefined,
       activeCommandInvocation: latestCommandInvocation(options.conversation),
       temperature,
       toolFormatMap: options.settings.modelToolFormatMap,
       pluginStates: options.settings.pluginStates,
       activeStepRequiredTools: options.activeStep?.requiredTools,
+      activeStepRole: activeStepRole(options.activeStep),
       activeStepToolLoopBudget: toolLoopBudgetForStep(options.activeStep),
       finalReportReadBudget: finalReportReadBudgetForStep(options.activeStep),
     })
@@ -542,6 +569,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     return {
       ok: true,
       fullContent: reply.result.fullContent,
+      parts: reply.result.parts as ContentPart[],
       providerId: reply.result.provider.id,
       provider: reply.result.provider.name,
       model: reply.result.model,
@@ -552,6 +580,19 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
   } finally {
     cleanups.forEach(fn => fn())
   }
+}
+
+function activeStepRole(step?: TaskExecutionStep): TaskExecutionStep['role'] | undefined {
+  if (!step) return undefined
+  if (step.role) return step.role
+  const id = step.id.toLowerCase()
+  if (id.includes('validate') || id.includes('typecheck') || id.includes('build')) return 'validate'
+  if (id.includes('repair') || id.includes('fix')) return 'repair'
+  if (id.includes('preview') || id.includes('server')) return 'preview'
+  if (id.includes('console')) return 'console'
+  if (id.includes('screenshot')) return 'screenshot'
+  if (id.includes('final')) return 'final_report'
+  return undefined
 }
 
 function taskPlanWorkingDirectory(plan?: TaskExecutionPlan): string | undefined {

@@ -7,6 +7,7 @@ import { RightPanel } from './components/RightPanel'
 import { PreviewView } from './components/PreviewView'
 import { ChatHeader } from './components/ChatHeader'
 import { UnitTestView } from './components/UnitTestView'
+import { RightPanel } from './components/RightPanel'
 import { useTranslation } from 'react-i18next'
 import i18n from './lib/i18n'
 

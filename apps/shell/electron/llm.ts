@@ -5,7 +5,9 @@
 // ─────────────────────────────────────────────
 
 import { WebContents } from 'electron'
-import { mcpSupervisor, type McpToolDescriptor } from './services/mcpSupervisor'
+import { dirname, resolve as resolvePath } from 'node:path'
+import { existsSync } from 'node:fs'
+import { mcpSupervisor, type CallToolError, type CallToolResult, type McpToolDescriptor } from './services/mcpSupervisor'
 import { pluginManager, type PluginSkill, type PluginState } from './services/pluginManager'
 import { previewValue, toolAuditLog, type ToolAuditCommandInvocation } from './services/toolAuditLog'
 import { builtInTools } from './services/builtInTools'
@@ -13,6 +15,9 @@ import { runtimeEnvironmentPrompt } from './services/runtimeEnvironment'
 import { OpenAiAdapter } from './adapters/openai'
 import { AnthropicAdapter } from './adapters/anthropic'
 import { LlmAdapter } from './adapters/base'
+import { classifyToolError } from './services/toolErrorClassifier'
+import { compactToolResultForContext, type PersistedToolResultRef } from './services/toolResultStore'
+import { toolRuntime } from './services/toolRuntime'
 
 export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
@@ -57,6 +62,14 @@ export type AssistantRunPhase =
   | 'error'
   | 'aborted'
 
+export type RuntimeStreamEvent =
+  | { type: 'text_delta'; streamId: string; taskId?: string; text: string }
+  | { type: 'reasoning_delta'; streamId: string; taskId?: string; text: string }
+  | { type: 'run_status'; streamId: string; taskId?: string; phase: AssistantRunPhase; providerId?: string; providerName?: string; model?: string }
+  | { type: 'tool_call_started'; streamId: string; taskId?: string; partIndex: number; part: ToolCallPart }
+  | { type: 'tool_result'; streamId: string; taskId?: string; partIndex: number; partId?: string; patch: Partial<ToolCallPart> }
+  | { type: 'error'; streamId: string; taskId?: string; message: string }
+
 export interface ToolCallPart {
   type: 'tool_call'
   taskId?: string
@@ -65,6 +78,7 @@ export interface ToolCallPart {
   args: Record<string, unknown>
   status: ToolCallStatus
   result?: unknown
+  persistedOutput?: PersistedToolResultRef
   error?: string
   startedAt?: number
   endedAt?: number
@@ -76,11 +90,13 @@ export interface StreamChatArgs {
   providers: ModelProvider[]
   activeTaskId?: string
   activeFolderPath?: string
+  taskAllowedDirs?: string[]
   activeCommandInvocation?: ToolAuditCommandInvocation
   temperature?: number
   toolFormatMap?: Record<string, ToolCallFormat>
   pluginStates?: Record<string, PluginState>
   activeStepRequiredTools?: string[]
+  activeStepRole?: TaskStepRole
   activeStepToolLoopBudget?: number
   finalReportReadBudget?: number
 }
@@ -117,6 +133,18 @@ export interface ToolCallCandidate {
   name: string
   args: Record<string, unknown>
 }
+
+type TaskStepRole =
+  | 'inspect'
+  | 'scaffold'
+  | 'install'
+  | 'feature'
+  | 'preview'
+  | 'console'
+  | 'screenshot'
+  | 'repair'
+  | 'validate'
+  | 'final_report'
 
 export interface ToolCallAccumulator {
   id?: string
@@ -174,6 +202,7 @@ const FINAL_REPORT_READ_TOOL_NAMES = new Set(['file.read_text', 'file.list_dir',
 const ALWAYS_ALLOWED_CORE_TOOLS = new Set<string>([
   'file.read_text',
   'file.list_dir',
+  'file.stat',
   'project.map',
   'project.detect',
   'search.ripgrep',
@@ -294,6 +323,22 @@ function allowedFilesystemDirs(): string[] {
     .filter(dir => typeof dir === 'string' && dir.trim().length > 0)
 }
 
+function taskScopedAllowedDirs(activeFolderPath?: string, taskAllowedDirs?: string[]): string[] {
+  const dirs = new Set<string>()
+  for (const dir of allowedFilesystemDirs()) {
+    if (dir?.trim()) dirs.add(resolvePath(dir))
+  }
+  for (const dir of [activeFolderPath, ...(taskAllowedDirs ?? [])]) {
+    if (!dir?.trim()) continue
+    const resolved = resolvePath(dir)
+    dirs.add(resolved)
+    // Low-risk scaffold flow: allow commands in the target folder's parent so
+    // tools can create the target directory, then continue inside it.
+    dirs.add(dirname(resolved))
+  }
+  return Array.from(dirs)
+}
+
 function listAvailableTools(
   currentTask: string,
   activeCommandInvocation?: ToolAuditCommandInvocation,
@@ -337,10 +382,22 @@ function chooseReasoningMode(
   provider: ModelProvider,
   currentTask: string,
   toolsExposed: boolean,
+  activeStepRole?: TaskStepRole,
 ): 'off' | 'on' {
   if (provider.reasoningMode === 'off') return 'off'
   if (provider.reasoningMode === 'on') return 'on'
   if (isReasoningBroken(provider.id, provider.defaultModel)) return 'off'
+  if (
+    activeStepRole === 'scaffold' ||
+    activeStepRole === 'install' ||
+    activeStepRole === 'preview' ||
+    activeStepRole === 'console' ||
+    activeStepRole === 'screenshot' ||
+    activeStepRole === 'final_report'
+  ) {
+    return 'off'
+  }
+  if (activeStepRole === 'repair' || activeStepRole === 'validate') return 'on'
   if (REASONING_INTENT_RE.test(currentTask)) return 'on'
   if (toolsExposed && !SIMPLE_CHAT_RE.test(currentTask)) return 'on'
   return 'off'
@@ -515,6 +572,11 @@ const CWD_TOOL_NAMES = new Set([
   'devserver.start',
   'devserver.stop',
   'devserver.status',
+  'process.start',
+  'process.status',
+  'process.logs',
+  'process.wait',
+  'process.kill',
   'shell.run_command',
 ])
 
@@ -530,22 +592,29 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   file_list: 'file.list_dir',
   file_list_dir: 'file.list_dir',
   list_dir: 'file.list_dir',
+  file_create_dir: 'file.create_dir',
   file_mkdir: 'file.create_dir',
   mkdir: 'file.create_dir',
   create_dir: 'file.create_dir',
+  file_patch: 'file.patch',
   file_stat: 'file.stat',
   shell_exec: 'shell.run_command',
   shell_execute: 'shell.run_command',
   run_command: 'shell.run_command',
+  process_start: 'process.start',
+  process_status: 'process.status',
+  process_logs: 'process.logs',
+  process_wait: 'process.wait',
+  process_kill: 'process.kill',
 }
 
 function normalizeToolCallName(name: string): string {
-  const normalized = name.trim().replace(/\./g, '_').toLowerCase()
+  const normalized = name.trim().replace(/\./g, '_').replace(/_\d+$/g, '').toLowerCase()
   return TOOL_NAME_ALIASES[normalized] ?? name
 }
 
 function expandToolCallAliases(toolCall: ToolCallCandidate): ToolCallCandidate[] {
-  const normalizedName = toolCall.name.trim().replace(/\./g, '_').toLowerCase()
+  const normalizedName = toolCall.name.trim().replace(/\./g, '_').replace(/_\d+$/g, '').toLowerCase()
   if (normalizedName === 'file_read_multiple_files' || normalizedName === 'read_multiple_files') {
     const rawPaths = Array.isArray(toolCall.args.paths) ? toolCall.args.paths : []
     const paths = rawPaths.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
@@ -572,6 +641,9 @@ function isAbsolutePathLike(value: string): boolean {
 
 function normalizeToolCallsForContext(toolCalls: ToolCallCandidate[], activeFolderPath?: string): ToolCallCandidate[] {
   return toolCalls.flatMap(expandToolCallAliases).map(call => {
+    if (call.name === 'file.create_dir' && typeof call.args.path !== 'string' && activeFolderPath) {
+      return { ...call, args: { ...call.args, path: activeFolderPath } }
+    }
     if (!CWD_TOOL_NAMES.has(call.name) || typeof call.args.cwd === 'string') return call
 
     const pathArg = typeof call.args.path === 'string' ? call.args.path.trim() : ''
@@ -585,6 +657,175 @@ function normalizeToolCallsForContext(toolCalls: ToolCallCandidate[], activeFold
     if (call.name.startsWith('project.') && 'path' in args) delete args.path
     return { ...call, args }
   })
+}
+
+function cwdArg(toolCall: ToolCallCandidate): string | null {
+  return typeof toolCall.args.cwd === 'string' && toolCall.args.cwd.trim()
+    ? toolCall.args.cwd.trim()
+    : null
+}
+
+function sameResolvedPath(a: string, b: string): boolean {
+  return resolvePath(a).toLowerCase() === resolvePath(b).toLowerCase()
+}
+
+function autoCreatableTaskDir(path: string, args: StreamChatArgs): boolean {
+  if (!args.activeTaskId) return false
+  const candidates = [
+    args.activeFolderPath,
+    ...(args.taskAllowedDirs ?? []),
+  ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  return candidates.some(candidate => sameResolvedPath(path, candidate))
+}
+
+async function ensureTaskWorkingDirectory(
+  toolCall: ToolCallCandidate,
+  args: StreamChatArgs,
+): Promise<(CallToolResult | CallToolError) | null> {
+  if (!CWD_TOOL_NAMES.has(toolCall.name)) return null
+  const cwd = cwdArg(toolCall)
+  if (!cwd || existsSync(resolvePath(cwd)) || !autoCreatableTaskDir(cwd, args)) return null
+
+  return builtInTools.callTool('file.create_dir', { path: cwd }, {
+    activeFolderPath: args.activeFolderPath,
+    allowedDirs: taskScopedAllowedDirs(args.activeFolderPath, args.taskAllowedDirs),
+  })
+}
+
+async function callToolSafely(input: {
+  toolCall: ToolCallCandidate
+  builtInTool: { serverId: string; rawName: string } | null
+  args: StreamChatArgs
+}): Promise<CallToolResult | CallToolError> {
+  try {
+    const preflight = input.builtInTool
+      ? await ensureTaskWorkingDirectory(input.toolCall, input.args)
+      : null
+    if (preflight && (!preflight.ok || preflight.isError)) return preflight
+
+    return input.builtInTool
+      ? await builtInTools.callTool(input.toolCall.name, input.toolCall.args, {
+          activeFolderPath: input.args.activeFolderPath,
+          allowedDirs: taskScopedAllowedDirs(input.args.activeFolderPath, input.args.taskAllowedDirs),
+        })
+      : await mcpSupervisor.callTool({
+          namespacedName: input.toolCall.name,
+          rawArgs: input.toolCall.args,
+        })
+  } catch (err) {
+    return { ok: false, error: `Tool runtime error: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+function toolRecoveryMessage(toolCall: ToolCallCandidate, error: string): string {
+  const classified = classifyToolError(error)
+  return [
+    `Tool recovery required for ${toolCall.name}.`,
+    `Error kind: ${classified.kind}.`,
+    `Error: ${classified.message}`,
+    classified.path ? `Related path: ${classified.path}` : '',
+    `Recovery instruction: ${classified.recoveryHint}`,
+    'Continue the current task step with a corrected tool call, or explain the exact blocker if user confirmation is required.',
+  ].filter(Boolean).join('\n')
+}
+
+function looksLikeValidationToolCommand(args: Record<string, unknown>): boolean {
+  const command = typeof args.command === 'string' ? args.command.toLowerCase() : ''
+  const argv = Array.isArray(args.args) ? args.args.map(String) : []
+  const joined = argv.join(' ').toLowerCase()
+  if (command === 'tsc') return true
+  if (command === 'npm' || command === 'pnpm' || command === 'yarn' || command === 'bun') {
+    return /\b(run\s+)?(build|typecheck|test|lint)\b/.test(joined)
+  }
+  if (command === 'npx' || command === 'bunx') {
+    return /\b(tsc|vite\s+build|eslint|vitest|jest|playwright)\b/.test(joined)
+  }
+  return /\b(build|typecheck|test|lint|tsc|vite\s+build)\b/.test(joined)
+}
+
+function processWaitResultSucceeded(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false
+  const record = result as Record<string, unknown>
+  return record.status === 'exited' && record.exitCode === 0
+}
+
+function requiredToolSatisfiedForStep(
+  args: StreamChatArgs,
+  toolCall: ToolCallCandidate,
+  result: CallToolResult | CallToolError,
+): boolean {
+  if (!args.activeStepRequiredTools?.length || !args.activeStepRequiredTools.includes(toolCall.name)) return false
+  if (!result.ok || result.isError) return false
+
+  if (args.activeStepRole === 'validate') {
+    if (toolCall.name === 'project.validate') return true
+    if (toolCall.name === 'shell.run_command') return looksLikeValidationToolCommand(toolCall.args)
+    if (toolCall.name === 'process.wait') return processWaitResultSucceeded(result.content)
+    return false
+  }
+
+  if (
+    (args.activeStepRole === 'scaffold' || args.activeStepRole === 'install') &&
+    (
+      toolCall.name === 'file.create_dir' ||
+      toolCall.name === 'shell.run_command' ||
+      toolCall.name === 'process.start' ||
+      toolCall.name === 'process.wait'
+    )
+  ) {
+    return false
+  }
+
+  return true
+}
+
+function progressToolSatisfiedForStep(
+  args: StreamChatArgs,
+  toolCall: ToolCallCandidate,
+  result: CallToolResult | CallToolError,
+): boolean {
+  if (!args.activeStepRole || !result.ok || result.isError) return false
+  if (requiredToolSatisfiedForStep(args, toolCall, result)) return true
+  if (
+    (args.activeStepRole === 'feature' || args.activeStepRole === 'repair') &&
+    (toolCall.name === 'file.write_text' || toolCall.name === 'file.patch')
+  ) {
+    return true
+  }
+  if (
+    args.activeStepRole === 'scaffold' &&
+    toolCall.name === 'file.write_text' &&
+    String(toolCall.args.path ?? '').replace(/\\/g, '/').toLowerCase().endsWith('/package.json')
+  ) {
+    return true
+  }
+  return false
+}
+
+function unsatisfiedRequiredToolMessage(args: StreamChatArgs, toolCall: ToolCallCandidate): string | null {
+  if (
+    (args.activeStepRole === 'scaffold' || args.activeStepRole === 'install') &&
+    (
+      toolCall.name === 'file.create_dir' ||
+      toolCall.name === 'shell.run_command' ||
+      toolCall.name === 'process.start' ||
+      toolCall.name === 'process.wait'
+    )
+  ) {
+    return [
+      'The previous tool call finished, but directory creation or command success alone does not prove this scaffold/install step is complete.',
+      'You must now verify the expected project artifact before moving on: call file.read_text on package.json, file.stat on package.json, project.detect, or project.map for the working directory.',
+      'If package.json is still missing, do not repeat the same create command blindly. Create the minimal package.json with file.write_text, or use a non-interactive scaffold command that can run in a non-empty directory.',
+    ].join(' ')
+  }
+
+  if (args.activeStepRole !== 'validate') return null
+  if (toolCall.name !== 'shell.run_command' || looksLikeValidationToolCommand(toolCall.args)) return null
+  return [
+    'The previous shell.run_command succeeded, but it did not satisfy the current validate step.',
+    'Validate step must run project.validate, npm run build, npm run typecheck, npm test, npm run lint, tsc, or an equivalent validation command.',
+    'Do not scaffold, install, or rewrite project files during validate unless a validation error first routes the task to repair.',
+  ].join(' ')
 }
 
 function withToolCallCorrectionPrompt(messages: LlmMessage[], rawText: string): LlmMessage[] {
@@ -602,7 +843,7 @@ function withToolCallCorrectionPrompt(messages: LlmMessage[], rawText: string): 
         'Call the appropriate available tool now.',
         'For checking project structure, prefer project.map or file.list_dir.',
         'For one-shot commands, use shell.run_command with structured command, args, and cwd.',
-        'For long-running dev servers, use devserver.start.',
+        'For long-running dev servers, use devserver.start. For other long-running commands, use process.start then process.status/process.wait.',
       ].join(' '),
     },
   ]
@@ -649,6 +890,7 @@ function withActionRequiredPrompt(messages: LlmMessage[], rawText: string): LlmM
         'Call exactly one appropriate available tool now.',
         'For checking project state, use project.map or file.list_dir.',
         'For one-shot commands, use shell.run_command with structured command, args, and cwd.',
+        'For long-running commands, use process.start then process.wait/process.status rather than only describing the command.',
         'For creating or editing files, use file.write_text or file.patch.',
       ].join(' '),
     },
@@ -657,7 +899,7 @@ function withActionRequiredPrompt(messages: LlmMessage[], rawText: string): LlmM
 
 function rawCommandNoToolText(rawText: string): string {
   const command = rawText.trim().split(/\r?\n/)[0]?.trim() || '(empty command)'
-  return `Stopped: the model output a raw command instead of calling a tool: ${command}. Ava did not execute it. Please retry; Ava will require a tool call such as project.map, file.list_dir, shell.run_command, or devserver.start.`
+  return `Stopped: the model output a raw command instead of calling a tool: ${command}. Ava did not execute it. Please retry; Ava will require a tool call such as project.map, file.list_dir, shell.run_command, process.start, or devserver.start.`
 }
 
 export function buildToolPrompt(tools: McpToolDescriptor[], runtimePrompt = runtimeEnvironmentPrompt()): string {
@@ -686,8 +928,11 @@ export function buildToolPrompt(tools: McpToolDescriptor[], runtimePrompt = runt
     'Before claiming coding work is complete, use project.validate or an equivalent shell.run_command validation when available.',
     'For frontend or design preview work, use devserver.start/status/stop for long-running servers, preview.open for local URLs, preview.console for runtime errors, and preview.screenshot for visual feedback.',
     'Do not use shell.run_command for a long-running dev server because it blocks the agent loop.',
+    'For other long-running commands, use process.start and then process.wait/process.status/process.logs so the task can recover from interruptions.',
     'Use git.status and git.diff for read-only change review; do not commit or push unless the latest user request explicitly asks.',
     'For code-agent work that needs commands, use shell.run_command with {"command":"npm","args":["..."],"cwd":"..."}; never claim you ran a command unless the tool call succeeded.',
+    'When scaffolding npm projects, use a lowercase/kebab-case package name. If the folder name has uppercase letters, create/fix package.json with a valid lowercase name before install/build.',
+    'Do not run scaffold commands from a parent folder such as D:\\Apps unless that parent is the active/allowed workspace. Create/use the exact target project folder and run commands with cwd set to that folder.',
     'For large local-model tasks, execute one small plan step at a time and use files, project.map/project.detect, devserver, preview, and validation tools as durable progress state.',
     'Do not generate a whole app/site/3D project as one huge chat answer.',
     'Never output a bare command like "dir", "npm install", or "npm run dev" as plain assistant text. Use a tool call instead.',
@@ -813,6 +1058,16 @@ function parseFencedJsonToolCalls(text: string): { visibleText: string; toolCall
 
 export function parseHermesToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
   const toolCalls: ToolCallCandidate[] = []
+  const parameterXml = parseFunctionParameterToolCalls(text)
+  if (parameterXml.toolCalls.length > 0) {
+    return parameterXml
+  }
+
+  const bracketCalls = parseBracketToolCalls(text)
+  if (bracketCalls.toolCalls.length > 0) {
+    return bracketCalls
+  }
+
   const toolCallBlockRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
   let visibleText = text.replace(toolCallBlockRe, (_match, body) => {
     const parsed = parseJsonObject(body)
@@ -847,11 +1102,260 @@ export function parseHermesToolCalls(text: string): { visibleText: string; toolC
   return { visibleText, toolCalls }
 }
 
+function decodeXmlValue(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+function parseLooseParameterValue(raw: string): unknown {
+  const value = decodeXmlValue(raw).trim()
+  if (!value) return ''
+  const parsed = parseJsonObject(value)
+  if (parsed) return parsed
+  if ((value.startsWith('[') && value.endsWith(']')) || (value.startsWith('"') && value.endsWith('"'))) {
+    try {
+      return JSON.parse(value)
+    } catch {
+      return value
+    }
+  }
+  if (value === 'true') return true
+  if (value === 'false') return false
+  if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value)
+  return value
+}
+
+function readBalancedValue(raw: string, start: number): { value: string; end: number } | null {
+  let quote: string | null = null
+  let escaped = false
+  let depth = 0
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index]
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === quote) {
+        quote = null
+        if (depth === 0) return { value: raw.slice(start, index + 1), end: index + 1 }
+      }
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      if (depth === 0 && index !== start) return { value: raw.slice(start, index).trim(), end: index }
+      continue
+    }
+    if (char === '[' || char === '{') {
+      depth += 1
+      continue
+    }
+    if (char === ']' || char === '}') {
+      depth -= 1
+      if (depth === 0) return { value: raw.slice(start, index + 1), end: index + 1 }
+      continue
+    }
+    if (depth === 0 && /\s/.test(char)) {
+      return { value: raw.slice(start, index).trim(), end: index }
+    }
+  }
+  const value = raw.slice(start).trim()
+  return value ? { value, end: raw.length } : null
+}
+
+function parseBracketToolArgs(raw: string): Record<string, unknown> {
+  const args: Record<string, unknown> = {}
+  let index = 0
+  while (index < raw.length) {
+    while (index < raw.length && /\s/.test(raw[index])) index += 1
+    const keyMatch = raw.slice(index).match(/^([A-Za-z0-9_.-]+)\s*=/)
+    if (!keyMatch) break
+    const key = keyMatch[1]
+    index += keyMatch[0].length
+    while (index < raw.length && /\s/.test(raw[index])) index += 1
+    const parsedValue = readBalancedValue(raw, index)
+    if (!parsedValue) break
+    args[key] = parseLooseParameterValue(parsedValue.value)
+    index = parsedValue.end
+  }
+  return args
+}
+
+function findBracketToolCallEnd(text: string, start: number): number {
+  let quote: string | null = null
+  let escaped = false
+  let depth = 0
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === quote) {
+        quote = null
+      }
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char === '[') {
+      depth += 1
+      continue
+    }
+    if (char === ']') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
+}
+
+function parseBracketToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
+  const toolCalls: ToolCallCandidate[] = []
+  let visibleText = ''
+  let cursor = 0
+
+  while (cursor < text.length) {
+    const start = text.indexOf('[', cursor)
+    if (start < 0) {
+      visibleText += text.slice(cursor)
+      break
+    }
+    visibleText += text.slice(cursor, start)
+    const head = text.slice(start + 1).match(/^([A-Za-z0-9_.-]+)\s+/)
+    if (!head) {
+      visibleText += text[start]
+      cursor = start + 1
+      continue
+    }
+    const name = head[1]
+    if (!name.includes('.') && !name.includes('_')) {
+      visibleText += text[start]
+      cursor = start + 1
+      continue
+    }
+    const end = findBracketToolCallEnd(text, start)
+    if (end < 0) {
+      visibleText += text.slice(start)
+      break
+    }
+    const body = text.slice(start + 1 + head[0].length, end).trim()
+    const args = parseBracketToolArgs(body)
+    if (Object.keys(args).length === 0) {
+      visibleText += text.slice(start, end + 1)
+    } else {
+      toolCalls.push({
+        id: `bracket_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        args,
+      })
+    }
+    cursor = end + 1
+  }
+
+  return { visibleText: visibleText.trim(), toolCalls }
+}
+
+function stripBracketToolMarkup(text: string): string {
+  let output = ''
+  let cursor = 0
+  while (cursor < text.length) {
+    const start = text.indexOf('[', cursor)
+    if (start < 0) {
+      output += text.slice(cursor)
+      break
+    }
+    output += text.slice(cursor, start)
+    const head = text.slice(start + 1).match(/^([A-Za-z0-9_.-]+)\s+/)
+    const name = head?.[1] ?? ''
+    if (!head || (!name.includes('.') && !name.includes('_'))) {
+      output += text[start]
+      cursor = start + 1
+      continue
+    }
+    const end = findBracketToolCallEnd(text, start)
+    if (end < 0) {
+      const lineEnd = text.indexOf('\n', start)
+      cursor = lineEnd < 0 ? text.length : lineEnd + 1
+    } else {
+      cursor = end + 1
+    }
+  }
+  return output.trim()
+}
+
+function parseFunctionParameterToolCalls(text: string): { visibleText: string; toolCalls: ToolCallCandidate[] } {
+  const toolCalls: ToolCallCandidate[] = []
+  const blockRe = /<(?:tool_call|tool_code)>\s*<function=([A-Za-z0-9_.-]+)>\s*([\s\S]*?)\s*(?:<\/function>)?\s*(?:<\/(?:tool_call|tool_code)>|$)/g
+  const visibleText = text.replace(blockRe, (_match, name, body) => {
+    const args: Record<string, unknown> = {}
+    const parameterRe = /<parameter=([A-Za-z0-9_.-]+)>\s*([\s\S]*?)\s*(?:<\/parameter>|(?=<parameter=)|$)/g
+    let found = false
+    String(body).replace(parameterRe, (_paramMatch, key, value) => {
+      found = true
+      args[key] = parseLooseParameterValue(String(value))
+      return ''
+    })
+    if (found) {
+      toolCalls.push({
+        id: `xml_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: String(name),
+        args,
+      })
+    }
+    return ''
+  }).trim()
+  return { visibleText, toolCalls }
+}
+
 export function stripResidualToolMarkup(text: string): string {
-  return text
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-    .replace(/<function=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/function>)?/g, '')
-    .trim()
+  return stripBracketToolMarkup(text
+    .replace(/<(?:tool_call|tool_code)>[\s\S]*?(?:<\/(?:tool_call|tool_code)>|$)/g, '')
+    .replace(/<function=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/function>|$)/g, '')
+    .replace(/<parameter=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/parameter>|$)/g, '')
+    .replace(/<\/?(?:tool_call|tool_code|function|parameter)>/g, '')
+    .trim())
+}
+
+export function hasUnterminatedToolCallMarkup(text: string): boolean {
+  const toolCallOpen = text.lastIndexOf('<tool_call>')
+  const toolCodeOpen = text.lastIndexOf('<tool_code>')
+  const lastOpen = Math.max(toolCallOpen, toolCodeOpen)
+  if (lastOpen < 0) return false
+  const lastClose = Math.max(text.lastIndexOf('</tool_call>'), text.lastIndexOf('</tool_code>'))
+  if (lastClose < lastOpen) return true
+  const tail = text.slice(lastOpen, lastClose)
+  const functionOpen = tail.match(/<function=[A-Za-z0-9_.-]+>/g)?.length ?? 0
+  const functionClose = tail.match(/<\/function>/g)?.length ?? 0
+  if (functionClose < functionOpen) return true
+  const parameterOpen = tail.match(/<parameter=[A-Za-z0-9_.-]+>/g)?.length ?? 0
+  const parameterClose = tail.match(/<\/parameter>/g)?.length ?? 0
+  return parameterClose < parameterOpen
+}
+
+function withTruncatedToolCallRetryPrompt(messages: LlmMessage[], visibleText: string): LlmMessage[] {
+  return [
+    ...messages,
+    ...(visibleText.trim() ? [{ role: 'assistant' as const, content: visibleText.trim() }] : []),
+    {
+      role: 'system',
+      content: [
+        'The previous assistant output ended inside an incomplete XML tool call.',
+        'Do not continue the half-written XML.',
+        'Discard it and resend exactly one complete tool call from scratch.',
+        'The new tool call must include <tool_call>, <function=...>, all required <parameter=...>...</parameter> values, and </tool_call>.',
+        'Do not include explanatory prose before or after the tool call.',
+      ].join(' '),
+    },
+  ]
 }
 
 export function extractOpenAiPayload(line: string): Record<string, unknown> | null {
@@ -955,15 +1459,15 @@ function sendRunStatus(
   model: string,
   phase: AssistantRunPhase,
 ): void {
-  if (webContents.isDestroyed()) return
-  webContents.send('ava:llm:status', {
-    streamId: args.streamId,
-    taskId: args.activeTaskId,
-    providerId: provider.id,
-    providerName: provider.name,
-    model,
-    phase,
-  })
+  toolRuntime.sendRunStatus(webContents, args, provider, model, phase)
+}
+
+function sendTextDelta(webContents: WebContents, args: StreamChatArgs, text: string): void {
+  toolRuntime.sendTextDelta(webContents, args, text)
+}
+
+function sendReasoningDelta(webContents: WebContents, args: StreamChatArgs, text: string): void {
+  toolRuntime.sendReasoningDelta(webContents, args, text)
 }
 
 async function runToolLoop(
@@ -982,7 +1486,7 @@ async function runToolLoop(
   )
   const effectiveProvider: ModelProvider = {
     ...provider,
-    reasoningMode: chooseReasoningMode(provider, currentTask, tools.length > 0),
+    reasoningMode: chooseReasoningMode(provider, currentTask, tools.length > 0, args.activeStepRole),
   }
   const hiddenReasoningBudgetChars = chooseHiddenReasoningBudgetChars(
     effectiveProvider.reasoningMode === 'on' ? 'on' : 'off',
@@ -1080,14 +1584,10 @@ async function runToolLoop(
           bufferedVisibleText += text
           return
         }
-        if (!webContents.isDestroyed()) {
-          webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
-        }
+        sendTextDelta(webContents, args, text)
       },
       text => {
-        if (!webContents.isDestroyed()) {
-          webContents.send('ava:llm:reasoning-chunk', { streamId: args.streamId, text })
-        }
+        sendReasoningDelta(webContents, args, text)
       },
     )
 
@@ -1098,8 +1598,13 @@ async function runToolLoop(
     }
 
     const outputLimitReached = step.finishReason === 'length' || step.finishReason === 'max_tokens'
+    const toolCallTruncated = step.finishReason === 'tool_call_truncated'
     const serverDisconnected = step.finishReason === 'stream_disconnected'
     let toolCalls = normalizeToolCallsForContext(step.toolCalls, args.activeFolderPath)
+    if (toolCallTruncated) {
+      workingMessages.splice(0, workingMessages.length, ...withTruncatedToolCallRetryPrompt(workingMessages, step.visibleText))
+      continue
+    }
     const trailingRawCommand =
       tools.length > 0 && toolCalls.length === 0 && step.visibleText
         ? extractTrailingRawCommand(step.visibleText)
@@ -1116,9 +1621,7 @@ async function runToolLoop(
         const failText = rawCommandNoToolText(step.visibleText)
         fullContent += failText
         parts.push({ type: 'text', text: failText })
-        if (!webContents.isDestroyed()) {
-          webContents.send('ava:llm:chunk', { streamId: args.streamId, text: failText })
-        }
+        sendTextDelta(webContents, args, failText)
         return {
           fullContent,
           parts,
@@ -1134,9 +1637,7 @@ async function runToolLoop(
     if (trailingRawCommand?.prefixText && toolCalls.length > 0) {
       fullContent += trailingRawCommand.prefixText
       parts.push({ type: 'text', text: trailingRawCommand.prefixText })
-      if (tools.length > 0 && bufferedVisibleText && !webContents.isDestroyed()) {
-        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: trailingRawCommand.prefixText })
-      }
+      if (tools.length > 0 && bufferedVisibleText) sendTextDelta(webContents, args, trailingRawCommand.prefixText)
     }
 
     const actionPromiseWithoutTool =
@@ -1177,9 +1678,7 @@ async function runToolLoop(
     if (step.visibleText && toolCalls.length === 0 && !inlineThinkingOnly) {
       fullContent += step.visibleText
       parts.push({ type: 'text', text: step.visibleText })
-      if (tools.length > 0 && bufferedVisibleText && !webContents.isDestroyed()) {
-        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: step.visibleText })
-      }
+      if (tools.length > 0 && bufferedVisibleText) sendTextDelta(webContents, args, step.visibleText)
     }
 
     // Treat any inline-thinking-only response with no tool call as a reasoning
@@ -1208,9 +1707,7 @@ async function runToolLoop(
             sawFirstToken = true
             sendRunStatus(webContents, args, provider, model, 'generating')
           }
-          if (!webContents.isDestroyed()) {
-            webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
-          }
+          sendTextDelta(webContents, args, text)
         },
       )
       if (finalizeStep.visibleText) {
@@ -1247,9 +1744,7 @@ async function runToolLoop(
       ].join('\n')
       fullContent += failText
       parts.push({ type: 'text', text: failText })
-      if (!webContents.isDestroyed()) {
-        webContents.send('ava:llm:chunk', { streamId: args.streamId, text: failText })
-      }
+      sendTextDelta(webContents, args, failText)
       return {
         fullContent,
         parts,
@@ -1313,16 +1808,11 @@ async function runToolLoop(
       }
       parts.push(toolPart)
 
-      if (!webContents.isDestroyed()) {
-        webContents.send('ava:llm:part', {
-          streamId: args.streamId,
-          taskId: args.activeTaskId,
-          partIndex,
-          part: toolPart,
-        })
-      }
+      toolRuntime.sendToolStarted(webContents, args, partIndex, toolPart)
 
       if (staleReason) {
+        toolRuntime.rememberResolvedToolCall(args.streamId, toolCall.id)
+        toolRuntime.sendError(webContents, args, staleReason)
         await appendToolAudit({
           args,
           provider,
@@ -1343,60 +1833,99 @@ async function runToolLoop(
         continue
       }
 
-      const result = builtInTool
-        ? await builtInTools.callTool(toolCall.name, toolCall.args, {
+      if (toolRuntime.hasResolvedToolCall(args.streamId, toolCall.id)) {
+        const duplicatePatch: Partial<ToolCallPart> = {
+          endedAt: Date.now(),
+          status: 'ok',
+          result: {
+            ignored: true,
+            reason: 'Duplicate tool_call_id was already resolved for this stream; Ava ignored the late duplicate to avoid executing the same tool twice.',
+          },
+        }
+        Object.assign(toolPart, duplicatePatch)
+        toolRuntime.sendToolResult(webContents, args, partIndex, toolCall.id, duplicatePatch)
+        workingMessages.push({
+          role: 'tool',
+          toolCallId: toolCall.id,
+          content: JSON.stringify(duplicatePatch.result, null, 2),
+        })
+        continue
+      }
+
+      const result = await callToolSafely({
+        toolCall,
+        builtInTool,
+        args,
+      })
+      const compactedResult = result.ok
+        ? await compactToolResultForContext(result.content, {
             activeFolderPath: args.activeFolderPath,
-            allowedDirs: allowedFilesystemDirs(),
+            streamId: args.streamId,
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
           })
-        : await mcpSupervisor.callTool({
-            namespacedName: toolCall.name,
-            rawArgs: toolCall.args,
-          })
+        : null
+      const resultForContext: CallToolResult | CallToolError = result.ok
+        ? {
+            ...result,
+            content: compactedResult?.content,
+          }
+        : result
 
       const patch: Partial<ToolCallPart> = {
         endedAt: Date.now(),
-        status: result.ok ? (result.isError ? 'error' : 'ok') : (result.aborted ? 'aborted' : 'error'),
+        status: resultForContext.ok ? (resultForContext.isError ? 'error' : 'ok') : (resultForContext.aborted ? 'aborted' : 'error'),
       }
-      if (result.ok) patch.result = result.content
-      else patch.error = result.error
+      if (resultForContext.ok) {
+        patch.result = resultForContext.content
+        if (compactedResult?.persistedOutput) patch.persistedOutput = compactedResult.persistedOutput
+      } else {
+        patch.error = resultForContext.error
+      }
 
       Object.assign(toolPart, patch)
+      toolRuntime.rememberResolvedToolCall(args.streamId, toolCall.id)
       await appendToolAudit({
         args,
         provider,
         model,
         toolCall,
         startedAt,
-        status: result.ok
-          ? (result.isError ? 'error' : 'ok')
-          : (result.aborted ? 'aborted' : 'error'),
-        error: result.ok ? undefined : result.error,
-        result: result.ok ? result.content : undefined,
-        isToolError: result.ok ? Boolean(result.isError) : undefined,
+        status: resultForContext.ok
+          ? (resultForContext.isError ? 'error' : 'ok')
+          : (resultForContext.aborted ? 'aborted' : 'error'),
+        error: resultForContext.ok ? undefined : resultForContext.error,
+        result: resultForContext.ok ? resultForContext.content : undefined,
+        isToolError: resultForContext.ok ? Boolean(resultForContext.isError) : undefined,
         serverId: resolvedTool?.serverId,
         rawToolName: resolvedTool?.rawName,
         pluginId: serverRuntime?.pluginId,
       })
-      if (!webContents.isDestroyed()) {
-        webContents.send('ava:llm:partUpdate', {
-          streamId: args.streamId,
-          taskId: args.activeTaskId,
-          partIndex,
-          partId: toolCall.id,
-          patch,
-        })
-      }
+      toolRuntime.sendToolResult(webContents, args, partIndex, toolCall.id, patch)
 
-      if (!result.ok && result.aborted) {
+      if (!resultForContext.ok && resultForContext.aborted) {
         throw new Error('aborted')
       }
 
-      const toolText = JSON.stringify(result.ok ? result.content : { error: result.error }, null, 2)
+      const toolText = JSON.stringify(resultForContext.ok ? resultForContext.content : { error: resultForContext.error }, null, 2)
       workingMessages.push({
         role: 'tool',
         toolCallId: toolCall.id,
         content: toolText,
       })
+      if (!resultForContext.ok || resultForContext.isError) {
+        workingMessages.push({
+          role: 'system',
+          content: toolRecoveryMessage(toolCall, resultForContext.ok ? toolText : resultForContext.error),
+        })
+      }
+      const unsatisfiedMessage = unsatisfiedRequiredToolMessage(args, toolCall)
+      if (resultForContext.ok && !resultForContext.isError && unsatisfiedMessage) {
+        workingMessages.push({
+          role: 'system',
+          content: unsatisfiedMessage,
+        })
+      }
 
       // Smart-budget signal: did this call succeed or fail? Used by the
       // outer loop to detect unrecoverable repetition / no progress.
@@ -1406,12 +1935,7 @@ async function runToolLoop(
         result.ok && !result.isError ? 'ok' : 'error',
       )
 
-      if (
-        args.activeStepRequiredTools?.length &&
-        result.ok &&
-        !result.isError &&
-        args.activeStepRequiredTools.includes(toolCall.name)
-      ) {
+      if (progressToolSatisfiedForStep(args, toolCall, resultForContext)) {
         return {
           fullContent,
           parts,
@@ -1448,6 +1972,23 @@ async function runToolLoop(
       } else {
         earlyStopReason = 'no_progress'
       }
+    }
+  }
+
+  const madeStepProgress = Boolean(args.activeStepRole) && parts.some(part =>
+    part.type === 'tool_call' &&
+    part.status === 'ok' &&
+    (part.name === 'file.write_text' || part.name === 'file.patch' || part.name === 'file.stat' || part.name === 'project.map' || part.name === 'project.detect'),
+  )
+  if (madeStepProgress) {
+    return {
+      fullContent,
+      parts,
+      model,
+      toolCallsIssued,
+      loopRounds: loopBudget,
+      detectedToolFormat,
+      stopReason: 'tool_loop_limit',
     }
   }
 
@@ -1492,9 +2033,7 @@ async function runToolLoop(
   ].filter(Boolean).join('\n')
   fullContent += stopText
   parts.push({ type: 'text', text: stopText })
-  if (!webContents.isDestroyed()) {
-    webContents.send('ava:llm:chunk', { streamId: args.streamId, text: stopText })
-  }
+  sendTextDelta(webContents, args, stopText)
   return {
     fullContent,
     parts,

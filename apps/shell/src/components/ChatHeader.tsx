@@ -47,7 +47,6 @@ export function ChatHeader({
           </button>
         )}
       </div>
-
       <div className="w-[140px] shrink-0 h-full pointer-events-none" />
     </div>
   )

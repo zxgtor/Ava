@@ -69,11 +69,13 @@ interface StreamChatArgs {
   providers: ModelProvider[]
   activeTaskId?: string
   activeFolderPath?: string
+  taskAllowedDirs?: string[]
   activeCommandInvocation?: ToolAuditCommandInvocation
   temperature?: number
   toolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
   pluginStates?: Record<string, PluginState>
   activeStepRequiredTools?: string[]
+  activeStepRole?: 'inspect' | 'scaffold' | 'install' | 'feature' | 'preview' | 'console' | 'screenshot' | 'repair' | 'validate' | 'final_report'
   activeStepToolLoopBudget?: number
   finalReportReadBudget?: number
 }
@@ -92,6 +94,7 @@ interface StreamChatOk {
           args: Record<string, unknown>
           status: 'pending' | 'running' | 'ok' | 'error' | 'aborted'
           result?: unknown
+          persistedOutput?: PersistedToolResultRef
           error?: string
           startedAt?: number
           endedAt?: number
@@ -114,6 +117,15 @@ interface StreamChatErr {
 }
 
 type StreamChatReply = StreamChatOk | StreamChatErr
+
+interface PersistedToolResultRef {
+  path: string
+  preview: string
+  originalBytes: number
+  truncated: true
+  mime: 'application/json' | 'text/plain'
+  createdAt: number
+}
 
 interface ChunkPayload {
   streamId: string
@@ -148,6 +160,14 @@ interface PartUpdatePayload {
   partId?: string
   patch: Record<string, unknown>
 }
+
+type RuntimeStreamEvent =
+  | { type: 'text_delta'; streamId: string; taskId?: string; text: string }
+  | { type: 'reasoning_delta'; streamId: string; taskId?: string; text: string }
+  | { type: 'run_status'; streamId: string; taskId?: string; phase: AssistantRunPhase; providerId?: string; providerName?: string; model?: string }
+  | { type: 'tool_call_started'; streamId: string; taskId?: string; partIndex: number; part: StreamChatOk['result']['parts'][number] }
+  | { type: 'tool_result'; streamId: string; taskId?: string; partIndex: number; partId?: string; patch: Record<string, unknown> }
+  | { type: 'error'; streamId: string; taskId?: string; message: string }
 
 interface McpToolDescriptor {
   rawName: string
@@ -363,6 +383,7 @@ const ava = {
     onStatus: (handler: (payload: StatusPayload) => void) => on<StatusPayload>('ava:llm:status', handler),
     onPart: (handler: (payload: PartPayload) => void) => on<PartPayload>('ava:llm:part', handler),
     onPartUpdate: (handler: (payload: PartUpdatePayload) => void) => on<PartUpdatePayload>('ava:llm:partUpdate', handler),
+    onEvent: (handler: (payload: RuntimeStreamEvent) => void) => on<RuntimeStreamEvent>('ava:llm:event', handler),
   },
 
   mcp: {

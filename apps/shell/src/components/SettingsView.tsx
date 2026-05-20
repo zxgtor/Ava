@@ -21,6 +21,11 @@ import { AboutSection } from './settings/AboutSection'
 export function SettingsView() {
   const { state, dispatch } = useStore()
   const [localPlugins, setLocalPlugins] = useState<any[]>([])
+  const settingsRef = useRef(state.settings)
+
+  useEffect(() => {
+    settingsRef.current = state.settings
+  }, [state.settings])
 
   const refreshPlugins = useCallback(async () => {
     try {

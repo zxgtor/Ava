@@ -19,11 +19,20 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   'fs.listdir': 'file.list_dir',
   'file.list': 'file.list_dir',
   'filesystem.list_directory': 'file.list_dir',
+  'file_create_dir': 'file.create_dir',
   'fs.stat': 'file.stat',
   'filesystem.stat': 'file.stat',
+  'file_patch': 'file.patch',
   'shell.exec': 'shell.run_command',
   'shell.execute': 'shell.run_command',
   'shell.command': 'shell.run_command',
+  'terminal.start': 'process.start',
+  'process.run': 'process.start',
+  'process_start': 'process.start',
+  'process.status': 'process.status',
+  'process.logs': 'process.logs',
+  'process.wait': 'process.wait',
+  'process.kill': 'process.kill',
   terminal: 'shell.run_command',
   bash: 'shell.run_command',
   powershell: 'shell.run_command',
@@ -49,6 +58,11 @@ const KNOWN_TASK_TOOLS = new Set([
   'devserver.start',
   'devserver.stop',
   'devserver.status',
+  'process.start',
+  'process.status',
+  'process.logs',
+  'process.wait',
+  'process.kill',
   'preview.open',
   'preview.console',
   'preview.screenshot',
@@ -56,7 +70,7 @@ const KNOWN_TASK_TOOLS = new Set([
 
 export function normalizeTaskToolName(name: string): string | null {
   const raw = name.trim()
-  const lower = raw.toLowerCase()
+  const lower = raw.toLowerCase().replace(/_\d+$/g, '')
   const mapped = TOOL_NAME_ALIASES[lower] ?? lower
   if (KNOWN_TASK_TOOLS.has(mapped)) return mapped
   if (/\b(shell|bash|powershell|cmd|terminal|npm|npx|node|git)\b/.test(lower)) return 'shell.run_command'

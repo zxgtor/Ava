@@ -82,7 +82,6 @@ export function TaskGraphWidget({ plan }: Props) {
             )}
           </div>
         </div>
-
         <div className="flex flex-col gap-6">
           {layers.map((layer, layerIdx) => (
             <div key={layerIdx} className="flex items-start gap-4 relative">

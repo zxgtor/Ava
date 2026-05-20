@@ -57,6 +57,8 @@ export function runtimeEnvironmentInfo(): RuntimeEnvironmentInfo {
         'Do not delete files with rm or Remove-Item unless Ava adds an explicit safe delete tool for that workflow.',
         'For file creation/editing, prefer Ava file tools over shell commands.',
         'For npm/node/git work, use shell.run_command with command and args as separate fields.',
+        'For npm project scaffolding, package names must be lowercase/kebab-case even if the folder path contains uppercase letters.',
+        'For long-running non-devserver commands, use process.start and check process.status/process.wait/process.logs.',
       ],
     }
   }
@@ -73,6 +75,8 @@ export function runtimeEnvironmentInfo(): RuntimeEnvironmentInfo {
         'Use POSIX paths when referencing local files.',
         'Prefer Ava file tools for file creation/editing.',
         'Use shell.run_command with command and args as separate fields.',
+        'For npm project scaffolding, package names must be lowercase/kebab-case even if the folder path contains uppercase letters.',
+        'For long-running non-devserver commands, use process.start and check process.status/process.wait/process.logs.',
       ],
     }
   }
@@ -89,6 +93,8 @@ export function runtimeEnvironmentInfo(): RuntimeEnvironmentInfo {
         'Use POSIX paths when referencing local files.',
         'Prefer Ava file tools for file creation/editing.',
         'Use shell.run_command with command and args as separate fields.',
+        'For npm project scaffolding, package names must be lowercase/kebab-case even if the folder path contains uppercase letters.',
+        'For long-running non-devserver commands, use process.start and check process.status/process.wait/process.logs.',
       ],
     }
   }

@@ -1,10 +1,12 @@
+import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { resolve as resolvePath, basename, dirname } from 'node:path'
 
 import type { McpToolDescriptor, CallToolError, CallToolResult } from './mcpSupervisor'
 import { COMMAND_ALLOWLIST, DEVSERVER_COMMAND_ALLOWLIST } from './runtimeEnvironment'
+import { processRegistry, type ProcessRecordView } from './processRegistry'
 
 // Bundled ripgrep — works regardless of whether the user has `rg` on PATH.
 // Resolved lazily so a missing/corrupt install surfaces as a clear error
@@ -261,6 +263,81 @@ const CODING_TOOLS: McpToolDescriptor[] = [
   },
 ]
 
+const PROCESS_TOOLS: McpToolDescriptor[] = [
+  {
+    rawName: 'start',
+    name: 'process.start',
+    description: [
+      'Start a long-running or background development command and return immediately with a processId.',
+      'Use this when a command may take a while and Ava should keep task progress visible.',
+      'Use process.status/process.logs/process.wait to inspect completion before moving to the next step.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        command: { type: 'string' },
+        args: { type: 'array', items: { type: 'string' } },
+        cwd: { type: 'string' },
+      },
+      required: ['command', 'args', 'cwd'],
+    },
+  },
+  {
+    rawName: 'status',
+    name: 'process.status',
+    description: 'Return status for one background process, or list tracked processes for a cwd.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Process id returned by process.start.' },
+        cwd: { type: 'string', description: 'Optional cwd filter when id is omitted.' },
+      },
+    },
+  },
+  {
+    rawName: 'logs',
+    name: 'process.logs',
+    description: 'Return recent stdout/stderr for a tracked process. Prefer id from process.start; if id is unavailable, pass cwd to use the latest tracked process in that directory.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Process id returned by process.start.' },
+        cwd: { type: 'string', description: 'Fallback cwd filter when id is omitted.' },
+      },
+    },
+  },
+  {
+    rawName: 'wait',
+    name: 'process.wait',
+    description: 'Wait briefly for a tracked process to exit, then return its latest status and logs. Prefer id from process.start; if id is unavailable, pass cwd to use the latest tracked process in that directory.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Process id returned by process.start.' },
+        cwd: { type: 'string', description: 'Fallback cwd filter when id is omitted.' },
+        timeoutMs: { type: 'number', description: 'Defaults to 30000, max 120000.' },
+      },
+    },
+  },
+  {
+    rawName: 'kill',
+    name: 'process.kill',
+    description: 'Stop a tracked background process started by process.start. Prefer id from process.start; if id is unavailable, pass cwd to kill the latest tracked process in that directory.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Process id returned by process.start.' },
+        cwd: { type: 'string', description: 'Fallback cwd filter when id is omitted.' },
+      },
+    },
+  },
+]
+
 const PREVIEW_TOOLS: McpToolDescriptor[] = [
   {
     rawName: 'start',
@@ -431,7 +508,7 @@ class BuiltInTools {
   private devServers = new Map<string, DevServerProcess>()
 
   listTools(): McpToolDescriptor[] {
-    return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS, ...PREVIEW_TOOLS]
+    return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS, ...PROCESS_TOOLS, ...PREVIEW_TOOLS]
   }
 
   /**
@@ -478,6 +555,11 @@ class BuiltInTools {
       if (name === 'devserver.start') return this.startDevServer(rawArgs, context)
       if (name === 'devserver.stop') return this.stopDevServer(rawArgs, context)
       if (name === 'devserver.status') return this.devServerStatus(rawArgs, context)
+      if (name === 'process.start') return this.startProcess(rawArgs, context)
+      if (name === 'process.status') return this.processStatus(rawArgs, context)
+      if (name === 'process.logs') return this.processLogs(rawArgs)
+      if (name === 'process.wait') return this.processWait(rawArgs)
+      if (name === 'process.kill') return this.processKill(rawArgs)
       if (name === 'preview.open') return this.openPreview(rawArgs)
       if (name === 'preview.console') return this.previewConsole(rawArgs)
       if (name === 'preview.screenshot') return this.previewScreenshot(rawArgs, context)
@@ -496,6 +578,29 @@ class BuiltInTools {
 
     const safetyError = validateRunCommand(parsed.args, context)
     if (safetyError) return { ok: false, error: safetyError }
+
+    if (isLikelyLongRunningCommand(parsed.args)) {
+      const resolvedCommand = resolveCommand(parsed.args.command)
+      const spawnTarget = spawnTargetForCommand(resolvedCommand, parsed.args.args)
+      const proc = processRegistry.start({
+        command: spawnTarget.command,
+        args: spawnTarget.args,
+        cwd: parsed.args.cwd,
+        env: process.env,
+      })
+      return {
+        ok: true,
+        content: {
+          event: 'backgrounded',
+          reason: 'Command looks like a long-running dev/server process, so Ava started it in Process Registry instead of blocking the tool loop.',
+          semantic: classifyRunCommand(parsed.args),
+          processId: proc.id,
+          originalCommand: parsed.args.command,
+          originalArgs: parsed.args.args,
+          ...proc,
+        },
+      }
+    }
 
     return this.runCommand(parsed.args)
   }
@@ -568,23 +673,7 @@ class BuiltInTools {
   private async writeText(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
     const parsed = parsePathArg(rawArgs)
     if (!parsed.ok) return { ok: false, error: parsed.error }
-    let content: string | null = typeof rawArgs.content === 'string' ? rawArgs.content : null
-
-    // Tolerance: models often pass JSON-file content as an object literal
-    // instead of a stringified JSON. For *.json / *.jsonc paths, auto-encode
-    // it. For other paths, keep strict rejection — we don't want to
-    // accidentally JSON.stringify .ts/.tsx code.
-    if (content === null && rawArgs.content && typeof rawArgs.content === 'object') {
-      const lowerPath = parsed.path.toLowerCase()
-      if (lowerPath.endsWith('.json') || lowerPath.endsWith('.jsonc')) {
-        try {
-          content = JSON.stringify(rawArgs.content, null, 2)
-        } catch {
-          content = null
-        }
-      }
-    }
-
+    const content = normalizeWriteTextContent(rawArgs.content, parsed.path)
     if (content === null) {
       const got = rawArgs.content
       const gotType = got === null ? 'null' : Array.isArray(got) ? 'array' : typeof got
@@ -601,6 +690,7 @@ class BuiltInTools {
           `Received content of type "${gotType}", value: ${preview}.`,
           `Correct call shape: { "path": "<absolute or project-relative path>", "content": "<the entire file as a single string>" }.`,
           `For source code (.ts/.tsx/.js/.css/.html etc.) pass the file text directly as a single string — do NOT wrap it in an object.`,
+          `For JSON files, content may also be a JSON object and Ava will stringify it.`,
         ].join(' '),
       }
     }
@@ -644,7 +734,16 @@ class BuiltInTools {
     if (guard) return { ok: false, error: guard }
 
     const maxEntries = clampNumber(rawArgs.maxEntries, 1, MAX_DIR_ENTRIES, MAX_DIR_ENTRIES)
-    const entries = await readdir(parsed.path, { withFileTypes: true })
+    let entries
+    try {
+      entries = await readdir(parsed.path, { withFileTypes: true })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'ENOENT') {
+        return { ok: false, error: `Directory "${resolvePath(parsed.path)}" does not exist yet. Create it with file.create_dir or scaffold the project before listing it.` }
+      }
+      throw err
+    }
     return {
       ok: true,
       content: {
@@ -763,7 +862,16 @@ class BuiltInTools {
     const guard = validateDirectoryAccess(parsed.cwd, context)
     if (guard) return { ok: false, error: guard }
 
-    const detected = await detectProject(parsed.cwd)
+    let detected: DetectedProject
+    try {
+      detected = await detectProject(parsed.cwd)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'ENOENT') {
+        return { ok: false, error: `Project directory "${resolvePath(parsed.cwd)}" does not exist yet. Create it with file.create_dir before detecting project type.` }
+      }
+      throw err
+    }
     return { ok: true, content: detected }
   }
 
@@ -775,7 +883,16 @@ class BuiltInTools {
 
     const maxDepth = clampNumber(rawArgs.maxDepth, 1, 8, PROJECT_MAP_DEFAULT_DEPTH)
     const maxFiles = clampNumber(rawArgs.maxFiles, 20, 1000, PROJECT_MAP_DEFAULT_MAX_FILES)
-    const mapped = await mapProject(parsed.cwd, { maxDepth, maxFiles })
+    let mapped: ProjectMap
+    try {
+      mapped = await mapProject(parsed.cwd, { maxDepth, maxFiles })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'ENOENT') {
+        return { ok: false, error: `Project directory "${resolvePath(parsed.cwd)}" does not exist yet. Create it with file.create_dir before mapping it.` }
+      }
+      throw err
+    }
     return { ok: true, content: mapped }
   }
 
@@ -954,6 +1071,12 @@ class BuiltInTools {
 
     child.stdout.on('data', chunk => append('stdout', chunk))
     child.stderr.on('data', chunk => append('stderr', chunk))
+    child.stdout.on('error', err => {
+      server.stderr = appendRolling(server.stderr, pipeErrorMessage('stdout', err), MAX_DEVSERVER_LOG_CHARS)
+    })
+    child.stderr.on('error', err => {
+      server.stderr = appendRolling(server.stderr, pipeErrorMessage('stderr', err), MAX_DEVSERVER_LOG_CHARS)
+    })
     child.on('error', err => {
       server.status = 'exited'
       server.stderr = appendRolling(server.stderr, err.message, MAX_DEVSERVER_LOG_CHARS)
@@ -999,6 +1122,85 @@ class BuiltInTools {
           .map(item => devServerView(item, 'status')),
       },
     }
+  }
+
+  private async startProcess(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const parsed = parseRunCommandArgs(rawArgs)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+
+    const safetyError = validateRunCommand(parsed.args, context)
+    if (safetyError) return { ok: false, error: safetyError }
+
+    const resolvedCommand = resolveCommand(parsed.args.command)
+    const spawnTarget = spawnTargetForCommand(resolvedCommand, parsed.args.args)
+    const proc = processRegistry.start({
+      command: spawnTarget.command,
+      args: spawnTarget.args,
+      cwd: parsed.args.cwd,
+      env: process.env,
+    })
+    return {
+      ok: true,
+      content: {
+        event: 'started',
+        processId: proc.id,
+        originalCommand: parsed.args.command,
+        originalArgs: parsed.args.args,
+        ...proc,
+      },
+    }
+  }
+
+  private async processStatus(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const id = typeof rawArgs.id === 'string' ? rawArgs.id.trim() : ''
+    if (id) {
+      const process = processRegistry.get(id)
+      if (!process) return { ok: false, error: `No tracked process found for id "${id}".` }
+      return { ok: true, isError: process.status === 'error', content: process }
+    }
+
+    const cwd = typeof rawArgs.cwd === 'string' ? rawArgs.cwd.trim() : ''
+    if (cwd) {
+      const guard = validateDirectoryAccess(cwd, context)
+      if (guard) return { ok: false, error: guard }
+      return { ok: true, content: { processes: processRegistry.list(cwd) } }
+    }
+    return { ok: true, content: { processes: processRegistry.list() } }
+  }
+
+  private async processLogs(rawArgs: Record<string, unknown>): Promise<CallToolResult | CallToolError> {
+    const process = findProcessFromArgs(rawArgs)
+    if (!process.ok) return { ok: false, error: process.error }
+    return {
+      ok: true,
+      isError: process.process.status === 'error',
+      content: {
+        id: process.process.id,
+        status: process.process.status,
+        exitCode: process.process.exitCode,
+        signal: process.process.signal,
+        stdout: process.process.stdout,
+        stderr: process.process.stderr,
+        truncated: process.process.truncated,
+      },
+    }
+  }
+
+  private async processWait(rawArgs: Record<string, unknown>): Promise<CallToolResult | CallToolError> {
+    const found = findProcessFromArgs(rawArgs)
+    if (!found.ok) return { ok: false, error: found.error }
+    const timeoutMs = clampNumber(rawArgs.timeoutMs, 100, 120_000, 30_000)
+    const process = await processRegistry.wait(found.process.id, timeoutMs)
+    if (!process) return { ok: false, error: `No tracked process found for id "${found.process.id}".` }
+    return { ok: true, isError: process.status === 'error' || (process.status === 'exited' && process.exitCode !== 0), content: process }
+  }
+
+  private async processKill(rawArgs: Record<string, unknown>): Promise<CallToolResult | CallToolError> {
+    const found = findProcessFromArgs(rawArgs)
+    if (!found.ok) return { ok: false, error: found.error }
+    const process = processRegistry.kill(found.process.id)
+    if (!process) return { ok: false, error: `No tracked process found for id "${found.process.id}".` }
+    return { ok: true, content: process }
   }
 
   private async openPreview(rawArgs: Record<string, unknown>): Promise<CallToolResult | CallToolError> {
@@ -1073,6 +1275,7 @@ class BuiltInTools {
       }
     }
     this.active.clear()
+    processRegistry.killAll()
   }
 
   private findDevServerFromArgs(
@@ -1094,16 +1297,30 @@ class BuiltInTools {
     ) ?? null
   }
 
-  private runCommand(args: RunCommandArgs): Promise<CallToolResult | CallToolError> {
+  private async runCommand(args: RunCommandArgs): Promise<CallToolResult | CallToolError> {
     const startedAt = Date.now()
     const timeoutMs = clampTimeout(args.timeoutMs)
     const controller = new AbortController()
+    const outputLogPath = await commandOutputLogPath(args)
+    const outputLog = createWriteStream(outputLogPath, { flags: 'a', encoding: 'utf8' })
 
     return new Promise(resolve => {
       let stdout = ''
       let stderr = ''
       let truncated = false
+      let stdoutBytes = 0
+      let stderrBytes = 0
       let settled = false
+      let outputLogClosed = false
+
+      const closeOutputLog = () => new Promise<void>(resolveLog => {
+        if (outputLogClosed) {
+          resolveLog()
+          return
+        }
+        outputLogClosed = true
+        outputLog.end(() => resolveLog())
+      })
 
       const resolvedCommand = resolveCommand(args.command)
       const spawnTarget = spawnTargetForCommand(resolvedCommand, args.args)
@@ -1126,31 +1343,40 @@ class BuiltInTools {
           if (settled) return
           settled = true
           this.active.delete(active)
-          resolve({ 
-            ok: false, 
-            error: 'Command timed out and failed to exit within grace period. It may be locked by another process (e.g. dev server).', 
-            aborted: true 
+          closeOutputLog().then(() => {
+            resolve({
+              ok: false,
+              error: 'Command timed out and failed to exit within grace period. It may be locked by another process (e.g. dev server).',
+              aborted: true,
+            })
           })
         }, 5000)
       }, timeoutMs)
 
       const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
         const text = chunk.toString('utf8')
+        const prefix = kind === 'stdout' ? '[stdout] ' : '[stderr] '
+        outputLog.write(`${prefix}${text}`)
+        if (kind === 'stdout') stdoutBytes += Buffer.byteLength(text, 'utf8')
+        else stderrBytes += Buffer.byteLength(text, 'utf8')
         const current = kind === 'stdout' ? stdout : stderr
         const next = current + text
         if (next.length > MAX_OUTPUT_CHARS) truncated = true
-        if (kind === 'stdout') stdout = next.slice(0, MAX_OUTPUT_CHARS)
-        else stderr = next.slice(0, MAX_OUTPUT_CHARS)
+        if (kind === 'stdout') stdout = previewCommandOutput(next)
+        else stderr = previewCommandOutput(next)
       }
 
       child.stdout.on('data', chunk => append('stdout', chunk))
       child.stderr.on('data', chunk => append('stderr', chunk))
+      child.stdout.on('error', err => append('stderr', Buffer.from(pipeErrorMessage('stdout', err))))
+      child.stderr.on('error', err => append('stderr', Buffer.from(pipeErrorMessage('stderr', err))))
 
-      child.on('error', err => {
+      child.on('error', async err => {
         if (settled) return
         settled = true
         clearTimeout(timer)
         this.active.delete(active)
+        await closeOutputLog()
         if (controller.signal.aborted) {
           resolve({ ok: false, error: 'aborted', aborted: true })
           return
@@ -1158,11 +1384,12 @@ class BuiltInTools {
         resolve({ ok: false, error: err.message })
       })
 
-      child.on('close', (code, signal) => {
+      child.on('close', async (code, signal) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
         this.active.delete(active)
+        await closeOutputLog()
         if (controller.signal.aborted) {
           resolve({
             ok: false,
@@ -1176,11 +1403,15 @@ class BuiltInTools {
           command: args.command,
           args: args.args,
           cwd: resolvePath(args.cwd),
+          semantic: classifyRunCommand(args),
           exitCode: code,
           signal,
           durationMs: Math.max(0, Date.now() - startedAt),
           stdout,
           stderr,
+          stdoutBytes,
+          stderrBytes,
+          outputLogPath,
           truncated,
         }
         resolve({
@@ -1191,6 +1422,34 @@ class BuiltInTools {
       })
     })
   }
+}
+
+function normalizeWriteTextContent(content: unknown, path: string): string | null {
+  if (typeof content === 'string') return content
+  if (
+    content &&
+    typeof content === 'object' &&
+    !Array.isArray(content) &&
+    resolvePath(path).toLowerCase().endsWith('.json')
+  ) {
+    return `${JSON.stringify(content, null, 2)}\n`
+  }
+  return null
+}
+
+async function commandOutputLogPath(args: RunCommandArgs): Promise<string> {
+  const dir = resolvePath(args.cwd, '.ava', 'command-logs')
+  await mkdir(dir, { recursive: true })
+  const safeCommand = normalizeCommandName(args.command).replace(/[^a-z0-9_.-]/gi, '_') || 'command'
+  return resolvePath(dir, `${Date.now()}-${safeCommand}-${randomUUID()}.log`)
+}
+
+function previewCommandOutput(text: string): string {
+  if (text.length <= MAX_OUTPUT_CHARS) return text
+  const half = Math.floor((MAX_OUTPUT_CHARS - 120) / 2)
+  const head = text.slice(0, half)
+  const tail = text.slice(-half)
+  return `${head}\n\n... output truncated; full output is available in outputLogPath ...\n\n${tail}`
 }
 
 function parseRunCommandArgs(raw: Record<string, unknown>): { ok: true; args: RunCommandArgs } | { ok: false; error: string } {
@@ -1231,6 +1490,43 @@ function normalizeRunCommandArgs(args: RunCommandArgs): RunCommandArgs {
   return args
 }
 
+function classifyRunCommand(args: RunCommandArgs): string {
+  const commandName = normalizeCommandName(args.command)
+  const joined = args.args.join(' ').toLowerCase()
+  if (isLikelyLongRunningCommand(args)) return 'long_running'
+  if (/(^|\s)(install|add|i)(\s|$)/.test(joined) || ['pip', 'pip3'].includes(commandName)) return 'install'
+  if (/(^|\s)(build|typecheck|test|lint|tsc)(\s|$)/.test(joined) || ['tsc', 'pytest'].includes(commandName)) return 'validate'
+  if (commandName === 'git') return 'git'
+  if (['rg', 'dir', 'ls', 'cat'].includes(commandName)) return 'inspect'
+  if (['node', 'python', 'python3', 'py', 'dotnet'].includes(commandName)) return 'execute'
+  return 'command'
+}
+
+function isLikelyLongRunningCommand(args: RunCommandArgs): boolean {
+  const commandName = normalizeCommandName(args.command)
+  const normalizedArgs = args.args.map(arg => arg.toLowerCase())
+  if (['vite'].includes(commandName)) return !normalizedArgs.includes('build')
+  if (['next', 'astro', 'remix'].includes(commandName)) return normalizedArgs.includes('dev') || normalizedArgs.length === 0
+
+  const script = npmScriptName(commandName, normalizedArgs)
+  if (!script) return false
+  return ['dev', 'start', 'serve', 'preview'].includes(script)
+}
+
+function npmScriptName(commandName: string, args: string[]): string | null {
+  if (!['npm', 'npm.cmd', 'pnpm', 'pnpm.cmd', 'yarn', 'yarn.cmd', 'bun', 'bunx'].includes(commandName)) return null
+  if (commandName === 'yarn' || commandName === 'yarn.cmd') {
+    if (args[0] === 'run') return args[1] ?? null
+    return args[0] ?? null
+  }
+  if (commandName === 'bun' || commandName === 'bunx') {
+    if (args[0] === 'run') return args[1] ?? null
+    return null
+  }
+  if (args[0] === 'run') return args[1] ?? null
+  return null
+}
+
 function powershellCommand(args: RunCommandArgs, commandArgs: string[]): RunCommandArgs {
   return {
     ...args,
@@ -1259,6 +1555,19 @@ function parsePreviewUrl(raw: Record<string, unknown>): { ok: true; url: string 
   return { ok: true, url }
 }
 
+function findProcessFromArgs(raw: Record<string, unknown>): { ok: true; process: ProcessRecordView } | { ok: false; error: string } {
+  const id = typeof raw.id === 'string' ? raw.id.trim() : ''
+  if (id) {
+    const process = processRegistry.get(id)
+    return process ? { ok: true, process } : { ok: false, error: `No tracked process found for id "${id}".` }
+  }
+  const cwd = typeof raw.cwd === 'string' ? raw.cwd.trim() : undefined
+  const process = processRegistry.latest(cwd)
+  return process
+    ? { ok: true, process }
+    : { ok: false, error: cwd ? `No tracked process found for cwd "${cwd}".` : 'Process tool requires "id", or a cwd with at least one tracked process.' }
+}
+
 function validateRunCommand(args: RunCommandArgs, context: RunContext): string | null {
   const commandName = normalizeCommandName(args.command)
   if (!COMMAND_ALLOWLIST.has(commandName)) {
@@ -1275,7 +1584,11 @@ function validateRunCommand(args: RunCommandArgs, context: RunContext): string |
   }
   for (const arg of args.args) {
     if (DANGEROUS_ARG_RE.test(arg)) {
-      return `Blocked potentially dangerous command argument: ${arg}`
+      return [
+        `Blocked potentially dangerous command argument: ${arg}`,
+        'Use shell.run_command only for structured build/install/test commands.',
+        'For file creation or edits, use file.write_text or file.patch instead of PowerShell scripts.',
+      ].join(' ')
     }
   }
   return null
@@ -1545,6 +1858,13 @@ function isRipgrepNoMatch(content: unknown): boolean {
 function appendRolling(current: string, text: string, maxChars: number): string {
   const next = current + text
   return next.length > maxChars ? next.slice(next.length - maxChars) : next
+}
+
+function pipeErrorMessage(kind: 'stdout' | 'stderr', err: Error): string {
+  const code = (err as NodeJS.ErrnoException).code
+  return code === 'EPIPE'
+    ? `${kind} pipe closed (EPIPE)\n`
+    : `${kind} pipe error: ${err.message}\n`
 }
 
 function extractLocalUrl(text: string): string | undefined {

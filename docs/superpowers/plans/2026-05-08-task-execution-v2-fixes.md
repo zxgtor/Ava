@@ -12,6 +12,109 @@
 
 ---
 
+## P0 Review Addendum — Must Fix Before More Runtime Work
+
+These issues came from the 2026-05-20 local code review after the initial Task Execution v2/runtime work. Treat them as blockers before continuing broad architecture changes or manual big-task testing.
+
+- [x] **P0.1 Tighten step completion gates**
+
+Current risk: `evaluateStepCompletion` can mark a step complete when any required tool succeeds. For `write_core_files`, one successful `file.write_text` or `file.patch` can incorrectly advance to preview/validate while the app is only partially written.
+
+Required fix:
+- Add role/step-specific completion gates.
+- `write_core_files` must require stronger evidence than a single write. Acceptable v1 evidence: a planned/observed file checklist, or `project.map`/`file.stat` verification after writes.
+- Do not allow generic "any required tool succeeded" completion for `feature`, `scaffold`, `install`, `validate`, or `final_report` roles.
+
+Files to review/change:
+- `apps/shell/src/lib/agent/taskExecution.ts`
+- `apps/shell/electron/llm.ts`
+- `apps/shell/src/components/ChatView.tsx`
+
+Tests to add/update:
+- A `write_core_files` step with one successful `file.write_text` must stay running unless its completion evidence is satisfied.
+- A `write_core_files` step with required file evidence satisfied can complete.
+- A duplicate/ignored tool result must not satisfy a step completion gate.
+
+- [x] **P0.2 Persist full shell output before compacting**
+
+Current risk: `shell.run_command` truncates stdout/stderr at `MAX_OUTPUT_CHARS` before `toolResultStore` sees it, so persisted tool results still lose the real build/test error.
+
+Required fix:
+- Capture full stdout/stderr to a persistent log file or bounded rolling file first.
+- Send only compact head/tail preview to the LLM.
+- Store a `persistedOutput` reference that points to the full command output, not the already-truncated preview.
+
+Files to review/change:
+- `apps/shell/electron/services/builtInTools.ts`
+- `apps/shell/electron/services/toolResultStore.ts`
+
+Tests to add/update:
+- A command producing output larger than `MAX_OUTPUT_CHARS` must return compact preview and a persisted full output reference.
+- The persisted file must contain text beyond the compact preview.
+
+- [ ] **P0.3 Centralize progress/recovery semantics**
+
+Current risk: `llm.ts` counts `project.map/file.stat/project.detect` as step progress, while renderer recovery only continues after file write/patch progress. This can create silent or inconsistent stops.
+
+Required fix:
+- Move progress classification into one shared runtime policy module.
+- Use the same policy for main-process `runToolLoop` early returns and renderer `tool_loop_limit` recovery.
+- Return explicit recovery actions: `continue_step`, `block_step`, `recover_step`, or `stop_with_error`.
+
+Files to review/change:
+- `apps/shell/electron/llm.ts`
+- `apps/shell/src/lib/agent/runtime/agentRuntime.ts`
+- `apps/shell/src/components/ChatView.tsx`
+
+Tests to add/update:
+- Inspect progress (`project.map`) and file progress (`file.write_text`) produce consistent recovery behavior.
+- Tool loop limit after non-progress blocks with a useful reason.
+
+- [ ] **P0.4 Dedupe duplicate tool calls before stale/error handling**
+
+Current risk: duplicate tool call ids are checked after stale/final-report-budget validation. A repeated stale tool call can still emit repeated stale errors and burn loop budget.
+
+Required fix:
+- Check `toolRuntime.hasResolvedToolCall(streamId, toolCall.id)` immediately after parsing a tool call and before stale/final-report validation.
+- Duplicate/ignored tool calls must not be counted as successful tool evidence.
+
+Files to review/change:
+- `apps/shell/electron/llm.ts`
+- `apps/shell/electron/services/toolRuntime.ts`
+
+Tests to add/update:
+- Repeated stale tool call id is ignored after first resolution.
+- Ignored duplicate tool call does not advance the active step.
+
+- [ ] **P0.5 Recursively compact nested tool results**
+
+Current risk: `compactContent` only truncates top-level string fields. Nested logs or nested arrays can still be injected into the next LLM context.
+
+Required fix:
+- Implement recursive compaction with depth/size limits, or replace oversized structured content with `{ preview, truncated, persistedOutput }`.
+- Keep enough preview for diagnosis but never re-inject full nested output.
+
+Files to review/change:
+- `apps/shell/electron/services/toolResultStore.ts`
+
+Tests to add/update:
+- Nested large string fields are compacted.
+- Arrays/objects over the size threshold do not exceed the context-safe preview size.
+
+- [ ] **P0.6 Decide where persisted tool artifacts live**
+
+Current risk: project-local `.ava/tool-results` may pollute user projects and Git status.
+
+Required fix:
+- Decide policy explicitly: app data by default, or project-local only when enabled.
+- If project-local remains default, ensure `.ava/` is auto-ignored or clearly documented.
+
+Files to review/change:
+- `apps/shell/electron/services/toolResultStore.ts`
+- `.gitignore` behavior for generated task artifacts, if needed.
+
+---
+
 ## File Structure
 
 Files touched, in order of dependency:

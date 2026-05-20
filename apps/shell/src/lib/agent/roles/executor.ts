@@ -97,6 +97,17 @@ export function buildExecutorSystemPrompt(input: ExecutorInput): string {
     'When stopping, reply with one short sentence summarizing what you did. Do not output more code in the chat — the files are already on disk.',
   ].join('\n'))
 
+  if (input.step.role === 'validate' || input.step.id.toLowerCase().includes('validate')) {
+    sections.push([
+      'Validate-step hard rule:',
+      '- Do not scaffold, initialize, install, or rewrite files in this step.',
+      '- First choice: call project.validate with the working directory.',
+      '- Acceptable fallback: call shell.run_command only for npm run build, npm run typecheck, npm test, npm run lint, tsc, or equivalent validation commands.',
+      '- Commands like npm create vite, npm install, npm init, mkdir, or file writes do not validate the project and must not be used in this step.',
+      '- If validation fails, stop after the validation result; the engine will route to repair.',
+    ].join('\n'))
+  }
+
   sections.push('Self-Correction: If a tool fails, read the error message, adjust, and retry. Maximum retries: 2.')
   return sections.join('\n\n')
 }

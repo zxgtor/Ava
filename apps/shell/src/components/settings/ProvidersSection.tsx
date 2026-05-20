@@ -17,7 +17,7 @@ export function ProvidersSection({ settings, update }: { settings: Settings; upd
             capability={settings.modelCapabilityMap[`${provider.id}:${provider.defaultModel}`]}
             onChange={next => update(s => ({
               ...s,
-              modelProviders: s.modelProviders.map(p => p.id === provider.id ? next : p),
+              modelProviders: s.modelProviders.map(p => p.id === provider.id ? mergeProviderUpdate(p, next, provider) : p),
             }))}
             onCapability={profile => update(s => ({
               ...s,
@@ -38,6 +38,16 @@ export function ProvidersSection({ settings, update }: { settings: Settings; upd
       </div>
     </section>
   )
+}
+
+function mergeProviderUpdate(current: ModelProvider, next: ModelProvider, base: ModelProvider): ModelProvider {
+  const merged = { ...current, ...next }
+  // Async probe callbacks may carry an older ProviderRow snapshot. If the user
+  // changed the selected model after that snapshot, do not revert it.
+  if (current.defaultModel !== base.defaultModel && next.defaultModel === base.defaultModel) {
+    merged.defaultModel = current.defaultModel
+  }
+  return merged
 }
 
 function ProviderRow({

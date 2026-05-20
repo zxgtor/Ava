@@ -9,27 +9,26 @@ const FINAL_REPORT_READ_BUDGET = 3
 
 const STEP_BUDGETS: Array<{ pattern: RegExp; budget: number }> = [
   { pattern: /final[_-]?report|report/i, budget: 4 },
-  { pattern: /inspect|map|detect|read|scan/i, budget: 10 },
-  { pattern: /scaffold|setup|write|create|core|ui|component|file/i, budget: 30 },
-  { pattern: /install|depend/i, budget: 10 },
-  { pattern: /preview|server|start/i, budget: 6 },
-  { pattern: /console|screenshot|check/i, budget: 6 },
-  { pattern: /repair|fix/i, budget: 25 },
+  { pattern: /inspect|map|detect|read|scan/i, budget: 20 },
+  { pattern: /scaffold|setup|write|create|core|ui|component|file/i, budget: 50 },
+  { pattern: /install|depend/i, budget: 30 },
+  { pattern: /preview|server|start/i, budget: 20 },
+  { pattern: /console|screenshot|check/i, budget: 20 },
+  { pattern: /repair|fix/i, budget: 40 },
   // Validate steps run build/typecheck, then need patch + revalidate cycles
-  // for each error. With 6 type errors, that's 12+ tool calls. 10 was too
-  // tight — bump to 30 to allow the full fix-revalidate loop.
+  // for each error. With 6 type errors, that's 12+ tool calls.
   { pattern: /validate|build|test|typecheck/i, budget: 30 },
 ]
 
 const ROLE_BUDGETS: Record<NonNullable<TaskExecutionStep['role']>, number> = {
-  inspect: 10,
-  scaffold: 30,
-  install: 10,
-  feature: 30,
-  preview: 6,
-  console: 6,
-  screenshot: 6,
-  repair: 25,
+  inspect: 20,
+  scaffold: 50,
+  install: 30,
+  feature: 50,
+  preview: 20,
+  console: 20,
+  screenshot: 20,
+  repair: 40,
   validate: 30,
   final_report: 4,
 }
@@ -79,4 +78,3 @@ export function shouldBlockLargeTaskWithoutPlan(input: {
 function clampBudget(value: number): number {
   return Math.max(1, Math.min(MAX_TOOL_LOOP_BUDGET, Math.floor(value)))
 }
-

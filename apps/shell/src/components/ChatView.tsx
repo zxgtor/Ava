@@ -37,9 +37,14 @@ import {
   markStepRunning,
   markStepSkipped,
   nextTaskStep,
+  recoverStepFromRound,
   updatePlanValidation,
   withValidation,
 } from '../lib/agent/taskExecution'
+import {
+  shouldContinueAfterToolLimit,
+  toolProgressContinuationText,
+} from '../lib/agent/runtime/agentRuntime'
 import { runAnalyzePhase } from '../lib/agent/roles/planner'
 import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, TaskExecutionPlan, ProjectAnalysis } from '../types'
 
@@ -207,8 +212,18 @@ function hasWorkingDirectoryQuestion(analysis?: ProjectAnalysis): boolean {
   // asking the user where to create the project.
   return Boolean(analysis?.unknowns.some(item =>
     item.importance === 'high' &&
-    /(working\s*directory|project\s*(folder|directory|path|location)|where.*(create|use)|folder|directory|path|工作目录|项目.*(目录|路径|位置)|创建.*(目录|路径|位置))/i.test(item.question),
+    isWorkingDirectoryQuestion(item.question),
   ))
+}
+
+function isWorkingDirectoryQuestion(question: string): boolean {
+  return /(working\s*directory|project\s*(folder|directory|path|location)|where.*(create|use)|folder|directory|path|工作目录|项目.*(目录|路径|位置)|创建.*(目录|路径|位置))/i.test(question)
+}
+
+function needsConcreteWorkingDirectoryAnswer(pending: PendingTaskIntake, answer: string): boolean {
+  const question = nextClarification(pending)
+  if (!question || !isWorkingDirectoryQuestion(question.question)) return false
+  return !extractWorkingDirectoryFromText(answer)
 }
 
 function withRequiredWorkingDirectoryUnknown(
@@ -286,6 +301,37 @@ function updateLocalToolPart(parts: ContentPart[], partIndex: number, partId: st
   })
 }
 
+function withTaskIdOnParts(parts: ContentPart[], taskId: string): ContentPart[] {
+  return parts.map(part => part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? taskId } : part)
+}
+
+function mergeAuthoritativeParts(existing: ContentPart[], authoritative: ContentPart[], taskId: string): ContentPart[] {
+  if (authoritative.length === 0) return existing
+  const normalized = withTaskIdOnParts(authoritative, taskId)
+  const byId = new Map(
+    normalized
+      .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+      .map(part => [part.id, part]),
+  )
+  const merged = existing.map(part =>
+    part.type === 'tool_call' && byId.has(part.id)
+      ? byId.get(part.id)!
+      : part,
+  )
+  const existingIds = new Set(
+    merged
+      .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+      .map(part => part.id),
+  )
+  const existingText = partsToText(merged)
+  const missing = normalized.filter(part =>
+    part.type === 'tool_call'
+      ? !existingIds.has(part.id)
+      : part.type !== 'text' || !part.text || !existingText.includes(part.text),
+  )
+  return missing.length > 0 ? [...merged, ...missing] : merged
+}
+
 function makeContinuationMessages(taskId: string, parts: ContentPart[], stopReason: string, round: number): Message[] {
   const assistant: Message = {
     id: makeMessageId(),
@@ -335,6 +381,16 @@ function recentToolSummary(parts: ContentPart[], count = 5): string {
       return `- ${part.name}(${args}): ${result}`
     })
     .join('\n')
+}
+
+function toolProgressContinuationMessage(taskId: string, stepTitle: string, parts: ContentPart[]): Message {
+  return {
+    id: makeMessageId(),
+    taskId,
+    role: 'system',
+    content: [{ type: 'text', text: toolProgressContinuationText(stepTitle, parts) }],
+    createdAt: Date.now(),
+  }
 }
 
 function toolLoopUserMessage(parts: ContentPart[], taskStepTitle?: string): string {
@@ -1023,9 +1079,21 @@ export function ChatView() {
             },
           })
 
+          if (result.ok) {
+            accumulatedParts = mergeAuthoritativeParts(accumulatedParts, result.parts, activeTaskId)
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { content: accumulatedParts },
+            })
+          }
+
           if (taskPlan && activeStep && result.ok) {
             const roundParts = accumulatedParts.slice(roundStartPartIndex)
+            taskPlan = recoverStepFromRound(taskPlan, activeStep.id, roundParts, result.fullContent)
             taskPlan = withValidation(taskPlan, updatePlanValidation(taskPlan, roundParts))
+            dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
             dispatch({ type: 'UPDATE_TASK_VALIDATION', conversationId, validation: taskPlan.validation })
             const evaluation = evaluateStepCompletion({
               plan: taskPlan,
@@ -1034,9 +1102,7 @@ export function ChatView() {
               fullContent: result.fullContent,
             })
             if (evaluation.complete) {
-              taskPlan = activeStep.id === 'repair'
-                ? markStepSkipped(taskPlan, activeStep.id)
-                : markStepDone(taskPlan, activeStep.id)
+              taskPlan = markStepDone(taskPlan, activeStep.id)
               dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
               if (activeStep.id === 'final_report') {
                 taskPlan = completePlan(taskPlan)
@@ -1073,11 +1139,29 @@ export function ChatView() {
             } else if (evaluation.needsRepair && taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
               // Validate failed with build errors → rewind the repair step so it runs again
               taskEngineRound += 1
+              const repairStep = {
+                id: 'repair',
+                title: 'Repair validation or tool execution errors',
+                status: 'pending' as const,
+                requiredTools: ['file.patch', 'file.write_text', 'shell.run_command', 'project.map', 'file.read_text'],
+                completionSignals: ['errors repaired'],
+                attempts: 0,
+                role: 'repair' as const,
+                workflowType: 'debug' as const,
+                lastError: evaluation.needsRepair,
+              }
+              const hasRepairStep = taskPlan.steps.some(s => s.id === 'repair')
               taskPlan = {
                 ...taskPlan,
-                steps: taskPlan.steps.map(s =>
-                  s.id === 'repair' ? { ...s, status: 'pending', attempts: 0, lastError: undefined } : s
-                ),
+                steps: hasRepairStep
+                  ? taskPlan.steps.map(s =>
+                    s.id === 'repair' ? { ...s, status: 'pending', attempts: 0, lastError: evaluation.needsRepair } : s
+                  )
+                  : [
+                    ...taskPlan.steps.slice(0, taskPlan.steps.findIndex(s => s.id === activeStep.id)),
+                    repairStep,
+                    ...taskPlan.steps.slice(taskPlan.steps.findIndex(s => s.id === activeStep.id)),
+                  ],
                 currentStepId: 'repair',
                 updatedAt: Date.now(),
               }
@@ -1148,8 +1232,26 @@ export function ChatView() {
               })
             }
             if (result.stopReason) {
+              if (
+                result.stopReason === 'tool_loop_limit' &&
+                shouldContinueAfterToolLimit(accumulatedParts, activeStep ?? undefined) &&
+                taskEngineRound < MAX_TASK_ENGINE_ROUNDS
+              ) {
+                taskEngineRound += 1
+                currentSnapshot = {
+                  ...conversationSnapshot,
+                  activeTaskPlan: taskPlan,
+                  messages: [
+                    ...currentSnapshot.messages,
+                    { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
+                    toolProgressContinuationMessage(activeTaskId, activeStep?.title ?? 'current task', accumulatedParts),
+                  ],
+                }
+                continue
+              }
+
               // ── Tool loop: inject a "break the loop" message and give the model one more chance ──
-              if (result.stopReason === 'tool_loop_limit' && continuationRound < 1) {
+              if (result.stopReason === 'tool_loop_limit' && !(taskPlan && activeStep) && continuationRound < 1) {
                 continuationRound += 1
                 // Summarise the last few tool calls so the model can see what it was repeating
                 const recentToolCalls = recentToolSummary(accumulatedParts, 4)
@@ -1203,6 +1305,23 @@ export function ChatView() {
               // so every retry fails with "already exists"). Skip it and tell the next
               // step to inspect the actual filesystem state before acting.
               if (result.stopReason === 'tool_loop_limit' && taskPlan && activeStep) {
+                if (
+                  shouldContinueAfterToolLimit(accumulatedParts, activeStep) &&
+                  taskEngineRound < MAX_TASK_ENGINE_ROUNDS
+                ) {
+                  taskEngineRound += 1
+                  currentSnapshot = {
+                    ...conversationSnapshot,
+                    activeTaskPlan: taskPlan,
+                    messages: [
+                      ...currentSnapshot.messages,
+                      { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
+                      toolProgressContinuationMessage(activeTaskId, activeStep.title, accumulatedParts),
+                    ],
+                  }
+                  continue
+                }
+
                 taskEngineRound += 1
                 const recentLoopedTools = recentToolSummary(accumulatedParts, 4)
 
@@ -1705,6 +1824,24 @@ export function ChatView() {
         })
 
         if (!isSummaryFeedback) {
+          if (needsConcreteWorkingDirectoryAnswer(pendingTaskIntake, content)) {
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId: conversation.id,
+              messageId: intakeMsgId,
+              patch: {
+                content: [{
+                  type: 'text',
+                  text: '请直接输入完整 Windows 项目路径，例如：D:\\Apps\\GLBViewer。不能使用 “I will provide another full path” 作为路径。',
+                }],
+                streaming: false,
+                runPhase: 'completed',
+              }
+            })
+            setPendingTaskIntake({ ...pendingTaskIntake, stage: 'clarifying' })
+            return
+          }
+
           const answeredPending = pendingWithAnswer(pendingTaskIntake, content)
           const nextQuestion = nextClarification(answeredPending)
           const finalContent: ContentPart[] = nextQuestion
@@ -2015,7 +2152,6 @@ export function ChatView() {
       <div className="absolute top-10 left-0 right-0 h-8 z-20 pointer-events-none bg-gradient-to-b from-bg/80 via-bg/40 to-transparent backdrop-blur-md [mask-image:linear-gradient(to_bottom,black,transparent)]" />
 
       {/* Task plan now lives exclusively in the right panel. */}
-
       {isDragging && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-bg/80 backdrop-blur-sm border-2 border-dashed border-accent m-4 rounded-3xl pointer-events-none transition-all animate-in fade-in zoom-in duration-200">
           <div className="w-20 h-20 bg-accent/10 rounded-full flex items-center justify-center text-accent mb-4">
@@ -2026,7 +2162,10 @@ export function ChatView() {
         </div>
       )}
 
-      <div ref={scrollRef} className="relative z-0 flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar-x">
+      <div
+        ref={scrollRef}
+        className="relative z-0 flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col no-scrollbar-x"
+      >
         {showEmpty ? (
           <EmptyState
             userName={state.settings.persona.userName}

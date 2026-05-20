@@ -130,9 +130,11 @@ body,
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.32rem;
+  justify-content: center;
+  gap: 0.2rem;
   height: 1.9rem;
-  padding: 0 0.18rem;
+  min-width: 2.05rem;
+  padding: 0 0.12rem;
   color: var(--color-text);
 }
 
@@ -143,14 +145,6 @@ body,
   font-weight: 300;
   line-height: 1;
   text-shadow: 0 0 14px color-mix(in srgb, #b6ff4d 46%, transparent);
-}
-
-.ava-brand-name {
-  font-family: var(--font-mono);
-  font-size: 1.05rem;
-  font-weight: 760;
-  letter-spacing: -0.08em;
-  line-height: 1;
 }
 
 .ava-brand-dot {

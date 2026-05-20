@@ -206,6 +206,14 @@ _Last updated: 2026-05-03 · Project Map + Local LLM Planning_
   - 测试通过真实 `ava.llm.stream`，由 LLM 生成 tool_call，再根据 tool result 显示 pass/fail
   - MCP/Skill 也可用同一页面做手动/半自动 smoke test
 
+- [ ] **Task Execution v2 P0 Review Addendum（执行前置修正）**：
+  - 已追加到 `docs/superpowers/plans/2026-05-08-task-execution-v2-fixes.md`
+  - [x] P0.1 step completion gate：`write_core_files` 需要编辑证据 + 项目验证证据，duplicate ignored 不再算成功
+  - [x] P0.2 shell output 完整持久化：`shell.run_command` 全量写入 `.ava/command-logs`，工具结果只返回 preview + `outputLogPath`
+  - 统一 tool progress/recovery policy，避免 main/renderer 对“有进展”的判断不一致
+  - duplicate tool call 需要先 dedupe，再进入 stale/error handling
+  - tool result compaction 需要处理嵌套大输出
+
 ---
 
 ## 怎么跑

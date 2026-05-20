@@ -8,9 +8,11 @@ const ts = require('typescript')
 const root = path.resolve(__dirname, '..')
 const sourcePath = path.join(root, 'apps/shell/electron/services/builtInTools.ts')
 const runtimeEnvironmentPath = path.join(root, 'apps/shell/electron/services/runtimeEnvironment.ts')
+const processRegistryPath = path.join(root, 'apps/shell/electron/services/processRegistry.ts')
 const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ava-builtins-compiled-'))
 const outPath = path.join(outDir, 'builtInTools.cjs')
 const runtimeEnvironmentOutPath = path.join(outDir, 'runtimeEnvironment.js')
+const processRegistryOutPath = path.join(outDir, 'processRegistry.js')
 
 function compileTsToCjs(inputPath, outputPath) {
   const source = fs.readFileSync(inputPath, 'utf8')
@@ -25,6 +27,7 @@ function compileTsToCjs(inputPath, outputPath) {
 }
 
 compileTsToCjs(runtimeEnvironmentPath, runtimeEnvironmentOutPath)
+compileTsToCjs(processRegistryPath, processRegistryOutPath)
 compileTsToCjs(sourcePath, outPath)
 
 const { builtInTools } = require(outPath)
@@ -59,6 +62,12 @@ async function main() {
 
   await callOk('file.create_dir', { path: path.join(tmp, 'src') }, context)
   await callOk('file.write_text', { path: path.join(tmp, 'src/hello.txt'), content: 'hello Ava\n' }, context)
+  await callOk('file.write_text', {
+    path: path.join(tmp, 'object-package.json'),
+    content: { name: 'object-package', private: true, scripts: { build: 'node -e "process.exit(0)"' } },
+  }, context)
+  const objectPackage = JSON.parse(fs.readFileSync(path.join(tmp, 'object-package.json'), 'utf8'))
+  assert.equal(objectPackage.name, 'object-package')
 
   const read = await callOk('file.read_text', { path: path.join(tmp, 'src/hello.txt') }, context)
   assert.match(read.content.content, /hello Ava/)
@@ -81,6 +90,7 @@ async function main() {
   fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({
     scripts: {
       typecheck: 'node -e "process.exit(0)"',
+      dev: 'node -e "setTimeout(function(){}, 10000)"',
     },
     devDependencies: {
       vite: '^7.0.0',
@@ -127,6 +137,56 @@ async function main() {
     timeoutMs: 30_000,
   }, context)
   assert.match(shell.content.stdout, /shell-ok/)
+  assert.equal(shell.content.semantic, 'execute')
+
+  const largeShell = await callOk('shell.run_command', {
+    command: 'node',
+    args: ['-e', 'console.log("START_MARKER"), console.log("x".repeat(30000)), console.log("END_MARKER")'],
+    cwd: tmp,
+    timeoutMs: 30_000,
+  }, context)
+  assert.equal(largeShell.content.truncated, true)
+  assert.equal(typeof largeShell.content.outputLogPath, 'string')
+  const fullLog = fs.readFileSync(largeShell.content.outputLogPath, 'utf8')
+  assert.match(fullLog, /START_MARKER/)
+  assert.match(fullLog, /END_MARKER/)
+  assert.ok(fullLog.length > 30000)
+
+  const backgrounded = await callOk('shell.run_command', {
+    command: 'npm',
+    args: ['run', 'dev'],
+    cwd: tmp,
+    timeoutMs: 30_000,
+  }, context)
+  assert.equal(backgrounded.content.event, 'backgrounded')
+  assert.equal(backgrounded.content.semantic, 'long_running')
+  await callOk('process.kill', { id: backgrounded.content.processId }, context)
+
+  const processStart = await callOk('process.start', {
+    command: 'node',
+    args: ['-e', 'setTimeout(function(){ console.log("process-ok") }, 50)'],
+    cwd: tmp,
+  }, context)
+  assert.match(processStart.content.processId, /^proc_/)
+
+  const processWait = await callOk('process.wait', { id: processStart.content.processId, timeoutMs: 2_000 }, context)
+  assert.equal(processWait.content.status, 'exited')
+  assert.equal(processWait.content.exitCode, 0)
+  assert.match(processWait.content.stdout, /process-ok/)
+
+  const processLogs = await callOk('process.logs', { id: processStart.content.processId }, context)
+  assert.match(processLogs.content.stdout, /process-ok/)
+
+  const processStatus = await callOk('process.status', { cwd: tmp }, context)
+  assert.equal(Array.isArray(processStatus.content.processes), true)
+
+  const processToKill = await callOk('process.start', {
+    command: 'node',
+    args: ['-e', 'setTimeout(function(){}, 10000)'],
+    cwd: tmp,
+  }, context)
+  const killed = await callOk('process.kill', { id: processToKill.content.processId }, context)
+  assert.equal(killed.content.status, 'killed')
 
   await callOk('git.status', { cwd: root }, context)
 
