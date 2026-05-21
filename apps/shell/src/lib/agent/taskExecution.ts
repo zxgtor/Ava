@@ -27,18 +27,14 @@ function ensureFrontendValidationSteps(steps: TaskExecutionStep[]): TaskExecutio
   const hasScreenshot = steps.some(step => stepRole(step) === 'screenshot')
   if (hasConsole && hasScreenshot) return steps
 
-  const insertAt = (() => {
-    const validateIndex = steps.findIndex(step => stepRole(step) === 'validate')
-    if (validateIndex >= 0) return validateIndex
-    const finalIndex = steps.findIndex(step => stepRole(step) === 'final_report')
-    return finalIndex >= 0 ? finalIndex : steps.length
-  })()
+  const previewIndex = steps.findIndex(step => stepRole(step) === 'preview')
+  const insertAt = previewIndex >= 0 ? previewIndex + 1 : steps.length
   const injected: TaskExecutionStep[] = []
   if (!hasConsole) {
-    injected.push(step('check_console', 'Check browser console', ['preview.console'], ['console checked'], 'console', 'debug'))
+    injected.push(step('check_console', 'Check browser console', ['preview.console', 'devserver.status', 'devserver.start'], ['console checked'], 'console', 'debug'))
   }
   if (!hasScreenshot) {
-    injected.push(step('check_screenshot', 'Capture preview screenshot', ['preview.screenshot'], ['screenshot checked'], 'screenshot', 'research'))
+    injected.push(step('check_screenshot', 'Capture preview screenshot', ['preview.screenshot', 'devserver.status', 'devserver.start'], ['screenshot checked'], 'screenshot', 'research'))
   }
   return [...steps.slice(0, insertAt), ...injected, ...steps.slice(insertAt)]
 }
@@ -106,10 +102,10 @@ export function createCodingDesignTaskPlan(input: {
         ['devserver.start'],
         ['dev server started'], 'preview', 'research'),
       step('check_console', 'Check browser console',
-        ['preview.console'],
+        ['preview.console', 'devserver.status', 'devserver.start'],
         ['console checked'], 'console', 'debug'),
       step('check_screenshot', 'Capture preview screenshot',
-        ['preview.screenshot'],
+        ['preview.screenshot', 'devserver.status', 'devserver.start'],
         ['screenshot checked'], 'screenshot', 'research'),
       step('repair', 'Repair detected console, build, or visual issues',
         ['file.patch', 'file.write_text', 'shell.run_command'],
@@ -245,6 +241,7 @@ export function getNodesByLayer(plan: TaskExecutionPlan): TaskExecutionStep[][] 
 
 export function buildTaskStepPrompt(plan: TaskExecutionPlan, step: TaskExecutionStep, finalReportAllowed: boolean): string {
   const allowed = step.requiredTools.length > 0 ? step.requiredTools.join(', ') : '(no tool required)'
+  const role = stepRole(step)
   return [
     'Task Execution Engine:',
     `Goal: ${plan.goal}`,
@@ -252,24 +249,58 @@ export function buildTaskStepPrompt(plan: TaskExecutionPlan, step: TaskExecution
     `Current step: ${step.id} - ${step.title}`,
     `Allowed/expected tools for this step: ${allowed}`,
     `Completion signals: ${step.completionSignals.join(', ')}`,
+    stepRoleInstruction(role),
+    step.lastError ? `Blocking error to fix:\n${step.lastError}` : '',
     step.lastToolSummary ? `Previous attempt summary: ${step.lastToolSummary}` : '',
     step.lastProcessId ? `Previous background process id: ${step.lastProcessId}. Check it with process.status/process.logs/process.wait before repeating work.` : '',
-    finalReportAllowed
-      ? 'Final report is allowed now. Include changed files, validation result, and remaining risks.'
-      : 'Do not provide a final report yet. Complete only the current step, preferably with one necessary tool call.',
+    role === 'final_report'
+      ? 'FINAL REPORT STEP: write the visible final report now. Do not say what you will do. Do not call tools unless a required fact is missing. Include these sections: Changed files, Validation result, Preview result, Remaining risks.'
+      : finalReportAllowed
+        ? 'Final report is allowed now. Include changed files, validation result, and remaining risks.'
+        : 'Do not provide a final report yet. Complete only the current step, preferably with one necessary tool call.',
     'If a tool is needed, call the tool instead of describing what you will do.',
   ].filter(Boolean).join('\n')
 }
 
-export function updatePlanValidation(plan: TaskExecutionPlan, parts: ContentPart[]): TaskExecutionValidation {
+function stepRoleInstruction(role: ReturnType<typeof stepRole>): string {
+  switch (role) {
+    case 'inspect':
+      return 'INSPECT STEP: gather only the minimal project facts needed for the next step. Do not edit files in this step.'
+    case 'scaffold':
+      return 'SCAFFOLD STEP: create or verify the project structure. The step is not complete until package.json or the requested scaffold artifact exists.'
+    case 'install':
+      return 'INSTALL STEP: install or verify dependencies. The step is not complete until package/dependency evidence exists.'
+    case 'feature':
+      return 'FEATURE STEP: implement the current feature by editing files with file.write_text or file.patch. Read-only inspection does not complete this step. After editing, verify the changed files with file.read_text, file.stat, file.list_dir, project.detect, or project.map.'
+    case 'validate':
+      return 'VALIDATE STEP: run project.validate first. For frontend/preview tasks, npm run build (or equivalent build script) must pass; typecheck/lint alone is not enough. A command only passes if the actual exit code is 0.'
+    case 'repair':
+      return 'REPAIR STEP: fix the specific error with file.patch/file.write_text or a repair command. Read-only inspection alone does not complete this step.'
+    case 'preview':
+      return 'PREVIEW STEP: start or verify the development server and use the actual returned local URL; do not assume a default port.'
+    case 'console':
+      return 'CONSOLE STEP: inspect the running preview with preview.console. devserver.status/start alone does not complete this step.'
+    case 'screenshot':
+      return 'SCREENSHOT STEP: capture the running preview with preview.screenshot. devserver.status/start alone does not complete this step.'
+    case 'final_report':
+      return 'FINAL REPORT STEP: summarize only after all validation gates pass.'
+    default:
+      return ''
+  }
+}
+
+export function updatePlanValidation(
+  plan: TaskExecutionPlan,
+  parts: ContentPart[],
+  step?: TaskExecutionStep | null,
+): TaskExecutionValidation {
   const validation = { ...plan.validation }
+  const role = step ? stepRole(step) : undefined
   for (const part of okToolParts(parts)) {
-    if (part.name === 'devserver.start') validation.devServerChecked = true
-    if (part.name === 'preview.console') validation.consoleChecked = true
-    if (part.name === 'preview.screenshot') validation.screenshotChecked = true
-    if (part.name === 'project.validate') validation.buildChecked = true
-    if (part.name === 'process.wait' && processWaitSucceeded(part.result)) validation.buildChecked = true
-    if (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args)) validation.buildChecked = true
+    if (role === 'preview' && part.name === 'devserver.start') validation.devServerChecked = true
+    if (role === 'console' && part.name === 'preview.console') validation.consoleChecked = true
+    if (role === 'screenshot' && part.name === 'preview.screenshot') validation.screenshotChecked = true
+    if (role === 'validate' && validationToolSucceeded(part, plan)) validation.buildChecked = true
   }
   return validation
 }
@@ -301,7 +332,14 @@ export function evaluateStepCompletion(input: {
     if (!finalValidationGateSatisfied(plan.validation, plan)) {
       return { complete: false, blocked: finalReportBlockedReason(plan) }
     }
-    return { complete: finalReportHasRequiredContent(fullContent) }
+    if (finalReportHasRequiredContent(fullContent)) return { complete: true }
+    if (effectiveStep.attempts >= MAX_STEP_ATTEMPTS) {
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" did not produce a final report after ${MAX_STEP_ATTEMPTS} attempt(s). It must include changed files, validation result, preview result, and remaining risks.`,
+      }
+    }
+    return { complete: false }
   }
 
   // ── Special handling for validate ──
@@ -309,19 +347,24 @@ export function evaluateStepCompletion(input: {
   // and should route back to repair with the error details.
   if (role === 'validate') {
     const okTools = okToolParts(parts)
-    const failedValidate = failedToolParts(parts).filter(p =>
-      p.name === 'project.validate' ||
-      (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args))
-    )
-    const failedProcessWait = okTools.filter(p => p.name === 'process.wait' && !processWaitSucceeded(p.result))
-    const allFailedValidate = [...failedValidate, ...failedProcessWait]
+    const allFailedValidate = parts
+      .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+      .filter(part => validationToolFailed(part, plan))
 
-    if (okTools.some(p =>
-      p.name === 'project.validate' ||
-      (p.name === 'process.wait' && processWaitSucceeded(p.result)) ||
-      (p.name === 'shell.run_command' && looksLikeValidationCommand(p.args))
-    )) {
+    if (okTools.some(part => validationToolSucceeded(part, plan))) {
       return { complete: true }
+    }
+
+    const weakValidationTools = okTools.filter(part => validationToolIsTooWeakForPlan(part, plan))
+    if (weakValidationTools.length > 0) {
+      if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+        const summary = summarizeRoundForBlock(parts, fullContent)
+        return {
+          complete: false,
+          blocked: `Step "${step.title}" only ran weak validation after ${MAX_STEP_ATTEMPTS} attempt(s). Frontend/preview tasks must pass project.validate or an explicit build command such as npm run build before moving on.${summary ? `\n\n${summary}` : ''}`,
+        }
+      }
+      return { complete: false }
     }
 
     if (allFailedValidate.length > 0) {
@@ -398,6 +441,10 @@ export function evaluateStepCompletion(input: {
     step.requiredTools.includes(name) || (isInspectRole && inspectionEquivalents.has(name))
   const complete = step.requiredTools.length === 0
     ? fullContent.trim().length > 0
+    : role === 'console'
+      ? okTools.some(part => part.name === 'preview.console')
+    : role === 'screenshot'
+      ? okTools.some(part => part.name === 'preview.screenshot')
     : step.requiredTools.includes('process.wait')
       ? okTools.some(part => part.name === 'process.wait' && processWaitSucceeded(part.result))
       : okTools.some(part => matchesRequired(part.name))
@@ -517,9 +564,13 @@ function finalReportHasRequiredContent(fullContent: string): boolean {
   const visible = fullContent
     .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*?<\/(?:think|thinking|antThinking)>/gi, '')
     .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<\/(?:think|thinking|antThinking)>/gi, '')
     .trim()
   if (!visible) return false
-  return /(changed files?|files changed|validation|validated|remaining risks?|已修改|修改文件|验证|校验|剩余风险|风险)/i.test(visible)
+  const hasFiles = /(changed files?|files changed|modified files?|已修改|修改文件|变更文件)/i.test(visible)
+  const hasValidation = /(validation|validated|build|typecheck|preview|console|screenshot|验证|校验|构建|预览|控制台|截图)/i.test(visible)
+  const hasRisks = /(remaining risks?|risks?|风险|剩余风险)/i.test(visible)
+  return hasFiles && hasValidation && hasRisks
 }
 
 function planHasRole(plan: TaskExecutionPlan, role: NonNullable<TaskExecutionStep['role']>): boolean {
@@ -609,6 +660,78 @@ function failedToolParts(parts: ContentPart[]): Array<Extract<ContentPart, { typ
 function looksLikeValidationCommand(args: Record<string, unknown>): boolean {
   const rawArgs = Array.isArray(args.args) ? args.args.map(String).join(' ') : ''
   return /\b(build|typecheck|test|lint|tsc)\b/i.test(rawArgs)
+}
+
+function looksLikeBuildCommand(args: Record<string, unknown>): boolean {
+  const command = typeof args.command === 'string' ? args.command : ''
+  const rawArgs = Array.isArray(args.args) ? args.args.map(String).join(' ') : ''
+  const joined = `${command} ${rawArgs}`
+  return /\b(build|next\s+build|vite\s+build|astro\s+build|tsc\s+-b\s+&&\s+vite\s+build)\b/i.test(joined)
+}
+
+function commandSucceeded(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false
+  const record = result as Record<string, unknown>
+  return record.exitCode === 0 || record.code === 0
+}
+
+function projectValidateSucceeded(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return true
+  const record = result as Record<string, unknown>
+  if (record.ok === false || record.success === false || record.valid === false) return false
+  if ('exitCode' in record || 'code' in record) return commandSucceeded(record)
+  return true
+}
+
+function validationRequiresBuild(plan?: TaskExecutionPlan): boolean {
+  if (!plan) return false
+  return plan.kind === 'coding-design' && (
+    planHasRole(plan, 'preview') ||
+    planHasRole(plan, 'console') ||
+    planHasRole(plan, 'screenshot')
+  )
+}
+
+function validationToolIsTooWeakForPlan(
+  part: Extract<ContentPart, { type: 'tool_call' }>,
+  plan?: TaskExecutionPlan,
+): boolean {
+  return part.status === 'ok' &&
+    !toolResultWasIgnored(part.result) &&
+    validationRequiresBuild(plan) &&
+    part.name === 'shell.run_command' &&
+    looksLikeValidationCommand(part.args) &&
+    !looksLikeBuildCommand(part.args) &&
+    commandSucceeded(part.result)
+}
+
+function validationToolSucceeded(
+  part: Extract<ContentPart, { type: 'tool_call' }>,
+  plan?: TaskExecutionPlan,
+): boolean {
+  if (part.status !== 'ok' || toolResultWasIgnored(part.result)) return false
+  if (part.name === 'project.validate') return projectValidateSucceeded(part.result)
+  if (part.name === 'process.wait') return processWaitSucceeded(part.result)
+  if (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args)) {
+    if (validationRequiresBuild(plan) && !looksLikeBuildCommand(part.args)) return false
+    return commandSucceeded(part.result)
+  }
+  return false
+}
+
+function validationToolFailed(
+  part: Extract<ContentPart, { type: 'tool_call' }>,
+  plan?: TaskExecutionPlan,
+): boolean {
+  if (toolResultWasIgnored(part.result)) return false
+  const isValidationTool = part.name === 'project.validate' ||
+    part.name === 'process.wait' ||
+    (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args))
+  if (!isValidationTool) return false
+  if (validationToolIsTooWeakForPlan(part, plan)) return false
+  if (part.status === 'error' || part.status === 'aborted') return true
+  if (part.status !== 'ok') return false
+  return !validationToolSucceeded(part, plan)
 }
 
 function processWaitSucceeded(result: unknown): boolean {

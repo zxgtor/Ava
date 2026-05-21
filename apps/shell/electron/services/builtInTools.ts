@@ -1044,7 +1044,7 @@ class BuiltInTools {
       child,
       startedAt: Date.now(),
       status: 'starting',
-      url: expectedUrl,
+      url: undefined,
       stdout: '',
       stderr: '',
     }
@@ -1053,7 +1053,8 @@ class BuiltInTools {
     let openedInBrowser = false
     const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
       const text = chunk.toString('utf8')
-      if (!server.url) server.url = extractLocalUrl(text)
+      const detectedUrl = extractLocalUrl(text)
+      if (detectedUrl) server.url = detectedUrl
       if (server.url) {
         server.status = 'running'
         // Auto-open the dev URL in the user's default browser the first time
@@ -1089,10 +1090,11 @@ class BuiltInTools {
     })
 
     await waitForDevServerReady(server)
+    if (server.status !== 'running' && expectedUrl) server.url = expectedUrl
     return {
       ok: true,
-      isError: server.status === 'exited',
-      content: devServerView(server, server.status === 'exited' ? 'exited_before_ready' : 'started'),
+      isError: server.status !== 'running',
+      content: devServerView(server, server.status === 'exited' ? 'exited_before_ready' : server.status === 'starting' ? 'not_ready' : 'started'),
     }
   }
 
@@ -1870,9 +1872,23 @@ function pipeErrorMessage(kind: 'stdout' | 'stderr', err: Error): string {
     : `${kind} pipe error: ${err.message}\n`
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
 function extractLocalUrl(text: string): string | undefined {
-  const match = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/[^\s]*)?/i)
-  return match?.[0]
+  const clean = stripAnsi(text)
+  const matches = clean.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/[^\s]*)?/gi) ?? []
+  return matches.find(raw => {
+    try {
+      const url = new URL(raw)
+      // Vite can print colored URLs split by ANSI escape sequences. Do not
+      // accept a partial "http://localhost" without the dev-server port.
+      return Boolean(url.port)
+    } catch {
+      return false
+    }
+  })
 }
 
 async function waitForDevServerReady(server: DevServerProcess): Promise<void> {

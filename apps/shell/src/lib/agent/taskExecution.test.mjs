@@ -38,7 +38,7 @@ await writeFile(join(tempDir, 'toolNames.mjs'), 'export function normalizeRequir
 const patched = compiled.replace(/from\s+['"]\.\/toolNames['"]/g, "from './toolNames.mjs'")
 await writeFile(compiledPath, patched, 'utf8')
 
-const { evaluateStepCompletion, extractWorkingDirectoryFromText, finalValidationGateSatisfied, normalizeTaskExecutionPlan, recoverStepFromRound, taskStepRecovery } =
+const { evaluateStepCompletion, extractWorkingDirectoryFromText, finalValidationGateSatisfied, normalizeTaskExecutionPlan, recoverStepFromRound, taskStepRecovery, updatePlanValidation } =
   await import(pathToFileURL(compiledPath).href)
 
 test.after(async () => { await rm(tempDir, { recursive: true, force: true }) })
@@ -215,6 +215,54 @@ test('validate role with successful project.validate completes', () => {
   assert.equal(result.complete, true)
 })
 
+test('frontend validate role does not complete on typecheck-only command', () => {
+  const frontendPlan = plan({
+    kind: 'coding-design',
+    steps: [
+      { id: 'preview', role: 'preview', title: '', status: 'done', requiredTools: [], completionSignals: [], attempts: 0 },
+      { id: 'validate', role: 'validate', title: '', status: 'running', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 0 },
+    ],
+  })
+  const result = evaluateStepCompletion({
+    plan: frontendPlan,
+    step: frontendPlan.steps[1],
+    parts: [{
+      type: 'tool_call',
+      name: 'shell.run_command',
+      status: 'ok',
+      args: { command: 'npx', args: ['tsc', '--noEmit'] },
+      result: { exitCode: 0 },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.needsRepair, undefined)
+  assert.equal(result.blocked, undefined)
+})
+
+test('frontend validate role completes on successful build command', () => {
+  const frontendPlan = plan({
+    kind: 'coding-design',
+    steps: [
+      { id: 'preview', role: 'preview', title: '', status: 'done', requiredTools: [], completionSignals: [], attempts: 0 },
+      { id: 'validate', role: 'validate', title: '', status: 'running', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 0 },
+    ],
+  })
+  const result = evaluateStepCompletion({
+    plan: frontendPlan,
+    step: frontendPlan.steps[1],
+    parts: [{
+      type: 'tool_call',
+      name: 'shell.run_command',
+      status: 'ok',
+      args: { command: 'npm', args: ['run', 'build'] },
+      result: { exitCode: 0 },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
+})
+
 test('final_report role blocks when applicable checks not satisfied', () => {
   const planWithChecks = plan({
     steps: [
@@ -248,6 +296,23 @@ test('final_report role passes when no preview/console/validate steps exist (bac
   assert.equal(result.complete, true)
 })
 
+test('validate role with failed shell build routes to repair', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'verify', role: 'validate', attempts: 1 }),
+    parts: [{
+      type: 'tool_call',
+      name: 'shell.run_command',
+      status: 'ok',
+      args: { command: 'npm', args: ['run', 'build'] },
+      result: { exitCode: 1, stderr: 'src/App.tsx(1,1): error TS6133' },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.match(result.needsRepair, /TS6133|exitCode/)
+})
+
 test('final_report role rejects thinking-only content', () => {
   const backendPlan = plan({
     steps: [{ id: 'write', role: 'feature', title: '', status: 'done', requiredTools: [], completionSignals: [], attempts: 0 }],
@@ -264,12 +329,51 @@ test('final_report role rejects thinking-only content', () => {
 test('normalizeTaskExecutionPlan injects console and screenshot checks after preview', () => {
   const normalized = normalizeTaskExecutionPlan(plan({
     steps: [
-      { id: 'preview-app', role: 'preview', title: 'Preview Application', status: 'pending', requiredTools: ['devserver.start'], completionSignals: [], attempts: 0 },
       { id: 'validate-build', role: 'validate', title: 'Validate Build', status: 'pending', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 0 },
+      { id: 'preview-app', role: 'preview', title: 'Preview Application', status: 'pending', requiredTools: ['devserver.start'], completionSignals: [], attempts: 0 },
       { id: 'final-report', role: 'final_report', title: 'Final Report', status: 'pending', requiredTools: [], completionSignals: [], attempts: 0 },
     ],
   }))
-  assert.deepEqual(normalized.steps.map(s => s.role), ['preview', 'console', 'screenshot', 'validate', 'final_report'])
+  assert.deepEqual(normalized.steps.map(s => s.role), ['validate', 'preview', 'console', 'screenshot', 'final_report'])
+  assert.deepEqual(normalized.steps.find(s => s.role === 'console').requiredTools, ['preview.console', 'devserver.status', 'devserver.start'])
+  assert.deepEqual(normalized.steps.find(s => s.role === 'screenshot').requiredTools, ['preview.screenshot', 'devserver.status', 'devserver.start'])
+})
+
+test('updatePlanValidation is scoped to the active step role', () => {
+  const base = plan({
+    steps: [
+      { id: 'scaffold', role: 'scaffold', title: '', status: 'running', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 0 },
+      { id: 'validate', role: 'validate', title: '', status: 'pending', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 0 },
+    ],
+  })
+  const validationDuringScaffold = updatePlanValidation(base, [
+    { type: 'tool_call', name: 'shell.run_command', status: 'ok', args: { command: 'npm', args: ['run', 'build'] }, result: { exitCode: 0 } },
+  ], base.steps[0])
+  assert.equal(validationDuringScaffold.buildChecked, false)
+
+  const validationDuringValidate = updatePlanValidation(base, [
+    { type: 'tool_call', name: 'shell.run_command', status: 'ok', args: { command: 'npm', args: ['run', 'build'] }, result: { exitCode: 0 } },
+  ], base.steps[1])
+  assert.equal(validationDuringValidate.buildChecked, true)
+
+  const failedBuild = updatePlanValidation(base, [
+    { type: 'tool_call', name: 'shell.run_command', status: 'ok', args: { command: 'npm', args: ['run', 'build'] }, result: { exitCode: 1, stderr: 'build failed' } },
+  ], base.steps[1])
+  assert.equal(failedBuild.buildChecked, false)
+})
+
+test('updatePlanValidation does not mark frontend build checked for typecheck-only command', () => {
+  const frontendPlan = plan({
+    kind: 'coding-design',
+    steps: [
+      { id: 'preview', role: 'preview', title: '', status: 'done', requiredTools: [], completionSignals: [], attempts: 0 },
+      { id: 'validate', role: 'validate', title: '', status: 'running', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 0 },
+    ],
+  })
+  const validation = updatePlanValidation(frontendPlan, [
+    { type: 'tool_call', name: 'shell.run_command', status: 'ok', args: { command: 'npx', args: ['tsc', '--noEmit'] }, result: { exitCode: 0 } },
+  ], frontendPlan.steps[1])
+  assert.equal(validation.buildChecked, false)
 })
 
 test('finalValidationGateSatisfied is true when no checks are applicable', () => {
@@ -295,6 +399,24 @@ test('finalValidationGateSatisfied requires console+screenshot+build when those 
   assert.equal(finalValidationGateSatisfied(fullPlan.validation, fullPlan), true)
 })
 
+test('final report step requires files, validation, and risks sections', () => {
+  const finalPlan = plan({
+    steps: [step({ id: 'final_report', role: 'final_report' })],
+  })
+  assert.equal(evaluateStepCompletion({
+    plan: finalPlan,
+    step: finalPlan.steps[0],
+    parts: [],
+    fullContent: 'Changed files: App.tsx\nValidation result: build passed',
+  }).complete, false)
+  assert.equal(evaluateStepCompletion({
+    plan: finalPlan,
+    step: finalPlan.steps[0],
+    parts: [],
+    fullContent: 'Changed files: App.tsx\n</antThinking>\nValidation result: build passed\nRemaining risks: none known',
+  }).complete, true)
+})
+
 test('generic step with required tool completes when that tool succeeds', () => {
   const result = evaluateStepCompletion({
     plan: plan(),
@@ -303,6 +425,24 @@ test('generic step with required tool completes when that tool succeeds', () => 
     fullContent: '',
   })
   assert.equal(result.complete, true)
+})
+
+test('console step completes only after preview.console, not devserver recovery tools', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'console', role: 'console', requiredTools: ['preview.console', 'devserver.status', 'devserver.start'] }),
+    parts: [{ type: 'tool_call', name: 'devserver.start', status: 'ok', args: {}, result: { url: 'http://127.0.0.1:5174/' } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+
+  const completed = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'console', role: 'console', requiredTools: ['preview.console', 'devserver.status', 'devserver.start'] }),
+    parts: [{ type: 'tool_call', name: 'preview.console', status: 'ok', args: {}, result: { messages: [] } }],
+    fullContent: '',
+  })
+  assert.equal(completed.complete, true)
 })
 
 test('step requiring process.wait does not complete on process.start alone', () => {

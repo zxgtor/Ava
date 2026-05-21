@@ -55,12 +55,12 @@ test('continues after tool limit when a write-heavy step made file progress', ()
   assert.match(toolProgressContinuationText('Write files', parts), /Successful file edits this round: 1/)
 })
 
-test('continues after tool limit when a feature step made inspect progress', () => {
+test('does not continue a feature step after inspection-only progress', () => {
   const parts = [
     { type: 'tool_call', name: 'file.read_text', status: 'ok', args: {}, result: {} },
   ]
 
-  assert.equal(shouldContinueAfterToolLimit(parts, { role: 'feature' }), true)
+  assert.equal(shouldContinueAfterToolLimit(parts, { role: 'feature' }), false)
 })
 
 test('continues after tool limit when an inspect step made inspect progress', () => {

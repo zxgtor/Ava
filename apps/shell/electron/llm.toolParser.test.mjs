@@ -55,7 +55,7 @@ const tempDir = await mkdtemp(join(tmpdir(), 'ava-llm-parser-'))
 const compiledPath = join(tempDir, 'llm-parser.mjs')
 await writeFile(compiledPath, compiled, 'utf8')
 
-const { hasUnterminatedToolCallMarkup, parseHermesToolCalls, stripResidualToolMarkup } = await import(pathToFileURL(compiledPath).href)
+const { hasUnterminatedToolCallMarkup, isToolAllowedForActiveStep, parseHermesToolCalls, stripResidualToolMarkup } = await import(pathToFileURL(compiledPath).href)
 
 test.after(async () => { await rm(tempDir, { recursive: true, force: true }) })
 
@@ -125,4 +125,16 @@ test('stripResidualToolMarkup removes inline thinking tags', () => {
     stripResidualToolMarkup('<think>hidden chain</think>\nFinal'),
     'Final',
   )
+  assert.equal(
+    stripResidualToolMarkup('Changed files\n</antThinking>\nValidation result'),
+    'Changed files\n\nValidation result',
+  )
+})
+
+test('active step tool filter allows only required tools plus safe inspection', () => {
+  assert.equal(isToolAllowedForActiveStep('shell.run_command', ['shell.run_command']), true)
+  assert.equal(isToolAllowedForActiveStep('file.read_text', ['shell.run_command']), true)
+  assert.equal(isToolAllowedForActiveStep('file.write_text', ['shell.run_command']), false)
+  assert.equal(isToolAllowedForActiveStep('devserver.start', ['preview.console']), true)
+  assert.equal(isToolAllowedForActiveStep('devserver.status', ['preview.screenshot']), true)
 })

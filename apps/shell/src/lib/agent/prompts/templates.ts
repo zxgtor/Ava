@@ -68,7 +68,7 @@ Rules:
    - 'console'        — check browser console for runtime errors (preview.console)
    - 'screenshot'     — capture and inspect a visual screenshot (preview.screenshot)
    - 'repair'         — fix issues surfaced by validation, console, or screenshot
-   - 'validate'       — run build/typecheck/test/lint (project.validate or shell.run_command with build/test/lint/tsc)
+   - 'validate'       — run project.validate or a real build/test command. For frontend/preview tasks, build is required; typecheck/lint alone is not enough.
    - 'final_report'   — produce the wrap-up report. Exactly one final_report step, last.
 7. Only include 'preview', 'console', 'screenshot' steps if the project has a runnable frontend; omit them for backend / library / CLI tasks.
 8. Always include exactly one 'validate' step before 'final_report' when any code is written.
@@ -184,9 +184,11 @@ Your ONLY task is to verify that the code already on disk builds and type-checks
 
 REQUIRED FIRST ACTION:
 - Call project.validate { cwd: <project> } — it auto-detects the project type and runs the correct build/typecheck command (e.g. \`tsc -b && vite build\`, \`next build\`, \`npm run build\`).
-- If project.validate is unavailable, fall back to shell.run_command with one of:
-  • { command: "npx", args: ["tsc","--noEmit"], cwd: <project> }
+- If project.validate is unavailable, fall back to shell.run_command with a real build command, for example:
   • { command: "npm", args: ["run","build"], cwd: <project> }
+  • { command: "pnpm", args: ["run","build"], cwd: <project> }
+  • { command: "npx", args: ["vite","build"], cwd: <project> }
+- For frontend/preview tasks, do NOT use npx tsc --noEmit as the only validation. TypeScript may pass while bundling still fails.
 
 ABSOLUTE PROHIBITIONS:
 - DO NOT run \`npm create vite\`, \`create-next-app\`, \`npm init\`, or any scaffold/init command. The project already exists.

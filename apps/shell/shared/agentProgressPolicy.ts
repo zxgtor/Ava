@@ -77,7 +77,7 @@ export function shouldContinueAfterToolLimitForRole(parts: ProgressToolPart[], r
       return summary.inspections > 0
     case 'feature':
     case 'repair':
-      return summary.edits > 0 || summary.inspections > 0 || summary.processes > 0
+      return summary.edits > 0 || summary.processes > 0
     case 'scaffold':
     case 'install':
       return summary.edits > 0 || summary.inspections > 0 || summary.processes > 0

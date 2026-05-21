@@ -209,6 +209,15 @@ const ALWAYS_ALLOWED_CORE_TOOLS = new Set<string>([
   'search.ripgrep',
 ])
 
+export function isToolAllowedForActiveStep(toolName: string, activeStepRequiredTools?: string[]): boolean {
+  if (!activeStepRequiredTools || activeStepRequiredTools.length === 0) return true
+  const needsPreviewRuntime = activeStepRequiredTools.some(tool =>
+    tool === 'preview.console' || tool === 'preview.screenshot' || tool === 'preview.open',
+  )
+  if (needsPreviewRuntime && (toolName === 'devserver.start' || toolName === 'devserver.status')) return true
+  return activeStepRequiredTools.includes(toolName) || ALWAYS_ALLOWED_CORE_TOOLS.has(toolName)
+}
+
 export function chatCompletionsEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
   if (/\/chat\/completions$/i.test(trimmed)) return trimmed
@@ -349,8 +358,7 @@ function listAvailableTools(
   if (!shouldExposeTools(currentTask, activeCommandInvocation, forceToolExposure)) return []
   const all = [...builtInTools.listTools(), ...mcpSupervisor.listAllTools()]
   if (!activeStepRequiredTools || activeStepRequiredTools.length === 0) return all
-  const allowed = new Set([...activeStepRequiredTools, ...ALWAYS_ALLOWED_CORE_TOOLS])
-  return all.filter(tool => allowed.has(tool.name))
+  return all.filter(tool => isToolAllowedForActiveStep(tool.name, activeStepRequiredTools))
 }
 
 /**
@@ -421,6 +429,7 @@ function stripInlineThinkingMarkup(text: string): string {
   return text
     .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*?<\/(?:think|thinking|antThinking)>/gi, '')
     .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<\/(?:think|thinking|antThinking)>/gi, '')
 }
 
 function withFinalizePrompt(messages: LlmMessage[]): LlmMessage[] {
@@ -747,10 +756,38 @@ function looksLikeValidationToolCommand(args: Record<string, unknown>): boolean 
   return /\b(build|typecheck|test|lint|tsc|vite\s+build)\b/.test(joined)
 }
 
+function looksLikeStrongValidationToolCommand(args: Record<string, unknown>): boolean {
+  const command = typeof args.command === 'string' ? args.command.toLowerCase() : ''
+  const argv = Array.isArray(args.args) ? args.args.map(String) : []
+  const joined = `${command} ${argv.join(' ').toLowerCase()}`
+  return /\b(build|test|vite\s+build|next\s+build|astro\s+build)\b/.test(joined)
+}
+
 function processWaitResultSucceeded(result: unknown): boolean {
   if (!result || typeof result !== 'object') return false
   const record = result as Record<string, unknown>
   return record.status === 'exited' && record.exitCode === 0
+}
+
+function pathArgEndsWithPackageJson(args: Record<string, unknown>): boolean {
+  return typeof args.path === 'string' && args.path.replace(/\\/g, '/').toLowerCase().endsWith('/package.json')
+}
+
+function isPackageEvidenceTool(toolCall: ToolCallCandidate): boolean {
+  if (toolCall.name === 'file.read_text' || toolCall.name === 'file.stat') return pathArgEndsWithPackageJson(toolCall.args)
+  return toolCall.name === 'project.detect' || toolCall.name === 'project.map'
+}
+
+function isFeatureEditTool(name: string): boolean {
+  return name === 'file.write_text' || name === 'file.patch'
+}
+
+function isFeatureVerificationTool(name: string): boolean {
+  return name === 'project.map' ||
+    name === 'project.detect' ||
+    name === 'file.stat' ||
+    name === 'file.read_text' ||
+    name === 'file.list_dir'
 }
 
 function requiredToolSatisfiedForStep(
@@ -763,7 +800,7 @@ function requiredToolSatisfiedForStep(
 
   if (args.activeStepRole === 'validate') {
     if (toolCall.name === 'project.validate') return true
-    if (toolCall.name === 'shell.run_command') return looksLikeValidationToolCommand(toolCall.args)
+    if (toolCall.name === 'shell.run_command') return looksLikeStrongValidationToolCommand(toolCall.args)
     if (toolCall.name === 'process.wait') return processWaitResultSucceeded(result.content)
     return false
   }
@@ -780,6 +817,16 @@ function requiredToolSatisfiedForStep(
     return false
   }
 
+  if (args.activeStepRole === 'feature') {
+    // Feature steps require edit + verification evidence. Directory creation
+    // or a raw file write alone must not end the tool loop before verification.
+    if (toolCall.name === 'file.create_dir' || isFeatureEditTool(toolCall.name)) return false
+  }
+
+  if ((args.activeStepRole === 'console' || args.activeStepRole === 'screenshot') && toolCall.name.startsWith('devserver.')) {
+    return false
+  }
+
   return true
 }
 
@@ -787,12 +834,20 @@ function progressToolSatisfiedForStep(
   args: StreamChatArgs,
   toolCall: ToolCallCandidate,
   result: CallToolResult | CallToolError,
+  parts: ToolCallPart[],
 ): boolean {
   if (!args.activeStepRole || !result.ok || result.isError) return false
   if (requiredToolSatisfiedForStep(args, toolCall, result)) return true
+  if (args.activeStepRole === 'feature') {
+    const hasEdit = parts.some(part =>
+      part.status === 'ok' && isFeatureEditTool(part.name),
+    )
+    if (hasEdit && isFeatureVerificationTool(toolCall.name)) return true
+    return false
+  }
   if (
-    (args.activeStepRole === 'feature' || args.activeStepRole === 'repair') &&
-    (toolCall.name === 'file.write_text' || toolCall.name === 'file.patch')
+    args.activeStepRole === 'repair' &&
+    isFeatureEditTool(toolCall.name)
   ) {
     return true
   }
@@ -803,10 +858,88 @@ function progressToolSatisfiedForStep(
   ) {
     return true
   }
+  if (
+    (args.activeStepRole === 'scaffold' || args.activeStepRole === 'install') &&
+    isPackageEvidenceTool(toolCall)
+  ) {
+    return true
+  }
   return false
 }
 
+function toolMadeSemanticProgressForStep(
+  args: StreamChatArgs,
+  toolCall: ToolCallCandidate,
+  result: CallToolResult | CallToolError,
+  parts: ToolCallPart[],
+): boolean {
+  if (!result.ok || result.isError) return false
+  if (!args.activeStepRole) return true
+
+  if (args.activeStepRole === 'feature') {
+    if (isFeatureEditTool(toolCall.name)) return true
+    const hasEdit = parts.some(part => part.status === 'ok' && isFeatureEditTool(part.name))
+    return hasEdit && isFeatureVerificationTool(toolCall.name)
+  }
+
+  if (args.activeStepRole === 'inspect') {
+    return isFeatureVerificationTool(toolCall.name) || toolCall.name === 'search.ripgrep'
+  }
+
+  if (args.activeStepRole === 'repair') {
+    return isFeatureEditTool(toolCall.name) ||
+      toolCall.name === 'shell.run_command' ||
+      isFeatureVerificationTool(toolCall.name)
+  }
+
+  if (args.activeStepRole === 'scaffold' || args.activeStepRole === 'install') {
+    return toolCall.name === 'shell.run_command' ||
+      toolCall.name === 'process.start' ||
+      toolCall.name === 'process.wait' ||
+      toolCall.name === 'file.write_text' ||
+      toolCall.name === 'file.create_dir' ||
+      isPackageEvidenceTool(toolCall)
+  }
+
+  if (args.activeStepRole === 'validate') {
+    return toolCall.name === 'project.validate' ||
+      toolCall.name === 'process.wait' ||
+      (toolCall.name === 'shell.run_command' && looksLikeValidationToolCommand(toolCall.args))
+  }
+
+  if (args.activeStepRole === 'preview') return toolCall.name === 'devserver.start' || toolCall.name === 'devserver.status'
+  if (args.activeStepRole === 'console') return toolCall.name === 'preview.console'
+  if (args.activeStepRole === 'screenshot') return toolCall.name === 'preview.screenshot'
+  if (args.activeStepRole === 'final_report') return false
+  return true
+}
+
 function unsatisfiedRequiredToolMessage(args: StreamChatArgs, toolCall: ToolCallCandidate): string | null {
+  if ((args.activeStepRole === 'console' || args.activeStepRole === 'screenshot') && toolCall.name.startsWith('devserver.')) {
+    return [
+      'The dev server action completed, but this step is not complete yet.',
+      args.activeStepRole === 'console'
+        ? 'Now call preview.console with the actual local URL returned by devserver.start/status.'
+        : 'Now call preview.screenshot with the actual local URL returned by devserver.start/status.',
+      'Do not assume port 5173; use the URL from the dev server tool result.',
+    ].join(' ')
+  }
+
+  if (args.activeStepRole === 'feature') {
+    if (toolCall.name === 'file.create_dir') {
+      return [
+        'The directory was created, but directory creation alone does not satisfy a feature step.',
+        'Now write the required feature files with file.write_text or file.patch, then verify them with file.read_text, file.stat, project.detect, or project.map.',
+      ].join(' ')
+    }
+    if (isFeatureEditTool(toolCall.name)) {
+      return [
+        'The file edit was applied, but feature steps require verification before moving on.',
+        'Now verify the changed project state with file.read_text, file.stat, file.list_dir, project.detect, or project.map.',
+      ].join(' ')
+    }
+  }
+
   if (
     (args.activeStepRole === 'scaffold' || args.activeStepRole === 'install') &&
     (
@@ -824,10 +957,18 @@ function unsatisfiedRequiredToolMessage(args: StreamChatArgs, toolCall: ToolCall
   }
 
   if (args.activeStepRole !== 'validate') return null
-  if (toolCall.name !== 'shell.run_command' || looksLikeValidationToolCommand(toolCall.args)) return null
+  if (toolCall.name !== 'shell.run_command') return null
+  if (looksLikeValidationToolCommand(toolCall.args) && !looksLikeStrongValidationToolCommand(toolCall.args)) {
+    return [
+      'The previous validation command succeeded, but it is too weak for this validate step.',
+      'For frontend/preview tasks, run project.validate or an explicit build command such as npm run build. Typecheck/lint alone does not prove the app bundles.',
+      'Do not move to preview or final report until build succeeds.',
+    ].join(' ')
+  }
+  if (looksLikeValidationToolCommand(toolCall.args)) return null
   return [
     'The previous shell.run_command succeeded, but it did not satisfy the current validate step.',
-    'Validate step must run project.validate, npm run build, npm run typecheck, npm test, npm run lint, tsc, or an equivalent validation command.',
+    'Validate step should run project.validate first. For frontend/preview tasks, npm run build or an equivalent build command must pass; typecheck/lint alone is not enough.',
     'Do not scaffold, install, or rewrite project files during validate unless a validation error first routes the task to repair.',
   ].join(' ')
 }
@@ -1520,8 +1661,9 @@ async function runToolLoop(
   const EXTENSION_AMOUNT = 10
   // Sliding window of the most-recent tool-call fingerprints. Each entry is
   // `${name}|${argsKey}|${status}`. Two heuristics use this:
-  //   1. Unrecoverable repeat — last 3 entries identical AND status=error
-  //      means the model is hammering the same broken call. Stop early.
+  //   1. Unrecoverable repeat — last 3 entries identical means the model is
+  //      hammering the same call. Stop early whether it keeps failing or keeps
+  //      succeeding; repeated successful reads are not real progress.
   //   2. Stagnation — none of the last 5 entries succeeded. The model is
   //      thrashing without progress. Don't grant any budget extensions.
   const recentSignatures: string[] = []
@@ -1532,7 +1674,7 @@ async function runToolLoop(
   // assign which literal — the recordSignature closure assigns
   // 'unrecoverable_repeat' which the outer flow can't see otherwise.
   let earlyStopReason: string | null = null
-  const recordSignature = (name: string, args: unknown, status: 'ok' | 'error'): void => {
+  const recordSignature = (name: string, args: unknown, status: 'ok' | 'stale_ok' | 'error'): void => {
     let argsKey: string
     try {
       const s = JSON.stringify(args ?? {})
@@ -1540,12 +1682,14 @@ async function runToolLoop(
     } catch { argsKey = '?' }
     recentSignatures.push(`${name}|${argsKey}|${status}`)
     if (recentSignatures.length > SIG_WINDOW) recentSignatures.shift()
-    // Check 1: identical error repeated REPEAT_LIMIT times in a row.
+    // Check 1: identical tool+args+status repeated REPEAT_LIMIT times in a row.
     if (recentSignatures.length >= REPEAT_LIMIT) {
       const tail = recentSignatures.slice(-REPEAT_LIMIT)
       const allSame = tail.every(s => s === tail[0])
       if (allSame && tail[0].endsWith('|error')) {
         earlyStopReason = 'unrecoverable_repeat'
+      } else if (allSame && (tail[0].endsWith('|ok') || tail[0].endsWith('|stale_ok'))) {
+        earlyStopReason = 'repeated_success'
       }
     }
   }
@@ -1648,6 +1792,7 @@ async function runToolLoop(
     const actionPromiseWithoutTool =
       tools.length > 0 &&
       toolCalls.length === 0 &&
+      args.activeStepRole !== 'final_report' &&
       Boolean(visibleText) &&
       looksLikeActionPromiseWithoutTool(visibleText)
     if (actionPromiseWithoutTool) {
@@ -1799,10 +1944,25 @@ async function runToolLoop(
       if (!duplicateToolCall && finalReportReadBudget !== undefined && isFinalReportReadTool(toolCall.name) && !finalReportBudgetReason) {
         finalReportReadCalls += 1
       }
-      const staleReason = duplicateToolCall ? null : finalReportBudgetReason ?? validateToolAgainstCurrentTask(toolCall, currentTask)
       const builtInTool = builtInTools.resolveTool(toolCall.name)
       const resolvedTool = builtInTool ?? mcpSupervisor.resolveTool(toolCall.name)
       const serverRuntime = resolvedTool && !builtInTool ? mcpSupervisor.getServer(resolvedTool.serverId) : null
+      const disallowedStepToolReason =
+        !duplicateToolCall && !isToolAllowedForActiveStep(toolCall.name, args.activeStepRequiredTools)
+          ? [
+              `Tool "${toolCall.name}" is not available for the current task step.`,
+              args.activeStepRole ? `Current step role: ${args.activeStepRole}.` : '',
+              args.activeStepRequiredTools?.length ? `Allowed step tools: ${args.activeStepRequiredTools.join(', ')}.` : '',
+              'Use one of the allowed tools or safe read-only inspection tools for this step; do not jump ahead to later steps.',
+            ].filter(Boolean).join(' ')
+          : null
+      const unknownToolReason =
+        !duplicateToolCall && !resolvedTool
+          ? `unknown tool: ${toolCall.name}`
+          : null
+      const staleReason = duplicateToolCall
+        ? null
+        : finalReportBudgetReason ?? disallowedStepToolReason ?? unknownToolReason ?? validateToolAgainstCurrentTask(toolCall, currentTask)
       const startedAt = Date.now()
       const toolPart: ToolCallPart = {
         type: 'tool_call',
@@ -1928,15 +2088,41 @@ async function runToolLoop(
         })
       }
 
-      // Smart-budget signal: did this call succeed or fail? Used by the
-      // outer loop to detect unrecoverable repetition / no progress.
+      const toolParts = parts.filter((part): part is ToolCallPart => part.type === 'tool_call')
+      const stepProgressSatisfied = progressToolSatisfiedForStep(
+        args,
+        toolCall,
+        resultForContext,
+        toolParts,
+      )
+      const semanticProgress = stepProgressSatisfied || toolMadeSemanticProgressForStep(args, toolCall, resultForContext, toolParts)
+      if (
+        args.activeStepRole === 'feature' &&
+        resultForContext.ok &&
+        !resultForContext.isError &&
+        isFeatureVerificationTool(toolCall.name) &&
+        !toolParts.some(part => part.status === 'ok' && isFeatureEditTool(part.name))
+      ) {
+        workingMessages.push({
+          role: 'system',
+          content: [
+            'The inspection succeeded, but this is a feature implementation step and no file edit has been made in this step.',
+            'Do not keep inspecting the project.',
+            'Call file.write_text or file.patch now to implement the current step. If you cannot edit because required information is missing, explain the blocker visibly instead of calling another inspection tool.',
+          ].join(' '),
+        })
+      }
+
+      // Smart-budget signal: semantic progress is step-aware. A successful
+      // read-only inspection during a feature step is not progress unless it
+      // verifies an edit made in the same step.
       recordSignature(
         toolCall.name,
         toolCall.args,
-        result.ok && !result.isError ? 'ok' : 'error',
+        result.ok && !result.isError ? (semanticProgress ? 'ok' : 'stale_ok') : 'error',
       )
 
-      if (progressToolSatisfiedForStep(args, toolCall, resultForContext)) {
+      if (stepProgressSatisfied) {
         return {
           fullContent,
           parts,
@@ -1949,8 +2135,8 @@ async function runToolLoop(
     }
     sendRunStatus(webContents, args, provider, model, 'generating')
 
-    // Smart-budget early stop: same tool+args+error happened REPEAT_LIMIT
-    // times in a row. Wasted rounds are guaranteed; bail now.
+    // Smart-budget early stop: same tool+args+status happened REPEAT_LIMIT
+    // times in a row. Repeating successful inspections forever is still a loop.
     if (earlyStopReason) {
       console.warn('[ava-debug] tool-loop early stop', earlyStopReason, recentSignatures.slice(-REPEAT_LIMIT))
       break
@@ -2017,6 +2203,8 @@ async function runToolLoop(
   const headline =
     earlyStopReason === 'unrecoverable_repeat'
       ? 'Stopped: same tool call failed repeatedly with no recovery — likely a permission, missing path, or wrong-tool-name issue.'
+      : earlyStopReason === 'repeated_success'
+        ? 'Stopped: same successful tool call repeated without advancing the task step.'
       : earlyStopReason === 'no_progress'
         ? 'Stopped: no tool call has succeeded recently — the model appears stuck without making progress.'
         : `Tool loop reached the safety ceiling of ${effectiveBudget} rounds. The model may still be productive — re-send to continue, or stop here.`

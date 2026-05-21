@@ -430,6 +430,32 @@ function taskRoundSummary(stepTitle: string, parts: ContentPart[]): string {
   ].filter(Boolean).join('\n\n')
 }
 
+function finalReportRetryPrompt(parts: ContentPart[]): string {
+  return [
+    'The previous response did not complete the final report.',
+    'Write the final visible report now. Do not call tools unless a required fact is missing. Do not explain what you will do next.',
+    'Required sections: Changed files, Validation result, Preview result, Remaining risks.',
+    taskRoundSummary('Final Report', parts),
+  ].join('\n\n')
+}
+
+function roundHasFileEdit(parts: ContentPart[]): boolean {
+  return parts.some(part =>
+    part.type === 'tool_call' &&
+    part.status === 'ok' &&
+    (part.name === 'file.write_text' || part.name === 'file.patch')
+  )
+}
+
+function featureStepRetryPrompt(stepTitle: string, parts: ContentPart[]): string {
+  return [
+    `The previous response did not implement feature step: ${stepTitle}.`,
+    'This step requires a file edit. Reading or detecting the project is not enough.',
+    'Call file.write_text or file.patch now. If you cannot edit, explain the exact blocker visibly instead of calling more inspection tools.',
+    taskRoundSummary(stepTitle, parts),
+  ].join('\n\n')
+}
+
 function featureTestIdFromText(text: string): string | null {
   return text.match(FEATURE_TEST_RE)?.[1] ?? null
 }
@@ -1088,11 +1114,12 @@ export function ChatView() {
               patch: { content: accumulatedParts },
             })
           }
+          const currentRoundParts = result.ok ? accumulatedParts.slice(roundStartPartIndex) : []
 
           if (taskPlan && activeStep && result.ok) {
-            const roundParts = accumulatedParts.slice(roundStartPartIndex)
+            const roundParts = currentRoundParts
             taskPlan = recoverStepFromRound(taskPlan, activeStep.id, roundParts, result.fullContent)
-            taskPlan = withValidation(taskPlan, updatePlanValidation(taskPlan, roundParts))
+            taskPlan = withValidation(taskPlan, updatePlanValidation(taskPlan, roundParts, activeStep))
             dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
             dispatch({ type: 'UPDATE_TASK_VALIDATION', conversationId, validation: taskPlan.validation })
             const evaluation = evaluateStepCompletion({
@@ -1143,19 +1170,29 @@ export function ChatView() {
                 id: 'repair',
                 title: 'Repair validation or tool execution errors',
                 status: 'pending' as const,
-                requiredTools: ['file.patch', 'file.write_text', 'shell.run_command', 'project.map', 'file.read_text'],
+                requiredTools: ['file.patch', 'file.write_text', 'shell.run_command', 'project.map', 'file.read_text', 'file.list_dir', 'file.stat'],
                 completionSignals: ['errors repaired'],
                 attempts: 0,
                 role: 'repair' as const,
                 workflowType: 'debug' as const,
                 lastError: evaluation.needsRepair,
+                lastToolSummary: evaluation.needsRepair,
               }
               const hasRepairStep = taskPlan.steps.some(s => s.id === 'repair')
               taskPlan = {
                 ...taskPlan,
                 steps: hasRepairStep
                   ? taskPlan.steps.map(s =>
-                    s.id === 'repair' ? { ...s, status: 'pending', attempts: 0, lastError: evaluation.needsRepair } : s
+                    s.id === 'repair'
+                      ? {
+                          ...s,
+                          status: 'pending',
+                          attempts: 0,
+                          requiredTools: ['file.patch', 'file.write_text', 'shell.run_command', 'project.map', 'file.read_text', 'file.list_dir', 'file.stat'],
+                          lastError: evaluation.needsRepair,
+                          lastToolSummary: evaluation.needsRepair,
+                        }
+                      : s
                   )
                   : [
                     ...taskPlan.steps.slice(0, taskPlan.steps.findIndex(s => s.id === activeStep.id)),
@@ -1187,6 +1224,11 @@ export function ChatView() {
               continue
             } else if (taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
               taskEngineRound += 1
+              const retryText = activeStep.id === 'final_report' || activeStep.role === 'final_report'
+                ? finalReportRetryPrompt(roundParts)
+                : activeStep.role === 'feature' && !roundHasFileEdit(roundParts)
+                  ? featureStepRetryPrompt(activeStep.title, roundParts)
+                : taskRoundSummary(activeStep.title, roundParts)
               currentSnapshot = {
                 ...conversationSnapshot,
                 activeTaskPlan: taskPlan,
@@ -1196,7 +1238,7 @@ export function ChatView() {
                     id: makeMessageId(),
                     taskId: activeTaskId,
                     role: 'system',
-                    content: [{ type: 'text', text: taskRoundSummary(activeStep.title, roundParts) }],
+                    content: [{ type: 'text', text: retryText }],
                     createdAt: Date.now(),
                   },
                 ],
@@ -1234,7 +1276,7 @@ export function ChatView() {
             if (result.stopReason) {
               if (
                 result.stopReason === 'tool_loop_limit' &&
-                shouldContinueAfterToolLimit(accumulatedParts, activeStep ?? undefined) &&
+                shouldContinueAfterToolLimit(currentRoundParts, activeStep ?? undefined) &&
                 taskEngineRound < MAX_TASK_ENGINE_ROUNDS
               ) {
                 taskEngineRound += 1
@@ -1244,7 +1286,7 @@ export function ChatView() {
                   messages: [
                     ...currentSnapshot.messages,
                     { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
-                    toolProgressContinuationMessage(activeTaskId, activeStep?.title ?? 'current task', accumulatedParts),
+                    toolProgressContinuationMessage(activeTaskId, activeStep?.title ?? 'current task', currentRoundParts),
                   ],
                 }
                 continue
@@ -1306,7 +1348,7 @@ export function ChatView() {
               // step to inspect the actual filesystem state before acting.
               if (result.stopReason === 'tool_loop_limit' && taskPlan && activeStep) {
                 if (
-                  shouldContinueAfterToolLimit(accumulatedParts, activeStep) &&
+                  shouldContinueAfterToolLimit(currentRoundParts, activeStep) &&
                   taskEngineRound < MAX_TASK_ENGINE_ROUNDS
                 ) {
                   taskEngineRound += 1
@@ -1316,14 +1358,33 @@ export function ChatView() {
                     messages: [
                       ...currentSnapshot.messages,
                       { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
-                      toolProgressContinuationMessage(activeTaskId, activeStep.title, accumulatedParts),
+                      toolProgressContinuationMessage(activeTaskId, activeStep.title, currentRoundParts),
                     ],
                   }
                   continue
                 }
 
                 taskEngineRound += 1
-                const recentLoopedTools = recentToolSummary(accumulatedParts, 4)
+                const recentLoopedTools = recentToolSummary(currentRoundParts, 4)
+
+                if (activeStep.role === 'feature' && !roundHasFileEdit(currentRoundParts)) {
+                  const error = [
+                    `Step "${activeStep.title}" is stuck before implementation.`,
+                    'The model only used read/inspect tools and did not edit files with file.write_text or file.patch.',
+                    recentLoopedTools ? `Recent tools:\n${recentLoopedTools}` : '',
+                    'Ava stopped instead of skipping this feature step because skipping would falsely mark unfinished work as complete.',
+                  ].filter(Boolean).join('\n\n')
+                  taskPlan = blockPlan(taskPlan, activeStep.id, error)
+                  dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
+                  dispatch({
+                    type: 'UPDATE_MESSAGE',
+                    conversationId,
+                    messageId: placeholderId,
+                    patch: { streaming: false, error, runPhase: 'error' },
+                  })
+                  await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
+                  return
+                }
 
                 // Mark the stuck step as skipped (not failed) — partial success is assumed
                 taskPlan = markStepSkipped(taskPlan, activeStep.id)
@@ -1364,7 +1425,7 @@ export function ChatView() {
                       ? 'Stopped: model output a raw command instead of calling a tool. Ava did not execute the plain text command; please retry or switch to a model/profile that follows tool-call format.'
                       : result.stopReason === 'tool_loop_limit'
                       ? [
-                          toolLoopUserMessage(accumulatedParts, activeStep?.title),
+                          toolLoopUserMessage(currentRoundParts, activeStep?.title),
                         ].join('\n')
                         : `Stopped: ${stopReasonText(result.stopReason)}.`
               dispatch({
