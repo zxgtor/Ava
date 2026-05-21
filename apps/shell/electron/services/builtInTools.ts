@@ -472,6 +472,25 @@ interface PreviewPageContent {
   messages: PreviewLogMessage[]
   errorCount: number
   warningCount: number
+  pageStats: PreviewPageStats
+}
+
+interface PreviewPageStats {
+  bodyTextLength: number
+  bodyTextSample: string
+  elementCount: number
+  canvasCount: number
+  imageCount: number
+  rootHtmlLength: number
+}
+
+interface PreviewVisualStats {
+  width: number
+  height: number
+  sampleCount: number
+  uniqueColorEstimate: number
+  nonWhiteRatio: number
+  blankLike: boolean
 }
 
 interface DetectedProject {
@@ -1960,10 +1979,25 @@ async function loadPreviewPage(
 
       await win.loadURL(url)
       if (options.waitMs > 0) await new Promise(resolve => setTimeout(resolve, options.waitMs))
+      const pageStats = await win.webContents.executeJavaScript(`
+        (() => {
+          const bodyText = (document.body?.innerText || '').trim()
+          return {
+            bodyTextLength: bodyText.length,
+            bodyTextSample: bodyText.slice(0, 300),
+            elementCount: document.querySelectorAll('*').length,
+            canvasCount: document.querySelectorAll('canvas').length,
+            imageCount: document.querySelectorAll('img, svg').length,
+            rootHtmlLength: document.documentElement?.outerHTML?.length || 0
+          }
+        })()
+      `, true) as PreviewPageStats
+      let visualStats: PreviewVisualStats | undefined
 
       if (options.screenshotPath) {
         await mkdir(dirname(resolvePath(options.screenshotPath)), { recursive: true })
         const image = await win.webContents.capturePage()
+        visualStats = imageVisualStats(image)
         await writeFile(options.screenshotPath, image.toPNG())
       }
 
@@ -1975,6 +2009,8 @@ async function loadPreviewPage(
           messages,
           errorCount: messages.filter(message => message.level === 'error' || message.level === 'pageerror').length,
           warningCount: messages.filter(message => message.level === 'warning').length,
+          pageStats,
+          ...(visualStats ? { visualStats } : {}),
         },
       }
     } finally {
@@ -1990,6 +2026,37 @@ function consoleLevelName(level: number): string {
   if (level === 2) return 'warning'
   if (level === 1) return 'info'
   return 'log'
+}
+
+function imageVisualStats(image: { getSize: () => { width: number; height: number }; toBitmap: () => Buffer }): PreviewVisualStats {
+  const { width, height } = image.getSize()
+  const bitmap = image.toBitmap()
+  const stride = 4
+  const maxSamples = 1200
+  const totalPixels = Math.max(1, Math.floor(bitmap.length / stride))
+  const step = Math.max(1, Math.floor(totalPixels / maxSamples))
+  const colors = new Set<string>()
+  let sampled = 0
+  let nonWhite = 0
+  for (let pixel = 0; pixel < totalPixels; pixel += step) {
+    const offset = pixel * stride
+    const blue = bitmap[offset] ?? 255
+    const green = bitmap[offset + 1] ?? 255
+    const red = bitmap[offset + 2] ?? 255
+    colors.add(`${red >> 4},${green >> 4},${blue >> 4}`)
+    if (!(red > 245 && green > 245 && blue > 245)) nonWhite += 1
+    sampled += 1
+  }
+  const nonWhiteRatio = sampled > 0 ? nonWhite / sampled : 0
+  const uniqueColorEstimate = colors.size
+  return {
+    width,
+    height,
+    sampleCount: sampled,
+    uniqueColorEstimate,
+    nonWhiteRatio,
+    blankLike: uniqueColorEstimate <= 2 || nonWhiteRatio < 0.005,
+  }
 }
 
 function isAllowedCwd(cwd: string, context: RunContext): boolean {

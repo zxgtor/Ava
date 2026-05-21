@@ -297,8 +297,8 @@ export function updatePlanValidation(
   const role = step ? stepRole(step) : undefined
   for (const part of okToolParts(parts)) {
     if (role === 'preview' && part.name === 'devserver.start') validation.devServerChecked = true
-    if (role === 'console' && part.name === 'preview.console') validation.consoleChecked = true
-    if (role === 'screenshot' && part.name === 'preview.screenshot') validation.screenshotChecked = true
+    if (role === 'console' && part.name === 'preview.console' && previewConsoleAccepted(part)) validation.consoleChecked = true
+    if (role === 'screenshot' && part.name === 'preview.screenshot' && previewScreenshotAccepted(part)) validation.screenshotChecked = true
     if (role === 'validate' && validationToolSucceeded(part, plan)) validation.buildChecked = true
   }
   return validation
@@ -466,8 +466,20 @@ export function evaluateStepCompletion(input: {
 
   if (role === 'repair') {
     const okTools = okToolParts(parts)
-    if (okTools.some(part => part.name === 'file.write_text' || part.name === 'file.patch' || (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args)))) {
+    const repairAction = okTools.find(part => part.name === 'file.write_text' || part.name === 'file.patch' || (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args)))
+    if (repairAction && repairActionIsProjectAware(repairAction, effectiveStep, okTools)) {
       return { complete: true }
+    }
+    if (repairAction) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        needsRepair: [
+          `Repair step "${step.title}" made a repair action, but it was not tied to the failing file or error evidence.`,
+          projectAwareRepairInstruction(effectiveStep),
+          summary,
+        ].filter(Boolean).join('\n\n'),
+      }
     }
     if (okTools.some(part => isReadOnlyProjectTool(part.name))) {
       const summary = summarizeRoundForBlock(parts, fullContent)
@@ -485,6 +497,53 @@ export function evaluateStepCompletion(input: {
       return {
         complete: false,
         blocked: `Step "${step.title}" produced no usable repair evidence. It must write, patch, or run a repair/validation command before moving on.${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    return { complete: false }
+  }
+
+  if (role === 'console') {
+    const consoleTool = parts
+      .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call' && part.name === 'preview.console')
+      .at(-1)
+    if (consoleTool && previewConsoleAccepted(consoleTool)) return { complete: true }
+    if (consoleTool && consoleTool.status === 'error') {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        needsRepair: `Preview console check failed. Repair runtime/browser errors before moving on.\n${previewIssueSummary(consoleTool)}${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    if (shouldBlockForNoProgress(step, parts, fullContent)) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" produced no usable console evidence. It must call preview.console on the actual local URL.${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    return { complete: false }
+  }
+
+  if (role === 'screenshot') {
+    const screenshotTool = parts
+      .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call' && part.name === 'preview.screenshot')
+      .at(-1)
+    if (screenshotTool && previewScreenshotAccepted(screenshotTool)) return { complete: true }
+    if (screenshotTool) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      const reason = screenshotTool.status === 'error'
+        ? 'Preview screenshot check failed. Repair runtime/browser errors before moving on.'
+        : 'Preview screenshot was captured but did not prove the page rendered usable content.'
+      return {
+        complete: false,
+        needsRepair: `${reason}\n${previewIssueSummary(screenshotTool)}${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    if (shouldBlockForNoProgress(step, parts, fullContent)) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" produced no usable screenshot evidence. It must call preview.screenshot on the actual local URL.${summary ? `\n\n${summary}` : ''}`,
       }
     }
     return { complete: false }
@@ -510,10 +569,6 @@ export function evaluateStepCompletion(input: {
     step.requiredTools.includes(name) || (isInspectRole && inspectionEquivalents.has(name))
   const complete = step.requiredTools.length === 0
     ? fullContent.trim().length > 0
-    : role === 'console'
-      ? okTools.some(part => part.name === 'preview.console')
-    : role === 'screenshot'
-      ? okTools.some(part => part.name === 'preview.screenshot')
     : step.requiredTools.includes('process.wait')
       ? okTools.some(part => part.name === 'process.wait' && processWaitSucceeded(part.result))
       : okTools.some(part => matchesRequired(part.name))
@@ -638,6 +693,110 @@ function validationErrorText(part: Extract<ContentPart, { type: 'tool_call' }>):
     typeof result.stderr === 'string' ? result.stderr : '',
     JSON.stringify(result),
   ].filter(Boolean).join('\n')
+}
+
+function repairActionIsProjectAware(
+  action: Extract<ContentPart, { type: 'tool_call' }>,
+  step: TaskExecutionStep,
+  okTools: Array<Extract<ContentPart, { type: 'tool_call' }>>,
+): boolean {
+  if (action.name === 'shell.run_command') return looksLikeValidationCommand(action.args)
+  const errorPaths = extractErrorFilePaths(`${step.lastError ?? ''}\n${step.lastToolSummary ?? ''}`)
+  if (errorPaths.length === 0) return true
+  const actionPath = typeof action.args.path === 'string' ? normalizeComparablePath(action.args.path) : ''
+  if (actionPath && errorPaths.some(errorPath => pathMatchesError(actionPath, errorPath))) return true
+  return okTools.some(part => {
+    if (!isReadOnlyProjectTool(part.name) && part.name !== 'search.ripgrep') return false
+    const path = typeof part.args.path === 'string' ? normalizeComparablePath(part.args.path) : ''
+    return path && errorPaths.some(errorPath => pathMatchesError(path, errorPath))
+  })
+}
+
+function projectAwareRepairInstruction(step: TaskExecutionStep): string {
+  const paths = extractErrorFilePaths(`${step.lastError ?? ''}\n${step.lastToolSummary ?? ''}`)
+  if (paths.length === 0) {
+    return 'Repair must inspect the failing area with file.read_text/search.ripgrep, then patch the root cause.'
+  }
+  return `Repair must inspect or patch the failing file path first: ${paths.join(', ')}.`
+}
+
+function extractErrorFilePaths(text: string): string[] {
+  const matches = new Set<string>()
+  const patterns = [
+    /([A-Za-z]:[\\/][^"'`\r\n:]+?\.[A-Za-z0-9]+)(?::|\(|\s|$)/g,
+    /(?:^|[\s"'`(])((?:\.{1,2}[\\/])?(?:[\w.-]+[\\/])+[\w.-]+\.[A-Za-z0-9]+)(?::|\(|\s|$)/g,
+  ]
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(text)) !== null) {
+      const raw = match[1]
+      if (!raw) continue
+      if (/\b(node_modules|dist|build|out)\b/i.test(raw)) continue
+      if (!/\.(tsx?|jsx?|css|scss|html|json|md|vue|svelte|astro)$/i.test(raw)) continue
+      matches.add(normalizeComparablePath(raw))
+    }
+  }
+  return [...matches].slice(0, 8)
+}
+
+function normalizeComparablePath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^["'`]+|["'`]+$/g, '').replace(/^\.\//, '').toLowerCase()
+}
+
+function pathMatchesError(candidate: string, errorPath: string): boolean {
+  return candidate === errorPath ||
+    candidate.endsWith(`/${errorPath}`) ||
+    errorPath.endsWith(`/${candidate}`) ||
+    basenameLike(candidate) === basenameLike(errorPath)
+}
+
+function basenameLike(path: string): string {
+  const normalized = normalizeComparablePath(path)
+  return normalized.slice(normalized.lastIndexOf('/') + 1)
+}
+
+function previewConsoleAccepted(part: Extract<ContentPart, { type: 'tool_call' }>): boolean {
+  if (part.status !== 'ok') return false
+  const result = part.result && typeof part.result === 'object' ? part.result as Record<string, unknown> : {}
+  return previewErrorCount(result) === 0
+}
+
+function previewScreenshotAccepted(part: Extract<ContentPart, { type: 'tool_call' }>): boolean {
+  if (part.status !== 'ok') return false
+  const result = part.result && typeof part.result === 'object' ? part.result as Record<string, unknown> : {}
+  if (previewErrorCount(result) > 0) return false
+  if (typeof result.screenshotPath !== 'string' || result.screenshotPath.trim().length === 0) return false
+  const pageStats = result.pageStats && typeof result.pageStats === 'object' ? result.pageStats as Record<string, unknown> : {}
+  const visualStats = result.visualStats && typeof result.visualStats === 'object' ? result.visualStats as Record<string, unknown> : {}
+  const bodyTextLength = typeof pageStats.bodyTextLength === 'number' ? pageStats.bodyTextLength : 0
+  const elementCount = typeof pageStats.elementCount === 'number' ? pageStats.elementCount : 0
+  const canvasCount = typeof pageStats.canvasCount === 'number' ? pageStats.canvasCount : 0
+  const blankLike = visualStats.blankLike === true
+  return !blankLike && (bodyTextLength > 0 || elementCount > 3 || canvasCount > 0)
+}
+
+function previewErrorCount(result: Record<string, unknown>): number {
+  if (typeof result.errorCount === 'number') return result.errorCount
+  const messages = Array.isArray(result.messages) ? result.messages : []
+  return messages.filter(message => {
+    if (!message || typeof message !== 'object') return false
+    const level = String((message as Record<string, unknown>).level ?? '').toLowerCase()
+    return level === 'error' || level === 'pageerror'
+  }).length
+}
+
+function previewIssueSummary(part: Extract<ContentPart, { type: 'tool_call' }>): string {
+  const result = part.result && typeof part.result === 'object' ? part.result as Record<string, unknown> : {}
+  const messages = Array.isArray(result.messages)
+    ? result.messages
+        .map(message => message && typeof message === 'object' ? message as Record<string, unknown> : null)
+        .filter((message): message is Record<string, unknown> => Boolean(message))
+        .map(message => `${message.level ?? 'log'}: ${String(message.text ?? '').slice(0, 240)}`)
+        .slice(0, 5)
+    : []
+  const pageStats = result.pageStats ? `pageStats=${JSON.stringify(result.pageStats).slice(0, 300)}` : ''
+  const visualStats = result.visualStats ? `visualStats=${JSON.stringify(result.visualStats).slice(0, 300)}` : ''
+  return [messages.length > 0 ? messages.join('\n') : '', pageStats, visualStats].filter(Boolean).join('\n')
 }
 
 function validationFailureSignature(parts: ContentPart[], plan: TaskExecutionPlan): string | undefined {

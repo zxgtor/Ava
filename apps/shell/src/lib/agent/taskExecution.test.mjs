@@ -571,6 +571,32 @@ test('repair read-only evidence routes to repair guidance instead of hard blocki
   assert.match(result.needsRepair, /did not repair anything/)
 })
 
+test('repair action must target error file when validation includes a file path', () => {
+  const repairStep = step({
+    id: 'repair',
+    title: 'Repair build issue',
+    role: 'repair',
+    requiredTools: ['file.patch', 'file.write_text'],
+    lastError: 'src/App.tsx(2,1): error TS6133: unused import',
+  })
+  const wrongFile = evaluateStepCompletion({
+    plan: plan({ steps: [repairStep] }),
+    step: repairStep,
+    parts: [{ type: 'tool_call', name: 'file.patch', args: { path: 'D:\\x\\src\\Other.tsx', oldText: 'a', newText: 'b' }, status: 'ok', result: { path: 'D:\\x\\src\\Other.tsx' } }],
+    fullContent: '',
+  })
+  assert.equal(wrongFile.complete, false)
+  assert.match(wrongFile.needsRepair, /failing file/)
+
+  const rightFile = evaluateStepCompletion({
+    plan: plan({ steps: [repairStep] }),
+    step: repairStep,
+    parts: [{ type: 'tool_call', name: 'file.patch', args: { path: 'D:\\x\\src\\App.tsx', oldText: 'a', newText: 'b' }, status: 'ok', result: { path: 'D:\\x\\src\\App.tsx' } }],
+    fullContent: '',
+  })
+  assert.equal(rightFile.complete, true)
+})
+
 test('step with no evidence can block as no-progress', () => {
   const result = evaluateStepCompletion({
     plan: plan(),
@@ -645,6 +671,45 @@ test('updatePlanValidation does not mark frontend build checked for typecheck-on
   assert.equal(validation.buildChecked, false)
 })
 
+test('updatePlanValidation marks screenshot checked only when visual content is accepted', () => {
+  const screenshotPlan = plan({
+    steps: [
+      { id: 'shot', role: 'screenshot', title: '', status: 'running', requiredTools: ['preview.screenshot'], completionSignals: [], attempts: 0 },
+    ],
+  })
+  const blank = updatePlanValidation(screenshotPlan, [
+    {
+      type: 'tool_call',
+      name: 'preview.screenshot',
+      status: 'ok',
+      args: {},
+      result: {
+        screenshotPath: 'D:\\x\\shot.png',
+        errorCount: 0,
+        pageStats: { bodyTextLength: 0, elementCount: 2, canvasCount: 0 },
+        visualStats: { blankLike: true },
+      },
+    },
+  ], screenshotPlan.steps[0])
+  assert.equal(blank.screenshotChecked, false)
+
+  const accepted = updatePlanValidation(screenshotPlan, [
+    {
+      type: 'tool_call',
+      name: 'preview.screenshot',
+      status: 'ok',
+      args: {},
+      result: {
+        screenshotPath: 'D:\\x\\shot.png',
+        errorCount: 0,
+        pageStats: { bodyTextLength: 12, elementCount: 10, canvasCount: 1 },
+        visualStats: { blankLike: false },
+      },
+    },
+  ], screenshotPlan.steps[0])
+  assert.equal(accepted.screenshotChecked, true)
+})
+
 test('finalValidationGateSatisfied is true when no checks are applicable', () => {
   const backendPlan = plan({
     steps: [{ id: 'a', role: 'feature', title: '', status: 'done', requiredTools: [], completionSignals: [], attempts: 0 }],
@@ -712,6 +777,46 @@ test('console step completes only after preview.console, not devserver recovery 
     fullContent: '',
   })
   assert.equal(completed.complete, true)
+})
+
+test('console step routes browser errors to repair', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'console', role: 'console', requiredTools: ['preview.console', 'devserver.status', 'devserver.start'] }),
+    parts: [{
+      type: 'tool_call',
+      name: 'preview.console',
+      status: 'error',
+      args: {},
+      result: { errorCount: 1, messages: [{ level: 'error', text: 'ReferenceError: x is not defined' }] },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.match(result.needsRepair, /Preview console check failed/)
+  assert.match(result.needsRepair, /ReferenceError/)
+})
+
+test('screenshot step rejects blank accepted tool result', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'screenshot', role: 'screenshot', requiredTools: ['preview.screenshot'] }),
+    parts: [{
+      type: 'tool_call',
+      name: 'preview.screenshot',
+      status: 'ok',
+      args: {},
+      result: {
+        screenshotPath: 'D:\\x\\shot.png',
+        errorCount: 0,
+        pageStats: { bodyTextLength: 0, elementCount: 2, canvasCount: 0 },
+        visualStats: { blankLike: true },
+      },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.match(result.needsRepair, /did not prove/)
 })
 
 test('step requiring process.wait does not complete on process.start alone', () => {

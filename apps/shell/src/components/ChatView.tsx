@@ -489,6 +489,7 @@ function repairStepRetryPrompt(step: NonNullable<TaskExecutionPlan['steps'][numb
     `The previous response did not repair step: ${step.title}.`,
     step.lastError ? `Original error to fix:\n${step.lastError}` : '',
     'This repair step requires file.patch, file.write_text, or a repair build command. Reading/listing files alone is not a repair.',
+    'Use the original error to identify the failing file. If the error includes a file path, inspect or patch that file before touching unrelated files.',
     'If you already inspected the file, patch the offending code now. Do not repeat the same read-only tool call.',
     taskRoundSummary(step.title, parts),
   ].filter(Boolean).join('\n\n')

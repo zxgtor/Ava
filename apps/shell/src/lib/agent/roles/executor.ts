@@ -7,6 +7,7 @@ import {
   EXECUTOR_VALIDATE,
   EXECUTOR_INSTALL,
   EXECUTOR_PREVIEW,
+  EXECUTOR_PREVIEW_ACCEPTANCE,
 } from '../prompts/templates'
 
 export interface ExecutorInput {
@@ -108,6 +109,10 @@ export function buildExecutorSystemPrompt(input: ExecutorInput): string {
       '- Commands like npm create vite, npm install, npm init, mkdir, or file writes do not validate the project and must not be used in this step.',
       '- If validation fails, stop after the validation result; the engine will route to repair.',
     ].join('\n'))
+  }
+
+  if (input.step.role === 'console' || input.step.role === 'screenshot') {
+    sections.push(EXECUTOR_PREVIEW_ACCEPTANCE)
   }
 
   sections.push('Self-Correction: If a tool fails, read the error message, adjust, and retry. Maximum retries: 2.')
