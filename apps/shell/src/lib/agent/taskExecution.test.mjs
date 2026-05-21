@@ -38,7 +38,7 @@ await writeFile(join(tempDir, 'toolNames.mjs'), 'export function normalizeRequir
 const patched = compiled.replace(/from\s+['"]\.\/toolNames['"]/g, "from './toolNames.mjs'")
 await writeFile(compiledPath, patched, 'utf8')
 
-const { evaluateStepCompletion, extractWorkingDirectoryFromText, finalValidationGateSatisfied, recoverStepFromRound, taskStepRecovery } =
+const { evaluateStepCompletion, extractWorkingDirectoryFromText, finalValidationGateSatisfied, normalizeTaskExecutionPlan, recoverStepFromRound, taskStepRecovery } =
   await import(pathToFileURL(compiledPath).href)
 
 test.after(async () => { await rm(tempDir, { recursive: true, force: true }) })
@@ -243,9 +243,33 @@ test('final_report role passes when no preview/console/validate steps exist (bac
     plan: backendPlan,
     step: step({ id: 'final', role: 'final_report' }),
     parts: [],
-    fullContent: 'All done — wrote 3 files.',
+    fullContent: 'Changed files: src/main.ts. Validation: passed. Remaining risks: none.',
   })
   assert.equal(result.complete, true)
+})
+
+test('final_report role rejects thinking-only content', () => {
+  const backendPlan = plan({
+    steps: [{ id: 'write', role: 'feature', title: '', status: 'done', requiredTools: [], completionSignals: [], attempts: 0 }],
+  })
+  const result = evaluateStepCompletion({
+    plan: backendPlan,
+    step: step({ id: 'final', role: 'final_report' }),
+    parts: [],
+    fullContent: '<antThinking>I need to validate and then report.</antThinking>',
+  })
+  assert.equal(result.complete, false)
+})
+
+test('normalizeTaskExecutionPlan injects console and screenshot checks after preview', () => {
+  const normalized = normalizeTaskExecutionPlan(plan({
+    steps: [
+      { id: 'preview-app', role: 'preview', title: 'Preview Application', status: 'pending', requiredTools: ['devserver.start'], completionSignals: [], attempts: 0 },
+      { id: 'validate-build', role: 'validate', title: 'Validate Build', status: 'pending', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 0 },
+      { id: 'final-report', role: 'final_report', title: 'Final Report', status: 'pending', requiredTools: [], completionSignals: [], attempts: 0 },
+    ],
+  }))
+  assert.deepEqual(normalized.steps.map(s => s.role), ['preview', 'console', 'screenshot', 'validate', 'final_report'])
 })
 
 test('finalValidationGateSatisfied is true when no checks are applicable', () => {

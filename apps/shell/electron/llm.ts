@@ -412,12 +412,15 @@ function chooseHiddenReasoningBudgetChars(mode: 'off' | 'on', currentTask: strin
 
 function isInlineThinkingOnly(text: string): boolean {
   if (!text) return false
-  if (!/<think\b/i.test(text)) return false
-  const stripped = text
-    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
-    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
-    .trim()
+  if (!/<(?:think|thinking|antThinking)\b/i.test(text)) return false
+  const stripped = stripInlineThinkingMarkup(text).trim()
   return stripped.length === 0
+}
+
+function stripInlineThinkingMarkup(text: string): string {
+  return text
+    .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*?<\/(?:think|thinking|antThinking)>/gi, '')
+    .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*$/gi, '')
 }
 
 function withFinalizePrompt(messages: LlmMessage[]): LlmMessage[] {
@@ -1318,7 +1321,7 @@ function parseFunctionParameterToolCalls(text: string): { visibleText: string; t
 }
 
 export function stripResidualToolMarkup(text: string): string {
-  return stripBracketToolMarkup(text
+  return stripBracketToolMarkup(stripInlineThinkingMarkup(text)
     .replace(/<(?:tool_call|tool_code)>[\s\S]*?(?:<\/(?:tool_call|tool_code)>|$)/g, '')
     .replace(/<function=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/function>|$)/g, '')
     .replace(/<parameter=[A-Za-z0-9_.-]+>[\s\S]*?(?:<\/parameter>|$)/g, '')
@@ -1601,25 +1604,26 @@ async function runToolLoop(
     const outputLimitReached = step.finishReason === 'length' || step.finishReason === 'max_tokens'
     const toolCallTruncated = step.finishReason === 'tool_call_truncated'
     const serverDisconnected = step.finishReason === 'stream_disconnected'
+    const visibleText = stripResidualToolMarkup(step.visibleText ?? '')
     let toolCalls = normalizeToolCallsForContext(step.toolCalls, args.activeFolderPath)
     if (toolCallTruncated) {
-      workingMessages.splice(0, workingMessages.length, ...withTruncatedToolCallRetryPrompt(workingMessages, step.visibleText))
+      workingMessages.splice(0, workingMessages.length, ...withTruncatedToolCallRetryPrompt(workingMessages, visibleText))
       continue
     }
     const trailingRawCommand =
-      tools.length > 0 && toolCalls.length === 0 && step.visibleText
-        ? extractTrailingRawCommand(step.visibleText)
+      tools.length > 0 && toolCalls.length === 0 && visibleText
+        ? extractTrailingRawCommand(visibleText)
         : null
     if (trailingRawCommand) {
-      const shellToolCall = rawCommandToShellToolCall(step.visibleText, args.activeFolderPath)
+      const shellToolCall = rawCommandToShellToolCall(visibleText, args.activeFolderPath)
       if (shellToolCall) {
         toolCalls = [shellToolCall]
       } else if (!rawCommandCorrectionIssued) {
         rawCommandCorrectionIssued = true
-        workingMessages.splice(0, workingMessages.length, ...withToolCallCorrectionPrompt(workingMessages, step.visibleText))
+        workingMessages.splice(0, workingMessages.length, ...withToolCallCorrectionPrompt(workingMessages, visibleText))
         continue
       } else {
-        const failText = rawCommandNoToolText(step.visibleText)
+        const failText = rawCommandNoToolText(visibleText)
         fullContent += failText
         parts.push({ type: 'text', text: failText })
         sendTextDelta(webContents, args, failText)
@@ -1644,15 +1648,15 @@ async function runToolLoop(
     const actionPromiseWithoutTool =
       tools.length > 0 &&
       toolCalls.length === 0 &&
-      Boolean(step.visibleText) &&
-      looksLikeActionPromiseWithoutTool(step.visibleText)
+      Boolean(visibleText) &&
+      looksLikeActionPromiseWithoutTool(visibleText)
     if (actionPromiseWithoutTool) {
-      const synthesizedToolCall = actionPromiseToToolCall(step.visibleText, args.activeFolderPath)
+      const synthesizedToolCall = actionPromiseToToolCall(visibleText, args.activeFolderPath)
       if (synthesizedToolCall) {
         toolCalls = normalizeToolCallsForContext([synthesizedToolCall], args.activeFolderPath)
       } else if (actionCorrectionCount < 4) {
         actionCorrectionCount += 1
-        workingMessages.splice(0, workingMessages.length, ...withActionRequiredPrompt(workingMessages, step.visibleText))
+        workingMessages.splice(0, workingMessages.length, ...withActionRequiredPrompt(workingMessages, visibleText))
         continue
       }
     }
@@ -1667,8 +1671,8 @@ async function runToolLoop(
         finishReason: step.finishReason,
         hiddenReasoningExceeded: step.hiddenReasoningExceeded,
         hiddenReasoningChars: step.hiddenReasoningChars,
-        visibleTextLen: step.visibleText?.length ?? 0,
-        visibleTextSample: (step.visibleText ?? '').slice(0, 300),
+        visibleTextLen: visibleText.length,
+        visibleTextSample: visibleText.slice(0, 300),
         inlineThinkingOnly,
         toolsExposedCount: tools.length,
         reasoningMode: effectiveProvider.reasoningMode,
@@ -1676,10 +1680,10 @@ async function runToolLoop(
       })
     }
 
-    if (step.visibleText && toolCalls.length === 0 && !inlineThinkingOnly) {
-      fullContent += step.visibleText
-      parts.push({ type: 'text', text: step.visibleText })
-      if (tools.length > 0 && bufferedVisibleText) sendTextDelta(webContents, args, step.visibleText)
+    if (visibleText && toolCalls.length === 0 && !inlineThinkingOnly) {
+      fullContent += visibleText
+      parts.push({ type: 'text', text: visibleText })
+      if (tools.length > 0 && bufferedVisibleText) sendTextDelta(webContents, args, visibleText)
     }
 
     // Treat any inline-thinking-only response with no tool call as a reasoning
@@ -1711,12 +1715,13 @@ async function runToolLoop(
           sendTextDelta(webContents, args, text)
         },
       )
-      if (finalizeStep.visibleText) {
+      const finalizeVisibleText = stripResidualToolMarkup(finalizeStep.visibleText ?? '')
+      if (finalizeVisibleText) {
         // Recovery worked, but only with reasoning forced off. Remember this so
         // future calls for this provider+model skip the wasted reasoning attempt.
         markReasoningBroken(provider.id, model)
-        fullContent += finalizeStep.visibleText
-        parts.push({ type: 'text', text: finalizeStep.visibleText })
+        fullContent += finalizeVisibleText
+        parts.push({ type: 'text', text: finalizeVisibleText })
         return {
           fullContent,
           parts,
@@ -1757,8 +1762,8 @@ async function runToolLoop(
     }
 
     if (toolCalls.length === 0) {
-      if (step.visibleText) {
-        workingMessages.push({ role: 'assistant', content: step.visibleText })
+      if (visibleText) {
+        workingMessages.push({ role: 'assistant', content: visibleText })
       }
       return {
         fullContent,
@@ -1775,7 +1780,7 @@ async function runToolLoop(
     toolCallsIssued += toolCalls.length
     workingMessages.push({
       role: 'assistant',
-      content: step.visibleText,
+      content: visibleText,
       toolCalls,
     })
     for (const toolCall of toolCalls) {

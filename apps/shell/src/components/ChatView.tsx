@@ -2180,7 +2180,7 @@ export function ChatView() {
                 isLast &&
                 m.role === 'assistant' &&
                 !m.streaming &&
-                (Boolean(m.error) || Boolean(m.aborted) || hasFailedToolCall(activeConversation, m.id))
+                (Boolean(m.error) || Boolean(m.aborted) || (m.runPhase !== 'completed' && hasFailedToolCall(activeConversation, m.id)))
               return (
                 <MessageBubble
                   key={m.id}

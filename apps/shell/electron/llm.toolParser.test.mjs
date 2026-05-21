@@ -115,3 +115,14 @@ test('detects and strips incomplete tool_code markup', () => {
   assert.equal(hasUnterminatedToolCallMarkup('Let me inspect\n<tool_code> <tool_code>'), true)
   assert.equal(stripResidualToolMarkup('Let me inspect\n<tool_code> <tool_code>'), 'Let me inspect')
 })
+
+test('stripResidualToolMarkup removes inline thinking tags', () => {
+  assert.equal(
+    stripResidualToolMarkup('Visible\n<antThinking>I should call tools</antThinking>\nDone'),
+    'Visible\n\nDone',
+  )
+  assert.equal(
+    stripResidualToolMarkup('<think>hidden chain</think>\nFinal'),
+    'Final',
+  )
+})

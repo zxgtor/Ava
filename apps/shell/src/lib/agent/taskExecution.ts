@@ -9,13 +9,38 @@ const MAX_STEP_ATTEMPTS = 3
 const MAX_VALIDATE_REPAIR_CYCLES = 2
 
 export function normalizeTaskExecutionPlan(plan: TaskExecutionPlan): TaskExecutionPlan {
+  const normalizedSteps = ensureFrontendValidationSteps(plan.steps.map(step => ({
+    ...step,
+    requiredTools: normalizeRequiredTools(step.requiredTools),
+  })))
   return {
     ...plan,
-    steps: plan.steps.map(step => ({
-      ...step,
-      requiredTools: normalizeRequiredTools(step.requiredTools),
-    })),
+    steps: normalizedSteps,
   }
+}
+
+function ensureFrontendValidationSteps(steps: TaskExecutionStep[]): TaskExecutionStep[] {
+  const hasPreview = steps.some(step => stepRole(step) === 'preview')
+  if (!hasPreview) return steps
+
+  const hasConsole = steps.some(step => stepRole(step) === 'console')
+  const hasScreenshot = steps.some(step => stepRole(step) === 'screenshot')
+  if (hasConsole && hasScreenshot) return steps
+
+  const insertAt = (() => {
+    const validateIndex = steps.findIndex(step => stepRole(step) === 'validate')
+    if (validateIndex >= 0) return validateIndex
+    const finalIndex = steps.findIndex(step => stepRole(step) === 'final_report')
+    return finalIndex >= 0 ? finalIndex : steps.length
+  })()
+  const injected: TaskExecutionStep[] = []
+  if (!hasConsole) {
+    injected.push(step('check_console', 'Check browser console', ['preview.console'], ['console checked'], 'console', 'debug'))
+  }
+  if (!hasScreenshot) {
+    injected.push(step('check_screenshot', 'Capture preview screenshot', ['preview.screenshot'], ['screenshot checked'], 'screenshot', 'research'))
+  }
+  return [...steps.slice(0, insertAt), ...injected, ...steps.slice(insertAt)]
 }
 
 export function isCodingDesignBigTask(content: string): boolean {
@@ -276,7 +301,7 @@ export function evaluateStepCompletion(input: {
     if (!finalValidationGateSatisfied(plan.validation, plan)) {
       return { complete: false, blocked: finalReportBlockedReason(plan) }
     }
-    return { complete: fullContent.trim().length > 0 }
+    return { complete: finalReportHasRequiredContent(fullContent) }
   }
 
   // ── Special handling for validate ──
@@ -486,6 +511,15 @@ function finalReportBlockedReason(plan: TaskExecutionPlan): string {
   if (planHasRole(plan, 'validate') && !plan.validation.buildChecked) missing.push('validation/build')
   if (missing.length === 0) return 'Final report is blocked.'
   return `Final report is blocked until these checks run: ${missing.join(', ')}.`
+}
+
+function finalReportHasRequiredContent(fullContent: string): boolean {
+  const visible = fullContent
+    .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*?<\/(?:think|thinking|antThinking)>/gi, '')
+    .replace(/<(?:think|thinking|antThinking)\b[^>]*>[\s\S]*$/gi, '')
+    .trim()
+  if (!visible) return false
+  return /(changed files?|files changed|validation|validated|remaining risks?|已修改|修改文件|验证|校验|剩余风险|风险)/i.test(visible)
 }
 
 function planHasRole(plan: TaskExecutionPlan, role: NonNullable<TaskExecutionStep['role']>): boolean {
