@@ -22,6 +22,7 @@ await writeFile(compiledPath, compiled, 'utf8')
 const {
   finalReportReadBudgetForStep,
   shouldBlockLargeTaskWithoutPlan,
+  taskEngineRoundBudget,
   toolLoopBudgetForStep,
 } = await import(pathToFileURL(compiledPath).href)
 
@@ -74,6 +75,15 @@ test('caps dynamic loop budgets at 500 rounds', () => {
 
 test('keeps final report loop budget small', () => {
   assert.equal(toolLoopBudgetForStep(step('final_report', 'Final report')), 4)
+})
+
+test('task engine budget scales with planned steps', () => {
+  assert.equal(taskEngineRoundBudget({ steps: Array.from({ length: 2 }, (_, index) => step(`s${index}`, 'Step')) }), 24)
+  assert.equal(taskEngineRoundBudget({ steps: Array.from({ length: 10 }, (_, index) => step(`s${index}`, 'Step')) }), 60)
+})
+
+test('task engine budget grows while rounds are productive', () => {
+  assert.equal(taskEngineRoundBudget({ steps: Array.from({ length: 10 }, (_, index) => step(`s${index}`, 'Step')) }, 5), 80)
 })
 
 test('allows only a small read budget during final report', () => {

@@ -5,8 +5,7 @@ import { normalizeRequiredTools } from './toolNames'
 const CODING_DESIGN_TASK_RE =
   /\b(3d|three\.?js|animation|animated|site|website|landing page|app|full app|project|professional|production ready|complete|responsive|dashboard|frontend|ui|ux|migrate|refactor|implement feature|create|build|generate)\b|三维|动画|网站|站点|落地页|应用|完整|专业|响应式|前端|界面|迁移|重构|项目/i
 
-const MAX_STEP_ATTEMPTS = 3
-const MAX_VALIDATE_REPAIR_CYCLES = 2
+const MIN_NO_PROGRESS_ATTEMPTS = 2
 
 export function normalizeTaskExecutionPlan(plan: TaskExecutionPlan): TaskExecutionPlan {
   const normalizedSteps = ensureFrontendValidationSteps(plan.steps.map(step => ({
@@ -305,6 +304,55 @@ export function updatePlanValidation(
   return validation
 }
 
+export interface ValidationProgressState {
+  lastFailureSignature?: string
+  lastRepairSignature?: string
+  repairEvidenceSinceLastValidation: string[]
+}
+
+export function updateValidationProgressState(input: {
+  state: ValidationProgressState
+  plan: TaskExecutionPlan
+  parts: ContentPart[]
+}): { state: ValidationProgressState; noProgressReason?: string } {
+  const repairEvidence = repairEvidenceSignatures(input.parts)
+  const repairEvidenceSinceLastValidation = [
+    ...(input.state.repairEvidenceSinceLastValidation ?? []),
+    ...repairEvidence,
+  ].slice(-12)
+  const failureSignature = validationFailureSignature(input.parts, input.plan)
+  if (!failureSignature) {
+    return {
+      state: {
+        ...input.state,
+        repairEvidenceSinceLastValidation,
+      },
+    }
+  }
+
+  const repairSignature = repairEvidenceSinceLastValidation.length > 0
+    ? stableHash(repairEvidenceSinceLastValidation.join('\n'))
+    : '(no repair action)'
+  const repeatedSameOutcome =
+    input.state.lastFailureSignature === failureSignature &&
+    input.state.lastRepairSignature === repairSignature
+  const nextState: ValidationProgressState = {
+    lastFailureSignature: failureSignature,
+    lastRepairSignature: repairSignature,
+    repairEvidenceSinceLastValidation: [],
+  }
+  if (!repeatedSameOutcome) return { state: nextState }
+  return {
+    state: nextState,
+    noProgressReason: [
+      'Validation no-progress detected.',
+      'The same validation failure appeared again after the same repair evidence.',
+      `validation=${failureSignature}`,
+      `repair=${repairSignature}`,
+    ].join('\n'),
+  }
+}
+
 export function evaluateStepCompletion(input: {
   plan: TaskExecutionPlan
   step: TaskExecutionStep
@@ -318,11 +366,11 @@ export function evaluateStepCompletion(input: {
   if ((role === 'scaffold' || role === 'install') && requiresPackageJsonEvidence(step)) {
     const okTools = okToolParts(parts)
     if (hasPackageJsonEvidence(okTools)) return { complete: true }
-    if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+    if (shouldBlockForNoProgress(step, parts, fullContent)) {
       const summary = summarizeRoundForBlock(parts, fullContent)
       return {
         complete: false,
-        blocked: `Step "${step.title}" did not prove package.json exists after ${MAX_STEP_ATTEMPTS} attempt(s). It must create/read/detect package.json before moving on.${summary ? `\n\n${summary}` : ''}`,
+        blocked: `Step "${step.title}" produced no usable evidence that package.json exists. It must create/read/detect package.json before moving on.${summary ? `\n\n${summary}` : ''}`,
       }
     }
     return { complete: false }
@@ -333,12 +381,6 @@ export function evaluateStepCompletion(input: {
       return { complete: false, blocked: finalReportBlockedReason(plan) }
     }
     if (finalReportHasRequiredContent(fullContent)) return { complete: true }
-    if (effectiveStep.attempts >= MAX_STEP_ATTEMPTS) {
-      return {
-        complete: false,
-        blocked: `Step "${step.title}" did not produce a final report after ${MAX_STEP_ATTEMPTS} attempt(s). It must include changed files, validation result, preview result, and remaining risks.`,
-      }
-    }
     return { complete: false }
   }
 
@@ -357,13 +399,6 @@ export function evaluateStepCompletion(input: {
 
     const weakValidationTools = okTools.filter(part => validationToolIsTooWeakForPlan(part, plan))
     if (weakValidationTools.length > 0) {
-      if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
-        const summary = summarizeRoundForBlock(parts, fullContent)
-        return {
-          complete: false,
-          blocked: `Step "${step.title}" only ran weak validation after ${MAX_STEP_ATTEMPTS} attempt(s). Frontend/preview tasks must pass project.validate or an explicit build command such as npm run build before moving on.${summary ? `\n\n${summary}` : ''}`,
-        }
-      }
       return { complete: false }
     }
 
@@ -371,23 +406,18 @@ export function evaluateStepCompletion(input: {
       const errSummary = allFailedValidate
         .map(p => p.error ?? JSON.stringify(p.result).slice(0, 600))
         .join('\n---\n')
-      if (step.attempts >= MAX_VALIDATE_REPAIR_CYCLES) {
-        return {
-          complete: false,
-          blocked: `Validation failed after ${MAX_VALIDATE_REPAIR_CYCLES} repair cycle(s). Build errors:\n${errSummary}`,
-        }
-      }
+      const errorCount = countValidationErrors(allFailedValidate)
       return {
         complete: false,
-        needsRepair: `project.validate failed with the following errors — fix them before retrying:\n${errSummary}`,
+        needsRepair: `Validation failed with ${errorCount} build/type error(s). Repair must fix the current errors before validation retries:\n${errSummary}`,
       }
     }
 
-    if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+    if (shouldBlockForNoProgress(step, parts, fullContent)) {
       const summary = summarizeRoundForBlock(parts, fullContent)
       return {
         complete: false,
-        blocked: `Step "${step.title}" did not call project.validate after ${MAX_STEP_ATTEMPTS} attempt(s).${summary ? `\n\n${summary}` : ''}`,
+        blocked: `Step "${step.title}" produced no validation evidence. It must run project.validate or an explicit build command before moving on.${summary ? `\n\n${summary}` : ''}`,
       }
     }
     return { complete: false }
@@ -396,11 +426,39 @@ export function evaluateStepCompletion(input: {
   if (role === 'feature') {
     const okTools = okToolParts(parts)
     if (featureStepHasCompletionEvidence(effectiveStep, okTools)) return { complete: true }
-    if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+    if (
+      step.attempts + 1 >= 2 &&
+      featureStepHasReadOnlyStall(effectiveStep, okTools)
+    ) {
       const summary = summarizeRoundForBlock(parts, fullContent)
       return {
         complete: false,
-        blocked: `Step "${step.title}" did not verify completed file changes after ${MAX_STEP_ATTEMPTS} attempt(s). It must edit files and then verify the project state with project.map, file.stat, or file.read_text before moving on.${summary ? `\n\n${summary}` : ''}`,
+        needsRepair: [
+          `Feature step "${step.title}" stalled after read-only inspection.`,
+          'Reading/listing files does not implement this step.',
+          'Repair must apply a file.patch or file.write_text for the current step before validation can continue.',
+          summary,
+        ].filter(Boolean).join('\n\n'),
+      }
+    }
+    if (shouldBlockForNoProgress(step, parts, fullContent)) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" produced no usable implementation evidence. It must edit files and then verify the project state with project.map, file.stat, or file.read_text before moving on.${summary ? `\n\n${summary}` : ''}`,
+      }
+    }
+    return { complete: false }
+  }
+
+  if (role === 'scaffold') {
+    const okTools = okToolParts(parts)
+    if (scaffoldStepHasCompletionEvidence(effectiveStep, okTools)) return { complete: true }
+    if (shouldBlockForNoProgress(step, parts, fullContent)) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" produced no usable scaffold evidence. It must create the missing directories/files or verify they already exist with file.list_dir, file.stat, project.detect, or project.map.${summary ? `\n\n${summary}` : ''}`,
       }
     }
     return { complete: false }
@@ -411,11 +469,22 @@ export function evaluateStepCompletion(input: {
     if (okTools.some(part => part.name === 'file.write_text' || part.name === 'file.patch' || (part.name === 'shell.run_command' && looksLikeValidationCommand(part.args)))) {
       return { complete: true }
     }
-    if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+    if (okTools.some(part => isReadOnlyProjectTool(part.name))) {
       const summary = summarizeRoundForBlock(parts, fullContent)
       return {
         complete: false,
-        blocked: `Step "${step.title}" did not perform a repair action after ${MAX_STEP_ATTEMPTS} attempt(s). It must write, patch, or run a repair/validation command before moving on.${summary ? `\n\n${summary}` : ''}`,
+        needsRepair: [
+          `Repair step "${step.title}" inspected files but did not repair anything.`,
+          'Repair must apply file.patch/file.write_text or run a repair/validation command before moving on.',
+          summary,
+        ].filter(Boolean).join('\n\n'),
+      }
+    }
+    if (shouldBlockForNoProgress(step, parts, fullContent)) {
+      const summary = summarizeRoundForBlock(parts, fullContent)
+      return {
+        complete: false,
+        blocked: `Step "${step.title}" produced no usable repair evidence. It must write, patch, or run a repair/validation command before moving on.${summary ? `\n\n${summary}` : ''}`,
       }
     }
     return { complete: false }
@@ -449,11 +518,11 @@ export function evaluateStepCompletion(input: {
       ? okTools.some(part => part.name === 'process.wait' && processWaitSucceeded(part.result))
       : okTools.some(part => matchesRequired(part.name))
   if (complete) return { complete: true }
-  if (step.attempts + 1 >= MAX_STEP_ATTEMPTS) {
+  if (shouldBlockForNoProgress(step, parts, fullContent)) {
     const summary = summarizeRoundForBlock(parts, fullContent)
     return {
       complete: false,
-      blocked: `Step "${step.title}" did not complete after ${MAX_STEP_ATTEMPTS} attempt(s). Required tool: ${step.requiredTools.join(' or ')}.${summary ? `\n\n${summary}` : ''}`,
+      blocked: `Step "${step.title}" produced no usable completion evidence. Required tool: ${step.requiredTools.join(' or ')}.${summary ? `\n\n${summary}` : ''}`,
     }
   }
   return { complete: false }
@@ -509,6 +578,23 @@ export function taskStepRecovery(parts: ContentPart[], fullContent: string): {
   }
 }
 
+function shouldBlockForNoProgress(step: TaskExecutionStep, parts: ContentPart[], fullContent: string): boolean {
+  if (roundHasProgressEvidence(parts, fullContent)) return false
+  return step.attempts + 1 >= MIN_NO_PROGRESS_ATTEMPTS
+}
+
+function roundHasProgressEvidence(parts: ContentPart[], fullContent: string): boolean {
+  if (okToolParts(parts).length > 0) return true
+  return visibleAssistantText(fullContent).length > 0
+}
+
+function visibleAssistantText(fullContent: string): string {
+  return fullContent
+    .replace(/<antThinking>[\s\S]*?(?:<\/antThinking>|$)/gi, '')
+    .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
+    .trim()
+}
+
 function summarizeRoundForBlock(parts: ContentPart[], fullContent: string): string {
   const lines: string[] = []
   const tools = parts.filter((p): p is Extract<ContentPart, { type: 'tool_call' }> => p.type === 'tool_call')
@@ -531,6 +617,69 @@ function summarizeRoundForBlock(parts: ContentPart[], fullContent: string): stri
     lines.push(`Last visible text: ${text.slice(0, 240)}${text.length > 240 ? '…' : ''}`)
   }
   return lines.join('\n')
+}
+
+function countValidationErrors(parts: Array<Extract<ContentPart, { type: 'tool_call' }>>): number {
+  const text = parts.map(part => validationErrorText(part)).join('\n')
+  const diagnosticMatches = text.match(/\berror\s+(?:TS\d+|[A-Z][A-Z0-9_-]*\b)|\bTS\d+:/gi)
+  if (diagnosticMatches?.length) return Math.max(1, new Set(diagnosticMatches.map(match => match.trim())).size)
+  const errorLines = text
+    .split(/\r?\n/)
+    .filter(line => /\berror\b/i.test(line) && !/0 errors?/i.test(line))
+  return Math.max(1, errorLines.length)
+}
+
+function validationErrorText(part: Extract<ContentPart, { type: 'tool_call' }>): string {
+  if (part.error) return part.error
+  if (!part.result || typeof part.result !== 'object') return JSON.stringify(part.result ?? '')
+  const result = part.result as Record<string, unknown>
+  return [
+    typeof result.stdout === 'string' ? result.stdout : '',
+    typeof result.stderr === 'string' ? result.stderr : '',
+    JSON.stringify(result),
+  ].filter(Boolean).join('\n')
+}
+
+function validationFailureSignature(parts: ContentPart[], plan: TaskExecutionPlan): string | undefined {
+  const failed = parts
+    .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+    .filter(part => validationToolFailed(part, plan))
+  if (failed.length === 0) return undefined
+  const normalized = failed
+    .map(part => validationErrorText(part))
+    .join('\n---\n')
+    .replace(/\b\d+ms\b/g, '<time>')
+    .replace(/\b\d+\.\d+s\b/g, '<time>')
+    .replace(/\b\d+s\b/g, '<time>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 8000)
+  return stableHash(normalized)
+}
+
+function repairEvidenceSignatures(parts: ContentPart[]): string[] {
+  return parts
+    .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call' && part.status === 'ok' && !toolResultWasIgnored(part.result))
+    .filter(part =>
+      part.name === 'file.write_text' ||
+      part.name === 'file.patch' ||
+      part.name === 'file.create_dir' ||
+      (part.name === 'shell.run_command' && !looksLikeValidationCommand(part.args))
+    )
+    .map(part => stableHash([
+      part.name,
+      JSON.stringify(part.args).slice(0, 4000),
+      JSON.stringify(part.result ?? {}).slice(0, 1000),
+    ].join('\n')))
+}
+
+function stableHash(text: string): string {
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
 /**
@@ -776,7 +925,82 @@ function featureStepHasCompletionEvidence(
     evidence.toolName === 'file.read_text' ||
     evidence.toolName === 'file.list_dir',
   )
-  return hasEdit && hasVerification
+  const hasDurableWriteResult = currentOkTools.some(part => writeToolResultIsDurable(part))
+  return hasEdit && (hasVerification || hasDurableWriteResult)
+}
+
+function featureStepHasReadOnlyStall(
+  step: TaskExecutionStep,
+  currentOkTools: Array<Extract<ContentPart, { type: 'tool_call' }>>,
+): boolean {
+  const cumulative = [
+    ...(step.evidence ?? []).filter(evidence => evidence.status === 'ok'),
+    ...currentOkTools.map(part => ({ toolName: part.name })),
+  ]
+  const hasEdit = cumulative.some(evidence =>
+    evidence.toolName === 'file.write_text' || evidence.toolName === 'file.patch',
+  )
+  if (hasEdit) return false
+  return currentOkTools.some(part => isReadOnlyProjectTool(part.name))
+}
+
+function isReadOnlyProjectTool(name: string): boolean {
+  return name === 'project.map' ||
+    name === 'project.detect' ||
+    name === 'file.stat' ||
+    name === 'file.read_text' ||
+    name === 'file.list_dir' ||
+    name === 'search.ripgrep'
+}
+
+function writeToolResultIsDurable(part: Extract<ContentPart, { type: 'tool_call' }>): boolean {
+  if (part.name !== 'file.write_text' && part.name !== 'file.patch') return false
+  const result = part.result && typeof part.result === 'object' ? part.result as Record<string, unknown> : {}
+  if (result.ignored === true) return false
+  if (typeof result.bytes === 'number' && result.bytes >= 0) return true
+  if (typeof result.path === 'string' && result.path.trim().length > 0) return true
+  if (typeof result.action === 'string' && result.action.trim().length > 0) return true
+  if (typeof part.args.path === 'string' && part.args.path.trim().length > 0 && Object.keys(result).length > 0) return true
+  return false
+}
+
+function scaffoldStepHasCompletionEvidence(
+  step: TaskExecutionStep,
+  currentOkTools: Array<Extract<ContentPart, { type: 'tool_call' }>>,
+): boolean {
+  if (currentOkTools.some(part => part.name === 'file.create_dir')) return true
+  if (
+    step.requiredTools.includes('file.write_text') &&
+    currentOkTools.some(part => writeToolResultIsDurable(part))
+  ) {
+    return true
+  }
+  const wantsDirectoryStructure = step.requiredTools.includes('file.create_dir') ||
+    /\b(directory|directories|folder|folders|structure|src|components|assets|public)\b/i.test(`${step.id} ${step.title}`)
+  if (!wantsDirectoryStructure) return false
+  return currentOkTools.some(part =>
+    directoryEvidenceFromTool(part) ||
+    projectResultIncludesPath(part.result, 'src') ||
+    projectResultIncludesPackageJson(part.result)
+  )
+}
+
+function directoryEvidenceFromTool(part: Extract<ContentPart, { type: 'tool_call' }>): boolean {
+  if (part.name === 'file.stat') {
+    const result = part.result as Record<string, unknown> | undefined
+    return Boolean(result && result.type === 'directory')
+  }
+  if (part.name !== 'file.list_dir') return false
+  const argsPath = typeof part.args.path === 'string' ? part.args.path.replace(/\\/g, '/').toLowerCase() : ''
+  if (/(^|\/)(src|components|public|assets)$/.test(argsPath)) return true
+  const result = part.result as Record<string, unknown> | undefined
+  const entries = Array.isArray(result?.entries) ? result.entries : []
+  return entries.some(entry =>
+    entry &&
+    typeof entry === 'object' &&
+    (entry as Record<string, unknown>).type === 'directory' &&
+    ['src', 'components', 'public', 'assets'].includes(String((entry as Record<string, unknown>).name).toLowerCase())
+  )
 }
 
 function pathArgEndsWithPackageJson(args: Record<string, unknown>): boolean {
@@ -795,6 +1019,25 @@ function projectResultIncludesPackageJson(result: unknown): boolean {
     if (Array.isArray(detected.files)) files = detected.files
   }
   return files.some((file: unknown) => typeof file === 'string' && file.replace(/\\/g, '/').toLowerCase().endsWith('package.json'))
+}
+
+function projectResultIncludesPath(result: unknown, wantedPath: string): boolean {
+  if (!result || typeof result !== 'object') return false
+  const wanted = wantedPath.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '')
+  const record = result as Record<string, unknown>
+  let files: unknown[] = []
+  if (Array.isArray(record.files)) {
+    files = record.files
+  } else if (Array.isArray(record.tree)) {
+    files = record.tree.map(item => item && typeof item === 'object' ? (item as Record<string, unknown>).path : item)
+  } else if (record.detected && typeof record.detected === 'object') {
+    const detected = record.detected as Record<string, unknown>
+    if (Array.isArray(detected.files)) files = detected.files
+  }
+  return files.some((file: unknown) => {
+    const normalized = typeof file === 'string' ? file.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '') : ''
+    return normalized === wanted || normalized.startsWith(`${wanted}/`)
+  })
 }
 
 function extractProcessId(result: unknown): string | undefined {

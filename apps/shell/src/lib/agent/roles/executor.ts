@@ -101,7 +101,8 @@ export function buildExecutorSystemPrompt(input: ExecutorInput): string {
     sections.push([
       'Validate-step hard rule:',
       '- Do not scaffold, initialize, install, or rewrite files in this step.',
-      '- First choice: call project.validate with the working directory.',
+      '- Use only tools listed in Allowed Tools.',
+      '- If project.validate is listed in Allowed Tools, call project.validate with the working directory.',
       '- For frontend/preview tasks, acceptable fallback is a real build command only, such as npm run build, pnpm run build, yarn build, or vite build. Typecheck/lint alone is not enough.',
       '- For backend/library tasks without preview, typecheck/test/lint may be acceptable when no build script exists.',
       '- Commands like npm create vite, npm install, npm init, mkdir, or file writes do not validate the project and must not be used in this step.',

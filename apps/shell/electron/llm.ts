@@ -823,6 +823,12 @@ function requiredToolSatisfiedForStep(
     if (toolCall.name === 'file.create_dir' || isFeatureEditTool(toolCall.name)) return false
   }
 
+  if (args.activeStepRole === 'repair') {
+    if (isFeatureVerificationTool(toolCall.name) || toolCall.name === 'search.ripgrep') return false
+    if (isFeatureEditTool(toolCall.name)) return true
+    if (toolCall.name === 'shell.run_command') return looksLikeValidationToolCommand(toolCall.args)
+  }
+
   if ((args.activeStepRole === 'console' || args.activeStepRole === 'screenshot') && toolCall.name.startsWith('devserver.')) {
     return false
   }
@@ -888,8 +894,7 @@ function toolMadeSemanticProgressForStep(
 
   if (args.activeStepRole === 'repair') {
     return isFeatureEditTool(toolCall.name) ||
-      toolCall.name === 'shell.run_command' ||
-      isFeatureVerificationTool(toolCall.name)
+      (toolCall.name === 'shell.run_command' && looksLikeValidationToolCommand(toolCall.args))
   }
 
   if (args.activeStepRole === 'scaffold' || args.activeStepRole === 'install') {
@@ -938,6 +943,14 @@ function unsatisfiedRequiredToolMessage(args: StreamChatArgs, toolCall: ToolCall
         'Now verify the changed project state with file.read_text, file.stat, file.list_dir, project.detect, or project.map.',
       ].join(' ')
     }
+  }
+
+  if (args.activeStepRole === 'repair' && isFeatureVerificationTool(toolCall.name)) {
+    return [
+      'The inspection succeeded, but this is a repair step and no repair action has been made.',
+      'Do not keep reading files.',
+      'Use the build error details already provided, then call file.patch or file.write_text to fix the failing code. After the edit, run npm run build or project validation if available.',
+    ].join(' ')
   }
 
   if (

@@ -38,7 +38,7 @@ await writeFile(join(tempDir, 'toolNames.mjs'), 'export function normalizeRequir
 const patched = compiled.replace(/from\s+['"]\.\/toolNames['"]/g, "from './toolNames.mjs'")
 await writeFile(compiledPath, patched, 'utf8')
 
-const { evaluateStepCompletion, extractWorkingDirectoryFromText, finalValidationGateSatisfied, normalizeTaskExecutionPlan, recoverStepFromRound, taskStepRecovery, updatePlanValidation } =
+const { evaluateStepCompletion, extractWorkingDirectoryFromText, finalValidationGateSatisfied, normalizeTaskExecutionPlan, recoverStepFromRound, taskStepRecovery, updatePlanValidation, updateValidationProgressState } =
   await import(pathToFileURL(compiledPath).href)
 
 test.after(async () => { await rm(tempDir, { recursive: true, force: true }) })
@@ -93,16 +93,28 @@ test('repair role completes after a file edit tool succeeds', () => {
   assert.equal(result.complete, true)
 })
 
-test('feature write step does not complete after a single file write without verification evidence', () => {
+test('feature write step does not complete after a file write without durable write evidence', () => {
   const result = evaluateStepCompletion({
     plan: plan({
       steps: [step({ id: 'write_core_files', role: 'feature', requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'] })],
     }),
     step: step({ id: 'write_core_files', role: 'feature', requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'] }),
-    parts: [{ type: 'tool_call', name: 'file.write_text', args: { path: 'D:\\x\\src\\App.tsx' }, status: 'ok', result: { bytes: 100 } }],
+    parts: [{ type: 'tool_call', name: 'file.write_text', args: { path: 'D:\\x\\src\\App.tsx' }, status: 'ok', result: {} }],
     fullContent: '',
   })
   assert.equal(result.complete, false)
+})
+
+test('feature write step completes after durable file write result', () => {
+  const result = evaluateStepCompletion({
+    plan: plan({
+      steps: [step({ id: 'write_core_files', role: 'feature', requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'] })],
+    }),
+    step: step({ id: 'write_core_files', role: 'feature', requiredTools: ['file.write_text', 'file.patch', 'project.map', 'file.stat'] }),
+    parts: [{ type: 'tool_call', name: 'file.write_text', args: { path: 'D:\\x\\src\\App.tsx' }, status: 'ok', result: { path: 'D:\\x\\src\\App.tsx', bytes: 100 } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
 })
 
 test('feature write step completes after edit evidence and project verification evidence', () => {
@@ -123,6 +135,55 @@ test('feature write step completes after edit evidence and project verification 
     fullContent: '',
   })
   assert.equal(result.complete, true)
+})
+
+test('feature read-only stall routes to repair instead of blocking', () => {
+  const result = evaluateStepCompletion({
+    plan: plan({
+      steps: [step({
+        id: 'implement_main_entry',
+        title: 'Update Main Entry Point (App.tsx, index.css)',
+        role: 'feature',
+        requiredTools: ['file.write_text', 'file.read_text'],
+        attempts: 1,
+        evidence: [
+          { toolName: 'file.list_dir', toolCallId: 'call_list', status: 'ok', timestamp: 1 },
+        ],
+      })],
+    }),
+    step: step({
+      id: 'implement_main_entry',
+      title: 'Update Main Entry Point (App.tsx, index.css)',
+      role: 'feature',
+      requiredTools: ['file.write_text', 'file.read_text'],
+      attempts: 1,
+      evidence: [
+        { toolName: 'file.list_dir', toolCallId: 'call_list', status: 'ok', timestamp: 1 },
+      ],
+    }),
+    parts: [{ type: 'tool_call', name: 'file.read_text', args: { path: 'D:\\x\\src\\App.tsx' }, status: 'ok', result: { content: 'old app' } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.blocked, undefined)
+  assert.match(result.needsRepair, /stalled after read-only inspection/)
+})
+
+test('feature step with useful tool evidence does not block solely because attempts are high', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({
+      id: 'write_core_files',
+      title: 'Write core files',
+      role: 'feature',
+      requiredTools: ['file.write_text', 'file.patch', 'project.map'],
+      attempts: 20,
+    }),
+    parts: [{ type: 'tool_call', name: 'file.write_text', args: { path: 'D:\\x\\src\\App.tsx' }, status: 'ok', result: {} }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.blocked, undefined)
 })
 
 test('ignored duplicate tool result does not satisfy step completion', () => {
@@ -171,6 +232,25 @@ test('setup scaffold step does not complete on shell success without package.jso
   assert.equal(result.complete, false)
 })
 
+test('scaffold step with shell progress does not block solely because attempts are high', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({
+      id: 'init_project',
+      title: 'Initialize project',
+      role: 'scaffold',
+      requiredTools: ['shell.run_command'],
+      attempts: 20,
+    }),
+    parts: [
+      { type: 'tool_call', name: 'shell.run_command', status: 'ok', args: { command: 'npx', args: ['create', 'vite@latest', '.'] }, result: { exitCode: 0 } },
+    ],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.blocked, undefined)
+})
+
 test('setup scaffold step completes when package.json was written', () => {
   const result = evaluateStepCompletion({
     plan: plan(),
@@ -199,6 +279,58 @@ test('plain directory scaffold step can complete on file.create_dir', () => {
     }),
     parts: [
       { type: 'tool_call', name: 'file.create_dir', status: 'ok', args: { path: 'D:\\x\\src' }, result: {} },
+    ],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
+})
+
+test('file scaffold step completes on durable file write', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({
+      id: 'create-index',
+      title: 'Create HTML entry point',
+      role: 'scaffold',
+      requiredTools: ['file.write_text'],
+    }),
+    parts: [
+      {
+        type: 'tool_call',
+        name: 'file.write_text',
+        status: 'ok',
+        args: { path: 'D:\\x\\index.html' },
+        result: { path: 'D:\\x\\index.html', bytes: 297, action: 'overwritten' },
+      },
+    ],
+    fullContent: '',
+  })
+  assert.equal(result.complete, true)
+})
+
+test('directory scaffold step completes when requested structure already exists', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({
+      id: 'create_app_structure',
+      title: 'Create application directory structure',
+      role: 'scaffold',
+      requiredTools: ['file.create_dir'],
+    }),
+    parts: [
+      {
+        type: 'tool_call',
+        name: 'file.list_dir',
+        status: 'ok',
+        args: { path: 'D:\\x' },
+        result: {
+          path: 'D:\\x',
+          entries: [
+            { name: 'package.json', type: 'file' },
+            { name: 'src', type: 'directory' },
+          ],
+        },
+      },
     ],
     fullContent: '',
   })
@@ -311,6 +443,143 @@ test('validate role with failed shell build routes to repair', () => {
   })
   assert.equal(result.complete, false)
   assert.match(result.needsRepair, /TS6133|exitCode/)
+})
+
+test('validate role keeps routing build failures to repair beyond fixed attempt counts', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'verify', role: 'validate', attempts: 30 }),
+    parts: [{
+      type: 'tool_call',
+      name: 'shell.run_command',
+      status: 'ok',
+      args: { command: 'npm', args: ['run', 'build'] },
+      result: { exitCode: 2, stdout: 'src/App.tsx(1,1): error TS2614\nsrc/View.tsx(2,1): error TS2345' },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.blocked, undefined)
+  assert.match(result.needsRepair, /2 build\/type error/)
+  assert.match(result.needsRepair, /TS2614|TS2345/)
+})
+
+test('validate role counts unique TypeScript diagnostic codes as repair budget signal', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'verify', role: 'validate', attempts: 1 }),
+    parts: [{
+      type: 'tool_call',
+      name: 'shell.run_command',
+      status: 'ok',
+      args: { command: 'npm', args: ['run', 'build'] },
+      result: { exitCode: 2, stdout: [
+        'src/App.tsx(1,1): error TS2614: bad import',
+        'src/View.tsx(2,1): error TS2345: bad type',
+        'src/Panel.tsx(3,1): error TS6133: unused var',
+      ].join('\n') },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.blocked, undefined)
+  assert.match(result.needsRepair, /3 build\/type error/)
+})
+
+test('validate role with weak validation evidence does not hard block on attempt count', () => {
+  const frontendPlan = plan({
+    kind: 'coding-design',
+    steps: [
+      { id: 'preview', role: 'preview', title: '', status: 'done', requiredTools: [], completionSignals: [], attempts: 0 },
+      { id: 'validate', role: 'validate', title: '', status: 'running', requiredTools: ['shell.run_command'], completionSignals: [], attempts: 20 },
+    ],
+  })
+  const result = evaluateStepCompletion({
+    plan: frontendPlan,
+    step: frontendPlan.steps[1],
+    parts: [{
+      type: 'tool_call',
+      name: 'shell.run_command',
+      status: 'ok',
+      args: { command: 'npx', args: ['tsc', '--noEmit'] },
+      result: { exitCode: 0 },
+    }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.blocked, undefined)
+})
+
+test('validation progress continues when the repair evidence changes', () => {
+  const basePlan = plan()
+  const failedValidation = [{
+    type: 'tool_call',
+    name: 'shell.run_command',
+    status: 'ok',
+    args: { command: 'npm', args: ['run', 'build'] },
+    result: { exitCode: 2, stderr: 'src/App.tsx(1,1): error TS6133: unused import' },
+  }]
+  let state = { repairEvidenceSinceLastValidation: [] }
+  let update = updateValidationProgressState({ state, plan: basePlan, parts: failedValidation })
+  assert.equal(update.noProgressReason, undefined)
+
+  update = updateValidationProgressState({
+    state: update.state,
+    plan: basePlan,
+    parts: [{ type: 'tool_call', name: 'file.patch', status: 'ok', args: { path: 'D:\\x\\src\\App.tsx', patch: 'remove import A' }, result: { path: 'D:\\x\\src\\App.tsx' } }],
+  })
+  update = updateValidationProgressState({ state: update.state, plan: basePlan, parts: failedValidation })
+  assert.equal(update.noProgressReason, undefined)
+
+  update = updateValidationProgressState({
+    state: update.state,
+    plan: basePlan,
+    parts: [{ type: 'tool_call', name: 'file.patch', status: 'ok', args: { path: 'D:\\x\\src\\App.tsx', patch: 'remove import B' }, result: { path: 'D:\\x\\src\\App.tsx' } }],
+  })
+  update = updateValidationProgressState({ state: update.state, plan: basePlan, parts: failedValidation })
+  assert.equal(update.noProgressReason, undefined)
+})
+
+test('validation progress stops when the same validation failure follows the same repair evidence', () => {
+  const basePlan = plan()
+  const failedValidation = [{
+    type: 'tool_call',
+    name: 'shell.run_command',
+    status: 'ok',
+    args: { command: 'npm', args: ['run', 'build'] },
+    result: { exitCode: 2, stderr: 'src/App.tsx(1,1): error TS6133: unused import' },
+  }]
+  const samePatch = [{ type: 'tool_call', name: 'file.patch', status: 'ok', args: { path: 'D:\\x\\src\\App.tsx', patch: 'remove import A' }, result: { path: 'D:\\x\\src\\App.tsx' } }]
+  let update = updateValidationProgressState({ state: { repairEvidenceSinceLastValidation: [] }, plan: basePlan, parts: failedValidation })
+  update = updateValidationProgressState({ state: update.state, plan: basePlan, parts: samePatch })
+  update = updateValidationProgressState({ state: update.state, plan: basePlan, parts: failedValidation })
+  assert.equal(update.noProgressReason, undefined)
+  update = updateValidationProgressState({ state: update.state, plan: basePlan, parts: samePatch })
+  update = updateValidationProgressState({ state: update.state, plan: basePlan, parts: failedValidation })
+  assert.match(update.noProgressReason, /Validation no-progress detected/)
+})
+
+test('repair read-only evidence routes to repair guidance instead of hard blocking', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'repair', title: 'Repair build issue', role: 'repair', requiredTools: ['file.patch', 'file.write_text'], attempts: 20 }),
+    parts: [{ type: 'tool_call', name: 'file.read_text', args: { path: 'D:\\x\\src\\App.tsx' }, status: 'ok', result: { content: 'bad import' } }],
+    fullContent: '',
+  })
+  assert.equal(result.complete, false)
+  assert.equal(result.blocked, undefined)
+  assert.match(result.needsRepair, /did not repair anything/)
+})
+
+test('step with no evidence can block as no-progress', () => {
+  const result = evaluateStepCompletion({
+    plan: plan(),
+    step: step({ id: 'start_preview', title: 'Start Preview', role: 'preview', requiredTools: ['devserver.start'], attempts: 1 }),
+    parts: [],
+    fullContent: '<antThinking>I should start the server.</antThinking>',
+  })
+  assert.equal(result.complete, false)
+  assert.match(result.blocked, /no usable completion evidence/)
 })
 
 test('final_report role rejects thinking-only content', () => {

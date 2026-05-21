@@ -1,6 +1,8 @@
-import type { TaskExecutionStep } from '../../types'
+import type { TaskExecutionPlan, TaskExecutionStep } from '../../types'
 
 const DEFAULT_TOOL_LOOP_BUDGET = 10
+const DEFAULT_TASK_ENGINE_ROUNDS = 24
+const MAX_TASK_ENGINE_ROUNDS = 500
 // Hard ceiling for any per-step budget. The smart-budget heuristics in
 // llm.ts (no_progress / unrecoverable_repeat / progress-based extension)
 // are the real stops; this is just a runaway-safety net.
@@ -36,6 +38,19 @@ const ROLE_BUDGETS: Record<NonNullable<TaskExecutionStep['role']>, number> = {
 export interface LargeTaskPlanDecision {
   block: boolean
   reason?: string
+}
+
+export function taskEngineRoundBudget(
+  plan?: Pick<TaskExecutionPlan, 'steps'> | null,
+  productiveRounds = 0,
+): number {
+  const stepCount = Math.max(1, plan?.steps?.length ?? 1)
+  // Each planned step can require one action round, one verification round,
+  // and extra repair/validation hops. Productive rounds add more budget so
+  // long tasks keep going while tools are still changing or validating state.
+  const base = Math.max(DEFAULT_TASK_ENGINE_ROUNDS, stepCount * 6)
+  const progressBonus = Math.max(0, productiveRounds) * 4
+  return Math.min(MAX_TASK_ENGINE_ROUNDS, base + progressBonus)
 }
 
 export function toolLoopBudgetForStep(

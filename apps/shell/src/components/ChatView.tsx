@@ -21,7 +21,7 @@ import {
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
-import { shouldBlockLargeTaskWithoutPlan } from '../lib/agent/taskExecutionPolicy'
+import { shouldBlockLargeTaskWithoutPlan, taskEngineRoundBudget } from '../lib/agent/taskExecutionPolicy'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
 import {
@@ -39,6 +39,7 @@ import {
   nextTaskStep,
   recoverStepFromRound,
   updatePlanValidation,
+  updateValidationProgressState,
   withValidation,
 } from '../lib/agent/taskExecution'
 import {
@@ -47,6 +48,7 @@ import {
 } from '../lib/agent/runtime/agentRuntime'
 import { runAnalyzePhase } from '../lib/agent/roles/planner'
 import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, TaskExecutionPlan, ProjectAnalysis } from '../types'
+import type { ValidationProgressState } from '../lib/agent/taskExecution'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -80,7 +82,6 @@ const ENGLISH_CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confi
 const CHINESE_CONFIRM_TASK_RE = /^(执行|开始|继续|确认|可以|好的|好|没问题|就这样)$/i
 const FEATURE_TEST_RE = /^\s*\[AVA-FEATURE-TEST:([A-Za-z0-9_.-]+)\]/i
 const MAX_AUTO_CONTINUE_ROUNDS = 3
-const MAX_TASK_ENGINE_ROUNDS = 24
 
 function latestUserTextForTask(conversation: Conversation, taskId: string): string {
   for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
@@ -447,6 +448,33 @@ function roundHasFileEdit(parts: ContentPart[]): boolean {
   )
 }
 
+function roundHasSuccessfulTool(parts: ContentPart[]): boolean {
+  return parts.some(part =>
+    part.type === 'tool_call' &&
+    part.status === 'ok' &&
+    !(part.result && typeof part.result === 'object' && (part.result as Record<string, unknown>).ignored === true)
+  )
+}
+
+function roundHasValidationAttempt(parts: ContentPart[]): boolean {
+  return parts.some(part =>
+    part.type === 'tool_call' &&
+    (part.name === 'project.validate' ||
+      (part.name === 'shell.run_command' && /build|test|typecheck|tsc|lint/i.test(`${part.args.command ?? ''} ${JSON.stringify(part.args.args ?? [])}`)))
+  )
+}
+
+function roundMadeTaskProgress(
+  step: NonNullable<TaskExecutionPlan['steps'][number]>,
+  parts: ContentPart[],
+  evaluation?: { complete: boolean; needsRepair?: string; blocked?: string },
+): boolean {
+  if (evaluation?.complete || evaluation?.needsRepair) return true
+  if (step.role === 'feature' || step.role === 'repair') return roundHasFileEdit(parts) || roundHasValidationAttempt(parts)
+  if (step.role === 'validate') return roundHasValidationAttempt(parts)
+  return roundHasSuccessfulTool(parts)
+}
+
 function featureStepRetryPrompt(stepTitle: string, parts: ContentPart[]): string {
   return [
     `The previous response did not implement feature step: ${stepTitle}.`,
@@ -454,6 +482,68 @@ function featureStepRetryPrompt(stepTitle: string, parts: ContentPart[]): string
     'Call file.write_text or file.patch now. If you cannot edit, explain the exact blocker visibly instead of calling more inspection tools.',
     taskRoundSummary(stepTitle, parts),
   ].join('\n\n')
+}
+
+function repairStepRetryPrompt(step: NonNullable<TaskExecutionPlan['steps'][number]>, parts: ContentPart[]): string {
+  return [
+    `The previous response did not repair step: ${step.title}.`,
+    step.lastError ? `Original error to fix:\n${step.lastError}` : '',
+    'This repair step requires file.patch, file.write_text, or a repair build command. Reading/listing files alone is not a repair.',
+    'If you already inspected the file, patch the offending code now. Do not repeat the same read-only tool call.',
+    taskRoundSummary(step.title, parts),
+  ].filter(Boolean).join('\n\n')
+}
+
+function taskFinalReportText(plan: TaskExecutionPlan, parts: ContentPart[]): string {
+  const tools = parts.filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+  const changedFiles = Array.from(new Set(tools
+    .filter(part => part.status === 'ok' && (part.name === 'file.write_text' || part.name === 'file.patch'))
+    .map(part => typeof part.args.path === 'string' ? part.args.path : undefined)
+    .filter((path): path is string => Boolean(path))))
+  const validationTools = tools.filter(part =>
+    part.status === 'ok' &&
+    (part.name === 'project.validate' ||
+      (part.name === 'shell.run_command' && /build|test|typecheck|tsc|lint/i.test(`${part.args.command ?? ''} ${JSON.stringify(part.args.args ?? [])}`)))
+  )
+  const previewTools = tools.filter(part =>
+    part.status === 'ok' &&
+    (part.name === 'devserver.start' || part.name === 'preview.console' || part.name === 'preview.screenshot')
+  )
+  const previewUrls = Array.from(new Set(previewTools
+    .map(part => {
+      const result = part.result && typeof part.result === 'object' ? part.result as Record<string, unknown> : {}
+      return typeof result.url === 'string' ? result.url : undefined
+    })
+    .filter((url): url is string => Boolean(url))))
+
+  return [
+    'Changed files:',
+    changedFiles.length > 0 ? changedFiles.map(path => `- ${path}`).join('\n') : '- No changed file paths were captured from tool results.',
+    '',
+    'Validation result:',
+    plan.validation.buildChecked
+      ? `- Build/validation passed${validationTools.length > 0 ? ` (${validationTools.map(part => part.name).join(', ')})` : ''}.`
+      : '- Build/validation was not confirmed.',
+    '',
+    'Preview result:',
+    [
+      plan.validation.devServerChecked ? '- Development server started.' : '- Development server was not confirmed.',
+      plan.validation.consoleChecked ? '- Browser console check passed.' : '- Browser console check was not confirmed.',
+      plan.validation.screenshotChecked ? '- Screenshot check passed.' : '- Screenshot check was not confirmed.',
+      previewUrls.length > 0 ? `- Preview URL: ${previewUrls.join(', ')}` : undefined,
+    ].filter(Boolean).join('\n'),
+    '',
+    'Remaining risks:',
+    '- Please test with a real GLB file, including a large model, because automated checks cannot prove every model import and camera-fit edge case.',
+  ].join('\n')
+}
+
+function taskFinalReportContent(plan: TaskExecutionPlan, parts: ContentPart[]): ContentPart[] {
+  const toolParts = parts.filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
+  return [
+    ...toolParts,
+    { type: 'text', text: taskFinalReportText(plan, parts) },
+  ]
 }
 
 function featureTestIdFromText(text: string): string | null {
@@ -979,6 +1069,10 @@ export function ChatView() {
         return
       }
       let taskEngineRound = 0
+      let taskEngineProductiveRounds = 0
+      let validationProgressState: ValidationProgressState = {
+        repairEvidenceSinceLastValidation: [],
+      }
       const featureTestRequest = (() => {
         for (let i = conversationSnapshot.messages.length - 1; i >= 0; i -= 1) {
           const message = conversationSnapshot.messages[i]
@@ -1128,13 +1222,31 @@ export function ChatView() {
               parts: roundParts,
               fullContent: result.fullContent,
             })
+            const validationProgress = updateValidationProgressState({
+              state: validationProgressState,
+              plan: taskPlan,
+              parts: roundParts,
+            })
+            validationProgressState = validationProgress.state
+            if (roundMadeTaskProgress(activeStep, roundParts, evaluation)) {
+              taskEngineProductiveRounds += 1
+            }
+            const taskEngineBudget = taskEngineRoundBudget(taskPlan, taskEngineProductiveRounds)
+            const canContinueTaskEngine = taskEngineRound < taskEngineBudget
             if (evaluation.complete) {
               taskPlan = markStepDone(taskPlan, activeStep.id)
               dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
               if (activeStep.id === 'final_report') {
+                const finalContent = taskFinalReportContent(taskPlan, accumulatedParts)
+                dispatch({
+                  type: 'UPDATE_MESSAGE',
+                  conversationId,
+                  messageId: placeholderId,
+                  patch: { content: finalContent, streaming: false, error: undefined, runPhase: 'completed' },
+                })
                 taskPlan = completePlan(taskPlan)
                 dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
-              } else if (taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
+              } else if (canContinueTaskEngine) {
                 taskEngineRound += 1
                 currentSnapshot = {
                   ...conversationSnapshot,
@@ -1153,6 +1265,24 @@ export function ChatView() {
                 continue
               }
             } else if (evaluation.blocked) {
+              if (
+                (activeStep.id === 'final_report' || activeStep.role === 'final_report') &&
+                finalValidationGateSatisfied(taskPlan.validation, taskPlan)
+              ) {
+                const finalContent = taskFinalReportContent(taskPlan, accumulatedParts)
+                taskPlan = markStepDone(taskPlan, activeStep.id)
+                dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
+                dispatch({
+                  type: 'UPDATE_MESSAGE',
+                  conversationId,
+                  messageId: placeholderId,
+                  patch: { content: finalContent, streaming: false, error: undefined, runPhase: 'completed' },
+                })
+                taskPlan = completePlan(taskPlan)
+                dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
+                await logFeatureTest({ status: 'passed', message: taskFinalReportText(taskPlan, accumulatedParts), fullContent: result.fullContent })
+                return
+              }
               taskPlan = blockPlan(taskPlan, activeStep.id, evaluation.blocked)
               dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
               dispatch({
@@ -1163,8 +1293,25 @@ export function ChatView() {
               })
               await logFeatureTest({ status: 'failed', message: evaluation.blocked, fullContent: result.fullContent })
               return
-            } else if (evaluation.needsRepair && taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
-              // Validate failed with build errors → rewind the repair step so it runs again
+            } else if (evaluation.needsRepair && validationProgress.noProgressReason) {
+              const error = [
+                validationProgress.noProgressReason,
+                evaluation.needsRepair,
+                'Ava stopped because validation is not changing after repair evidence. Change the repair approach or inspect the failing files before retrying.',
+              ].join('\n\n')
+              taskPlan = blockPlan(taskPlan, activeStep.id, error)
+              dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { streaming: false, error, runPhase: 'error' },
+              })
+              await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
+              return
+            } else if (evaluation.needsRepair && canContinueTaskEngine) {
+              // Validation/tool/step execution failed in a recoverable way:
+              // route through a repair step instead of blocking the whole task.
               taskEngineRound += 1
               const repairStep = {
                 id: 'repair',
@@ -1213,19 +1360,38 @@ export function ChatView() {
                     taskId: activeTaskId,
                     role: 'system',
                     content: [{ type: 'text', text: [
-                      '🔧 Validation failed. Routing back to repair step.',
+                      '🔧 Current step needs repair. Routing to repair step.',
                       evaluation.needsRepair,
-                      'Fix the errors above, then validate will re-run automatically.',
+                      'Apply the required fix, then Ava will continue the task automatically.',
                     ].join('\n\n') }],
                     createdAt: Date.now(),
                   },
                 ],
               }
               continue
-            } else if (taskEngineRound < MAX_TASK_ENGINE_ROUNDS) {
+            } else if (
+              (activeStep.id === 'final_report' || activeStep.role === 'final_report') &&
+              finalValidationGateSatisfied(taskPlan.validation, taskPlan)
+            ) {
+              const finalContent = taskFinalReportContent(taskPlan, accumulatedParts)
+              taskPlan = markStepDone(taskPlan, activeStep.id)
+              dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { content: finalContent, streaming: false, error: undefined, runPhase: 'completed' },
+              })
+              taskPlan = completePlan(taskPlan)
+              dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
+              await logFeatureTest({ status: 'passed', message: taskFinalReportText(taskPlan, accumulatedParts), fullContent: result.fullContent })
+              return
+            } else if (canContinueTaskEngine) {
               taskEngineRound += 1
               const retryText = activeStep.id === 'final_report' || activeStep.role === 'final_report'
                 ? finalReportRetryPrompt(roundParts)
+                : activeStep.role === 'repair' && !roundHasFileEdit(roundParts)
+                  ? repairStepRetryPrompt(activeStep, roundParts)
                 : activeStep.role === 'feature' && !roundHasFileEdit(roundParts)
                   ? featureStepRetryPrompt(activeStep.title, roundParts)
                 : taskRoundSummary(activeStep.title, roundParts)
@@ -1245,7 +1411,7 @@ export function ChatView() {
               }
               continue
             } else {
-              const error = `Task execution stopped after ${MAX_TASK_ENGINE_ROUNDS} automatic step round(s). Current step did not complete: ${activeStep.title}.`
+              const error = `Task execution stopped after ${taskEngineBudget} dynamic automatic step round(s). Current step did not complete: ${activeStep.title}. Ava only stops here when the dynamic progress budget is exhausted.`
               taskPlan = blockPlan(taskPlan, activeStep.id, error)
               dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
               dispatch({
@@ -1277,8 +1443,9 @@ export function ChatView() {
               if (
                 result.stopReason === 'tool_loop_limit' &&
                 shouldContinueAfterToolLimit(currentRoundParts, activeStep ?? undefined) &&
-                taskEngineRound < MAX_TASK_ENGINE_ROUNDS
+                taskEngineRound < taskEngineRoundBudget(taskPlan, taskEngineProductiveRounds)
               ) {
+                taskEngineProductiveRounds += 1
                 taskEngineRound += 1
                 currentSnapshot = {
                   ...conversationSnapshot,
@@ -1349,8 +1516,9 @@ export function ChatView() {
               if (result.stopReason === 'tool_loop_limit' && taskPlan && activeStep) {
                 if (
                   shouldContinueAfterToolLimit(currentRoundParts, activeStep) &&
-                  taskEngineRound < MAX_TASK_ENGINE_ROUNDS
+                  taskEngineRound < taskEngineRoundBudget(taskPlan, taskEngineProductiveRounds)
                 ) {
+                  taskEngineProductiveRounds += 1
                   taskEngineRound += 1
                   currentSnapshot = {
                     ...conversationSnapshot,
