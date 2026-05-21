@@ -19,6 +19,8 @@ import { classifyToolError } from './services/toolErrorClassifier'
 import { compactToolResultForContext, type PersistedToolResultRef } from './services/toolResultStore'
 import { duplicateToolResultPatch, toolRuntime } from './services/toolRuntime'
 import { madeStepProgress } from '../shared/agentProgressPolicy'
+import { buildCapabilityIndex, routeMcpTools, routeSkills } from './services/capabilityRouter'
+import { capabilityStats } from './services/capabilityStats'
 
 export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
@@ -100,6 +102,7 @@ export interface StreamChatArgs {
   activeStepRole?: TaskStepRole
   activeStepToolLoopBudget?: number
   finalReportReadBudget?: number
+  routedMcpToolNames?: string[]
 }
 
 export interface StreamStepArgs extends StreamChatArgs {
@@ -276,6 +279,20 @@ function latestUserRequest(messages: LlmMessage[]): string {
   return ''
 }
 
+function compactMessagesText(messages: LlmMessage[], maxChars = 12_000): string {
+  const chunks: string[] = []
+  for (let i = messages.length - 1; i >= 0 && chunks.join('\n').length < maxChars; i -= 1) {
+    const message = messages[i]
+    if (message.role === 'tool') continue
+    const content = typeof message.content === 'string'
+      ? message.content
+      : message.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
+    if (!content.trim()) continue
+    chunks.push(`${message.role}: ${content.slice(0, 2000)}`)
+  }
+  return chunks.reverse().join('\n').slice(-maxChars)
+}
+
 function extractPathScopes(text: string): string[] {
   const scopes = new Set<string>()
   for (const match of text.matchAll(WINDOWS_PATH_RE)) {
@@ -354,11 +371,23 @@ function listAvailableTools(
   activeCommandInvocation?: ToolAuditCommandInvocation,
   forceToolExposure = false,
   activeStepRequiredTools?: string[],
+  routedMcpToolNames?: string[],
 ): McpToolDescriptor[] {
   if (!shouldExposeTools(currentTask, activeCommandInvocation, forceToolExposure)) return []
-  const all = [...builtInTools.listTools(), ...mcpSupervisor.listAllTools()]
-  if (!activeStepRequiredTools || activeStepRequiredTools.length === 0) return all
-  return all.filter(tool => isToolAllowedForActiveStep(tool.name, activeStepRequiredTools))
+  const builtIns = builtInTools.listTools()
+  const mcpTools = mcpSupervisor.listAllTools()
+  const exposedBuiltIns = !activeStepRequiredTools || activeStepRequiredTools.length === 0
+    ? builtIns
+    : builtIns.filter(tool => isToolAllowedForActiveStep(tool.name, activeStepRequiredTools))
+  const routedMcpSet = routedMcpToolNames ? new Set(routedMcpToolNames) : null
+  const requiredToolSet = new Set(activeStepRequiredTools ?? [])
+  const stepAllowsTool = (toolName: string) => !activeStepRequiredTools?.length || isToolAllowedForActiveStep(toolName, activeStepRequiredTools)
+  const exposedMcp = routedMcpSet
+    ? mcpTools.filter(tool => (routedMcpSet.has(tool.name) || requiredToolSet.has(tool.name)) && stepAllowsTool(tool.name))
+    : (!activeStepRequiredTools || activeStepRequiredTools.length === 0)
+      ? mcpTools
+      : mcpTools.filter(tool => isToolAllowedForActiveStep(tool.name, activeStepRequiredTools))
+  return [...exposedBuiltIns, ...exposedMcp]
 }
 
 /**
@@ -1153,10 +1182,11 @@ function buildSkillsPrompt(skills: PluginSkill[]): string {
   const blocks = skills.map(skill => [
     `--- Skill: ${skill.pluginName} / ${skill.name}`,
     `Source: ${skill.sourcePath}${skill.truncated ? ' (truncated)' : ''}`,
+    skill.routingReasons?.length ? `Selected because: ${skill.routingReasons.join(', ')}` : '',
     skill.content.trim(),
-  ].join('\n'))
+  ].filter(Boolean).join('\n'))
   return [
-    'Enabled plugin skills:',
+    'Selected plugin skills for this task step:',
     'Use these instructions when they are relevant to the current task. They do not replace the latest user request or task boundary rules.',
     ...blocks,
   ].join('\n\n')
@@ -1169,6 +1199,20 @@ function injectPluginSkills(messages: LlmMessage[], skills: PluginSkill[]): LlmM
     return [{ ...messages[0], content: `${messages[0].content}\n\n${prompt}` }, ...messages.slice(1)]
   }
   return [{ role: 'system', content: prompt }, ...messages]
+}
+
+function maxSkillsForStep(role?: TaskStepRole): number {
+  if (role === 'final_report') return 0
+  if (role === 'validate' || role === 'console' || role === 'screenshot' || role === 'preview') return 1
+  if (role === 'repair') return 2
+  return 3
+}
+
+function maxMcpToolsForStep(role?: TaskStepRole): number {
+  if (role === 'final_report') return 0
+  if (role === 'validate' || role === 'preview' || role === 'console' || role === 'screenshot') return 2
+  if (role === 'repair') return 5
+  return 8
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> | null {
@@ -1641,6 +1685,7 @@ async function runToolLoop(
     args.activeCommandInvocation,
     Boolean(args.activeStepRequiredTools?.length),
     args.activeStepRequiredTools,
+    args.routedMcpToolNames,
   )
   const effectiveProvider: ModelProvider = {
     ...provider,
@@ -2260,6 +2305,11 @@ async function appendToolAudit(input: {
   pluginId?: string
 }): Promise<void> {
   try {
+    await capabilityStats.recordUse({
+      id: `${input.serverId ? 'mcp_tool' : 'built_in_tool'}:${input.toolCall.name}`,
+      kind: input.serverId ? 'mcp_tool' : 'built_in_tool',
+      success: input.status === 'ok' && !input.isToolError,
+    })
     await toolAuditLog.append({
       streamId: input.args.streamId,
       taskId: input.args.activeTaskId,
@@ -2298,10 +2348,86 @@ export async function streamChat(
   const attempts: LlmAttempt[] = []
 
   try {
-    const pluginSkills = await pluginManager.skillsForStates(args.pluginStates ?? {})
+    const skillCandidates = await pluginManager.skillCandidatesForStates(args.pluginStates ?? {})
+    const mcpTools = mcpSupervisor.listAllTools()
+    const currentTask = latestUserRequest(args.messages)
+    const messagesText = compactMessagesText(args.messages)
+    const capabilityIndex = buildCapabilityIndex({
+      builtInTools: builtInTools.listTools(),
+      mcpTools,
+      skills: skillCandidates,
+    })
+    const routedMcpTools = routeMcpTools(mcpTools, {
+      currentTask,
+      activeStepRole: args.activeStepRole,
+      activeStepRequiredTools: args.activeStepRequiredTools,
+      messagesText,
+      maxMcpTools: maxMcpToolsForStep(args.activeStepRole),
+    })
+    const routedSkills = routeSkills(skillCandidates, {
+      currentTask,
+      activeStepRole: args.activeStepRole,
+      activeStepRequiredTools: args.activeStepRequiredTools,
+      messagesText,
+      maxSkills: maxSkillsForStep(args.activeStepRole),
+    })
+    const pluginSkills = await pluginManager.skillsForCandidates(routedSkills.map(item => item.item))
+    const skillReasons = new Map(routedSkills.map(item => [
+      `${item.item.pluginId}:${item.item.name}`,
+      { score: item.score, reasons: item.reasons },
+    ]))
+    for (const skill of pluginSkills) {
+      const routed = skillReasons.get(`${skill.pluginId}:${skill.name}`)
+      if (!routed) continue
+      skill.routingScore = routed.score
+      skill.routingReasons = routed.reasons
+    }
+    await capabilityStats.recordSelection([
+      ...routedSkills.map(item => ({ id: `skill:${item.item.pluginId}:${item.item.name}`, kind: 'skill' as const, injected: true })),
+      ...routedMcpTools.map(item => ({ id: `mcp_tool:${item.item.name}`, kind: 'mcp_tool' as const })),
+    ])
+    await capabilityStats.appendRouteLog({
+      streamId: args.streamId,
+      taskId: args.activeTaskId,
+      activeStepRole: args.activeStepRole,
+      totalCapabilities: capabilityIndex.length,
+      selectedSkills: routedSkills.map(item => ({
+        id: `skill:${item.item.pluginId}:${item.item.name}`,
+        name: `${item.item.pluginName}/${item.item.name}`,
+        score: item.score,
+        reasons: item.reasons,
+      })),
+      selectedMcpTools: routedMcpTools.map(item => ({
+        id: `mcp_tool:${item.item.name}`,
+        name: item.item.name,
+        score: item.score,
+        reasons: item.reasons,
+      })),
+      createdAt: Date.now(),
+    })
+    if (skillCandidates.length > 0 || mcpTools.length > 0) {
+      console.info('[capability-router] selected capabilities', {
+        totalCapabilities: capabilityIndex.length,
+        skillCandidates: skillCandidates.length,
+        mcpCandidates: mcpTools.length,
+        selectedSkills: pluginSkills.map(skill => ({
+          plugin: skill.pluginName,
+          name: skill.name,
+          score: skill.routingScore,
+          reasons: skill.routingReasons,
+        })),
+        selectedMcpTools: routedMcpTools.map(item => ({
+          name: item.item.name,
+          score: item.score,
+          reasons: item.reasons,
+        })),
+        activeStepRole: args.activeStepRole,
+      })
+    }
     const argsWithSkills: StreamChatArgs = {
       ...args,
       messages: injectPluginSkills(args.messages, pluginSkills),
+      routedMcpToolNames: routedMcpTools.map(item => item.item.name),
     }
     for (const provider of args.providers) {
       const model = provider.defaultModel

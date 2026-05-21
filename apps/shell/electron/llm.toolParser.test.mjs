@@ -24,6 +24,8 @@ const stripImportFrom = (specifier) => {
   '\\.\\/services\\/toolErrorClassifier',
   '\\.\\/services\\/toolResultStore',
   '\\.\\/services\\/toolRuntime',
+  '\\.\\/services\\/capabilityRouter',
+  '\\.\\/services\\/capabilityStats',
   '\\.\\.\\/shared\\/agentProgressPolicy',
 ].forEach(stripImportFrom)
 source += `
@@ -37,6 +39,10 @@ function classifyToolError(error){ return { kind: 'unknown', message: String(err
 async function compactToolResultForContext(content){ return { content, compacted: false } }
 function duplicateToolResultPatch(){ return null }
 function madeStepProgress(){ return false }
+function buildCapabilityIndex(){ return [] }
+function routeSkills(){ return [] }
+function routeMcpTools(){ return [] }
+const capabilityStats = { recordSelection: async () => {}, recordUse: async () => {}, appendRouteLog: async () => {} }
 function previewValue(value){ return String(value) }
 class OpenAiAdapter {}
 class AnthropicAdapter {}

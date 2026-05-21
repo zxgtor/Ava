@@ -105,6 +105,19 @@ export interface PluginSkill {
   sourcePath: string
   content: string
   truncated: boolean
+  routingScore?: number
+  routingReasons?: string[]
+}
+
+export interface PluginSkillCandidate {
+  pluginId: string
+  pluginName: string
+  name: string
+  sourcePath: string
+  summary: string
+  tags: string[]
+  contentPreview: string
+  truncated: boolean
 }
 
 export interface PluginCommand {
@@ -136,6 +149,7 @@ const BUNDLED_DIR = 'plugins'
 const USER_DIR = 'user-plugins'
 const MAX_SKILL_CHARS = 12_000
 const MAX_TOTAL_SKILL_CHARS = 48_000
+const MAX_SKILL_METADATA_CHARS = 2_000
 const MAX_COMMAND_CHARS = 8_000
 const MAX_TOTAL_COMMAND_CHARS = 32_000
 const SOURCE_META = '.ava-plugin-source.json'
@@ -566,6 +580,50 @@ async function readSkill(path: string): Promise<{ content: string; truncated: bo
   }
 }
 
+async function readSkillMetadata(path: string): Promise<{ summary: string; tags: string[]; contentPreview: string; truncated: boolean }> {
+  const raw = await readFile(path, 'utf8')
+  const preview = raw.slice(0, MAX_SKILL_METADATA_CHARS)
+  return {
+    summary: extractSkillSummary(preview),
+    tags: extractSkillTags(preview),
+    contentPreview: preview,
+    truncated: raw.length > preview.length,
+  }
+}
+
+function extractSkillSummary(content: string): string {
+  const frontmatter = content.match(/^---\s*([\s\S]*?)\s*---/)
+  const frontmatterDescription = frontmatter?.[1]?.match(/^description:\s*["']?(.+?)["']?\s*$/im)?.[1]?.trim()
+  if (frontmatterDescription) return frontmatterDescription.slice(0, 500)
+  const heading = content.match(/^#\s+(.+)$/m)?.[1]?.trim()
+  if (heading) return heading.slice(0, 300)
+  return content
+    .replace(/^---[\s\S]*?---/, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(line => line.length > 20)?.slice(0, 300) ?? ''
+}
+
+function extractSkillTags(content: string): string[] {
+  const tags = new Set<string>()
+  const frontmatter = content.match(/^---\s*([\s\S]*?)\s*---/)?.[1] ?? ''
+  const name = frontmatter.match(/^name:\s*["']?(.+?)["']?\s*$/im)?.[1]
+  if (name) tokenizeSkillText(name).forEach(tag => tags.add(tag))
+  const description = frontmatter.match(/^description:\s*["']?(.+?)["']?\s*$/im)?.[1]
+  if (description) tokenizeSkillText(description).slice(0, 16).forEach(tag => tags.add(tag))
+  tokenizeSkillText(content.slice(0, 1200)).slice(0, 24).forEach(tag => tags.add(tag))
+  return [...tags].slice(0, 32)
+}
+
+function tokenizeSkillText(text: string): string[] {
+  return text
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9+#.-]+/i)
+    .map(item => item.trim())
+    .filter(item => item.length >= 2 && item.length <= 40)
+}
+
 async function countCommandFiles(rootPath: string, manifest?: PluginManifest): Promise<number> {
   if (Array.isArray(manifest?.commands)) return manifest.commands.length
   const commandsDir = join(rootPath, 'commands')
@@ -810,6 +868,54 @@ export class PluginManager {
           truncated: read.truncated || content.length < read.content.length,
         })
       }
+    }
+    return skills
+  }
+
+  async skillCandidatesForStates(states: Record<string, PluginState> = {}): Promise<PluginSkillCandidate[]> {
+    const loaded = await this.load(states)
+    const candidates: PluginSkillCandidate[] = []
+    for (const plugin of loaded) {
+      if (!plugin.enabled || !plugin.valid) continue
+      const manifest = await readJsonFile<PluginManifest>(join(plugin.rootPath, PLUGIN_MANIFEST)).catch(() => undefined)
+      const paths = await discoverSkillPaths(plugin.rootPath, manifest)
+      for (const skill of paths) {
+        if (!existsSync(skill.path)) continue
+        const metadata = await readSkillMetadata(skill.path).catch(() => null)
+        if (!metadata) continue
+        candidates.push({
+          pluginId: plugin.id,
+          pluginName: plugin.manifest?.name ?? plugin.id,
+          name: skill.name,
+          sourcePath: skill.path,
+          summary: metadata.summary,
+          tags: metadata.tags,
+          contentPreview: metadata.contentPreview,
+          truncated: metadata.truncated,
+        })
+      }
+    }
+    return candidates
+  }
+
+  async skillsForCandidates(candidates: PluginSkillCandidate[]): Promise<PluginSkill[]> {
+    const skills: PluginSkill[] = []
+    let totalChars = 0
+    for (const candidate of candidates) {
+      if (!existsSync(candidate.sourcePath) || totalChars >= MAX_TOTAL_SKILL_CHARS) continue
+      const read = await readSkill(candidate.sourcePath).catch(() => null)
+      if (!read) continue
+      const remaining = MAX_TOTAL_SKILL_CHARS - totalChars
+      const content = read.content.length > remaining ? read.content.slice(0, remaining) : read.content
+      totalChars += content.length
+      skills.push({
+        pluginId: candidate.pluginId,
+        pluginName: candidate.pluginName,
+        name: candidate.name,
+        sourcePath: candidate.sourcePath,
+        content,
+        truncated: read.truncated || content.length < read.content.length,
+      })
     }
     return skills
   }
