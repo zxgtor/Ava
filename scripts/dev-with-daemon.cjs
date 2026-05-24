@@ -48,5 +48,5 @@ process.on('SIGTERM', () => {
   process.exit(143)
 })
 
-spawnChild('daemon', ['run', 'daemon:dev'])
+spawnChild('daemon', ['run', 'daemon:runtime'])
 spawnChild('shell', ['start'])

@@ -74,10 +74,91 @@ Electron main has an optional daemon client seam. Set
 `ava:llm:stream` through the daemon SSE endpoint. By default, shell still uses
 the existing in-process `streamChat()` runtime.
 
+When `AVA_CHAT_RUNTIME=daemon` is set, Electron main also starts an embedded
+daemon server with the real `streamChat()` runtime attached. This lets the
+current shell test the daemon boundary before the runtime is fully moved into a
+separate Node process. Do not also start `npm run daemon:dev` on the same port
+for this test; that standalone daemon intentionally remains mock-only.
+
+Dev test flow:
+
+```bash
+set AVA_CHAT_RUNTIME=daemon
+npm start
+```
+
+Then open `Unit Test -> Daemon` and run `daemon.chat.runtime`.
+
+## Phase 3: Standalone Node Runtime Smoke
+
+The daemon can now also start as a Node process with the real `streamChat()`
+runtime attached:
+
+```bash
+npm run daemon:runtime
+```
+
+This command builds `apps/daemon/src/runtimeMain.ts` into
+`apps/daemon/out/runtimeMain.cjs` and starts `/chat/stream` with the current
+agent runtime attached. `GET /runtime/status` should return
+`runtimeAttached: true`.
+
+The standalone runtime still receives provider settings and selected model
+context from the shell request via `metadata.streamChatArgs`. It is not yet a
+fully independent daemon with its own provider config loader or model router.
+
+## Phase 4: Shell Uses Node Daemon By Default
+
+Electron shell now treats the Node daemon as the default runtime path. On app
+startup, shell checks `GET /runtime/status`; if no attached daemon is available,
+it starts `npm run daemon:runtime` in the project root and waits for
+`runtimeAttached: true`.
+
+Disable this path only for debugging:
+
+```bash
+set AVA_CHAT_RUNTIME=local
+npm start
+```
+
+In daemon mode, these Electron IPC handlers proxy to daemon HTTP APIs:
+
+- settings load/save
+- chat streaming
+- MCP list/restart
+- plugin list/commands/marketplace/install/update/uninstall
+- tool audit list/clear
+- Unit Test context and Unit Test result log
+
+Daemon chat streaming tunnels the original `ava:llm:*` runtime events back to
+the shell, so tool blocks, part updates, status, reasoning deltas, and text
+chunks continue to render through the existing UI listeners.
+
+## Phase 5: Runtime Services Physically Live In Daemon
+
+The runtime implementation files have been moved under `apps/daemon/src`:
+
+- `llm.ts`
+- provider adapters
+- storage
+- built-in tools
+- MCP supervisor
+- plugin manager
+- tool runtime
+- process registry
+- runtime environment
+- capability router/stats
+- tool audit/result/error helpers
+- Windows environment driver abstraction
+
+The old `apps/shell/electron/**` paths are compatibility wrappers only. This
+keeps existing Electron imports and tests working while making daemon the owner
+of the agent runtime code.
+
 ## Next Safe Steps
 
-1. Move pure/shared runtime types into `packages/contracts`.
-2. Move provider/model adapters from `apps/shell/electron/adapters` into `apps/daemon/src/adapters`.
-3. Move pure services one by one into `apps/daemon/src/services`.
-4. Keep Electron-specific services, such as window/DWM behavior, in `apps/shell`.
-5. Replace renderer-to-Electron agent IPC with renderer-to-daemon API/SSE after the core can be imported independently.
+1. Move settings/provider loading behind a daemon-owned config boundary instead of passing `metadata.streamChatArgs` from shell.
+2. Move shared progress policy out of `apps/shell/shared` into a neutral shared package.
+3. Keep Electron-specific services, such as window/DWM behavior, dialogs, tray, and auto-updater, in `apps/shell`.
+4. Replace renderer-to-Electron agent IPC with renderer-to-daemon API/SSE after the core can be imported independently.
+5. Move MCP status push events from Electron `webContents` wiring to daemon event subscriptions.

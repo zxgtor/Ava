@@ -91,9 +91,17 @@ export type AvaChatRunFailedEvent = {
   error: string
 }
 
+export type AvaChatIpcEvent = {
+  type: 'chat.ipc.event'
+  runId: string
+  channel: string
+  payload: unknown
+}
+
 export type AvaChatStreamEvent =
   | AvaChatRunStartedEvent
   | AvaChatMessageDeltaEvent
   | AvaChatMessageCompletedEvent
   | AvaChatRunCompletedEvent
   | AvaChatRunFailedEvent
+  | AvaChatIpcEvent

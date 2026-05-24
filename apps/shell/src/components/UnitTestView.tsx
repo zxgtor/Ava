@@ -15,6 +15,7 @@ interface TestTarget {
   inputSchema?: unknown
   defaultRequest: string
   meta?: string
+  daemonChatRuntimeEnabled?: boolean
 }
 
 interface TestState {
@@ -181,6 +182,42 @@ function makeDaemonTargets(baseUrl: string, chatRuntimeEnabled: boolean): TestTa
       defaultRequest: request({ method: 'GET', url: `${normalizedBaseUrl}/mcp/servers` }),
     },
     {
+      id: 'daemon:settings-load',
+      kind: 'daemon',
+      name: 'daemon.settings.load',
+      label: 'daemon.settings.load',
+      meta: normalizedBaseUrl,
+      description: 'GET /settings/load should read settings through the daemon runtime service.',
+      defaultRequest: request({ method: 'GET', url: `${normalizedBaseUrl}/settings/load` }),
+    },
+    {
+      id: 'daemon:plugins-list',
+      kind: 'daemon',
+      name: 'daemon.plugins.list',
+      label: 'daemon.plugins.list',
+      meta: normalizedBaseUrl,
+      description: 'POST /plugins/list should discover plugins through the daemon runtime service.',
+      defaultRequest: request({ method: 'POST', url: `${normalizedBaseUrl}/plugins/list`, body: { states: {} } }),
+    },
+    {
+      id: 'daemon:tool-audit-list',
+      kind: 'daemon',
+      name: 'daemon.toolAudit.list',
+      label: 'daemon.toolAudit.list',
+      meta: normalizedBaseUrl,
+      description: 'GET /tool-audit/list should read audit records through the daemon runtime service.',
+      defaultRequest: request({ method: 'GET', url: `${normalizedBaseUrl}/tool-audit/list?limit=5` }),
+    },
+    {
+      id: 'daemon:unit-test-context',
+      kind: 'daemon',
+      name: 'daemon.unitTest.context',
+      label: 'daemon.unitTest.context',
+      meta: normalizedBaseUrl,
+      description: 'POST /dev/unit-test-context should return the daemon-owned unit test context.',
+      defaultRequest: request({ method: 'POST', url: `${normalizedBaseUrl}/dev/unit-test-context`, body: { states: {} } }),
+    },
+    {
       id: 'daemon:chat-stream',
       kind: 'daemon',
       name: 'daemon.chat.stream',
@@ -188,13 +225,8 @@ function makeDaemonTargets(baseUrl: string, chatRuntimeEnabled: boolean): TestTa
       meta: chatRuntimeEnabled ? 'seam enabled' : 'seam disabled',
       description: 'POST /chat/stream should return a complete SSE event sequence.',
       defaultRequest: request({
-        method: 'POST',
-        url: `${normalizedBaseUrl}/chat/stream`,
-        body: {
-          messages: [
-            { role: 'user', content: 'hello daemon unit test' },
-          ],
-        },
+        method: 'GET',
+        url: `${normalizedBaseUrl}/chat/stream?message=hello%20daemon%20unit%20test`,
         expectEventTypes: [
           'chat.run.started',
           'chat.message.delta',
@@ -202,6 +234,16 @@ function makeDaemonTargets(baseUrl: string, chatRuntimeEnabled: boolean): TestTa
           'chat.run.completed',
         ],
       }),
+    },
+    {
+      id: 'daemon:chat-runtime',
+      kind: 'daemon',
+      name: 'daemon.chat.runtime',
+      label: 'daemon.chat.runtime',
+      meta: chatRuntimeEnabled ? 'seam enabled' : 'seam disabled',
+      description: 'Run a real LLM request through Electron -> daemon SSE -> streamChat runtime.',
+      daemonChatRuntimeEnabled: chatRuntimeEnabled,
+      defaultRequest: 'Reply with exactly: ava daemon runtime ok',
     },
   ]
 }
@@ -237,6 +279,7 @@ export function UnitTestView() {
   const [error, setError] = useState<string | null>(null)
   const [devCwd, setDevCwd] = useState('')
   const [logPath, setLogPath] = useState('')
+  const [daemonInfo, setDaemonInfo] = useState<{ baseUrl: string; chatRuntimeEnabled: boolean } | null>(null)
   const [targets, setTargets] = useState<TestTarget[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
@@ -261,6 +304,7 @@ export function UnitTestView() {
       const nextCwd = context.cwd
       setDevCwd(context.cwd)
       setLogPath(context.logPath ?? '')
+      setDaemonInfo(context.daemon ?? null)
       const builtIns: TestTarget[] = context.builtInTools.map(tool => ({
         id: `built-in:${tool.name}`,
         kind: 'built-in',
@@ -394,6 +438,11 @@ export function UnitTestView() {
   }
 
   const runDaemonTarget = async (target: TestTarget) => {
+    if (target.name === 'daemon.chat.runtime') {
+      await runDaemonRuntimeTarget(target)
+      return
+    }
+
     const requestText = tests[target.id]?.request || target.defaultRequest
     const startedAt = Date.now()
     setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'running', message: 'Calling daemon...' } }))
@@ -476,6 +525,103 @@ export function UnitTestView() {
         durationMs,
         request: requestText,
       })
+    }
+  }
+
+  const runDaemonRuntimeTarget = async (target: TestTarget) => {
+    const request = tests[target.id]?.request || target.defaultRequest
+    const startedAt = Date.now()
+    const streamId = `ut_daemon_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+    const fail = (message: string, durationMs = Date.now() - startedAt) => {
+      setTests(prev => ({
+        ...prev,
+        [target.id]: { request, status: 'failed', message, durationMs },
+      }))
+      writeLog({
+        id: target.id,
+        kind: target.kind,
+        name: target.name,
+        status: 'failed',
+        message,
+        durationMs,
+        request,
+      })
+    }
+
+    if (!target.daemonChatRuntimeEnabled) {
+      fail('Daemon chat runtime is not enabled. Start Ava with AVA_CHAT_RUNTIME=daemon, without a separate mock daemon on the same port.')
+      return
+    }
+
+    const providers = state.settings.modelProviders.filter(provider => provider.enabled)
+    if (providers.length === 0) {
+      fail('No enabled LLM provider.')
+      return
+    }
+
+    const preflight = await checkLlmAvailable()
+    if (!preflight.ok) {
+      fail(preflight.error ?? 'LLM server unavailable.')
+      return
+    }
+
+    setTests(prev => ({
+      ...prev,
+      [target.id]: { request, status: 'running', message: 'Running real chat through daemon runtime...' },
+    }))
+
+    try {
+      const reply = await window.ava.llm.stream({
+        streamId,
+        providers: state.settings.modelProviders,
+        toolFormatMap: state.settings.modelToolFormatMap,
+        pluginStates: state.settings.pluginStates,
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are running Ava Daemon Runtime Unit Test. Follow the user request exactly. Do not call tools.',
+          },
+          {
+            role: 'user',
+            content: request,
+          },
+        ],
+      })
+
+      if (!reply.ok) throw new Error(reply.error)
+
+      const durationMs = Date.now() - startedAt
+      const fullContent = reply.result.fullContent.trim()
+      const passed = /ava daemon runtime ok/i.test(fullContent) && !reply.result.stopReason
+      const message = passed
+        ? `Passed in ${durationMs}ms; provider=${reply.result.provider.name}; model=${reply.result.model}`
+        : `Unexpected runtime response: ${fullContent.slice(0, 300) || '(empty)'}`
+
+      setTests(prev => ({
+        ...prev,
+        [target.id]: {
+          request,
+          status: passed ? 'passed' : 'failed',
+          message,
+          durationMs,
+          lastTool: `provider:${reply.result.provider.id}`,
+        },
+      }))
+      writeLog({
+        id: target.id,
+        kind: target.kind,
+        name: target.name,
+        status: passed ? 'passed' : 'failed',
+        message,
+        durationMs,
+        request,
+        stopReason: reply.result.stopReason,
+        fullContent: reply.result.fullContent,
+      })
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -685,6 +831,16 @@ export function UnitTestView() {
             {logPath && (
               <p className="mt-1 text-xs text-text-3">
                 Log: <span className="font-mono text-text-2">{logPath}</span>
+              </p>
+            )}
+            {kind === 'daemon' && daemonInfo && (
+              <p className="mt-1 text-xs text-text-3">
+                Daemon: <span className="font-mono text-text-2">{daemonInfo.baseUrl}</span>
+                <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] ${
+                  daemonInfo.chatRuntimeEnabled ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+                }`}>
+                  {daemonInfo.chatRuntimeEnabled ? 'runtime connected' : 'runtime disabled'}
+                </span>
               </p>
             )}
           </div>

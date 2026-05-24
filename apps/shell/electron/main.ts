@@ -33,6 +33,14 @@ import {
   shouldUseDaemonChat,
   streamChatThroughDaemon,
 } from './services/daemonChatClient'
+import {
+  shouldStartEmbeddedDaemonRuntime,
+  startEmbeddedDaemonRuntime,
+  stopEmbeddedDaemonRuntime,
+} from './services/embeddedDaemonServer'
+import { daemonRuntimeClient } from './services/daemonRuntimeClient'
+import { ensureNodeDaemonRuntime, stopNodeDaemonRuntime } from './services/nodeDaemonProcess'
+import { configureRuntimePaths } from './services/runtimePaths'
 
 const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
@@ -419,8 +427,14 @@ function registerIpc(): void {
   ipcMain.handle('ava:paths:userData', () => getUserDataPath())
 
   // ── settings persistence ────────────────────
-  ipcMain.handle('ava:settings:load', async () => loadSettings())
+  ipcMain.handle('ava:settings:load', async () =>
+    shouldUseDaemonChat() ? daemonRuntimeClient.loadSettings() : loadSettings(),
+  )
   ipcMain.handle('ava:settings:save', async (_e, data: unknown) => {
+    if (shouldUseDaemonChat()) {
+      await daemonRuntimeClient.saveSettings(data)
+      return true
+    }
     await saveSettings(data)
     const mcpServers = await readRuntimeMcpServers(data)
     if (mcpServers) {
@@ -459,8 +473,14 @@ function registerIpc(): void {
   )
 
   // ── MCP runtime ─────────────────────────────
-  ipcMain.handle('ava:mcp:listServers', () => mcpSupervisor.listServers())
+  ipcMain.handle('ava:mcp:listServers', () =>
+    shouldUseDaemonChat() ? daemonRuntimeClient.listMcpServers() : mcpSupervisor.listServers(),
+  )
   ipcMain.handle('ava:mcp:restart', async (_e, serverId: string) => {
+    if (shouldUseDaemonChat()) {
+      await daemonRuntimeClient.restartMcpServer(serverId)
+      return true
+    }
     await mcpSupervisor.restart(serverId)
     return true
   })
@@ -479,6 +499,10 @@ function registerIpc(): void {
         mcpTools: [],
         skills: [],
       }
+    }
+
+    if (shouldUseDaemonChat()) {
+      return daemonRuntimeClient.unitTestContext(states ?? {})
     }
 
     const testWorkspace = await ensureUnitTestWorkspace()
@@ -515,32 +539,39 @@ function registerIpc(): void {
 
   ipcMain.handle('ava:dev:appendUnitTestResult', async (_e, raw: unknown) => {
     if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
+    if (shouldUseDaemonChat()) return daemonRuntimeClient.appendUnitTestResult(raw)
     return appendUnitTestResult(raw)
   })
   ipcMain.handle('ava:dev:readUnitTestResults', async () => {
     if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
+    if (shouldUseDaemonChat()) return daemonRuntimeClient.readUnitTestResults()
     return readUnitTestResults()
   })
   ipcMain.handle('ava:dev:clearUnitTestResults', async () => {
     if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
+    if (shouldUseDaemonChat()) return daemonRuntimeClient.clearUnitTestResults()
     return clearUnitTestResults()
   })
 
   // ── Tool audit log ──────────────────────────
   ipcMain.handle('ava:toolAudit:list', async (_e, limit?: number) =>
-    toolAuditLog.list(limit),
+    shouldUseDaemonChat() ? daemonRuntimeClient.listToolAudit(limit) : toolAuditLog.list(limit),
   )
   ipcMain.handle('ava:toolAudit:clear', async () => {
+    if (shouldUseDaemonChat()) {
+      await daemonRuntimeClient.clearToolAudit()
+      return true
+    }
     await toolAuditLog.clear()
     return true
   })
 
   // ── Plugins ─────────────────────────────────
   ipcMain.handle('ava:plugins:list', async (_e, states: Record<string, PluginState> | undefined) =>
-    pluginManager.discover(states ?? {}),
+    shouldUseDaemonChat() ? daemonRuntimeClient.listPlugins(states ?? {}) : pluginManager.discover(states ?? {}),
   )
   ipcMain.handle('ava:plugins:listCommands', async (_e, states: Record<string, PluginState> | undefined) =>
-    pluginManager.commandsForStates(states ?? {}),
+    shouldUseDaemonChat() ? daemonRuntimeClient.listPluginCommands(states ?? {}) : pluginManager.commandsForStates(states ?? {}),
   )
   ipcMain.handle('ava:plugins:installFolder', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
@@ -554,6 +585,7 @@ function registerIpc(): void {
           properties: ['openDirectory'],
         })
     if (result.canceled || result.filePaths.length === 0) return null
+    if (shouldUseDaemonChat()) return daemonRuntimeClient.installPluginFromFolder(result.filePaths[0])
     return pluginManager.installFromFolder(result.filePaths[0])
   })
   ipcMain.handle('ava:plugins:installZip', async () => {
@@ -570,20 +602,25 @@ function registerIpc(): void {
           filters: [{ name: 'Zip archives', extensions: ['zip'] }],
         })
     if (result.canceled || result.filePaths.length === 0) return null
+    if (shouldUseDaemonChat()) return daemonRuntimeClient.installPluginFromZip(result.filePaths[0])
     return pluginManager.installFromZip(result.filePaths[0])
   })
   ipcMain.handle('ava:plugins:installGit', async (_e, url: string) =>
-    pluginManager.installFromGit(url),
+    shouldUseDaemonChat() ? daemonRuntimeClient.installPluginFromGit(url) : pluginManager.installFromGit(url),
   )
   ipcMain.handle('ava:plugins:uninstall', async (_e, pluginId: string) => {
+    if (shouldUseDaemonChat()) {
+      await daemonRuntimeClient.uninstallPlugin(pluginId)
+      return true
+    }
     await pluginManager.uninstall(pluginId)
     return true
   })
   ipcMain.handle('ava:plugins:getMarketplaceCatalog', async (_e, states, options) =>
-    pluginManager.getMarketplaceCatalog(states, options),
+    shouldUseDaemonChat() ? daemonRuntimeClient.getMarketplaceCatalog(states, options) : pluginManager.getMarketplaceCatalog(states, options),
   )
   ipcMain.handle('ava:plugins:update', async (_e, pluginId: string) =>
-    pluginManager.update(pluginId),
+    shouldUseDaemonChat() ? daemonRuntimeClient.updatePlugin(pluginId) : pluginManager.update(pluginId),
   )
 
   // ── Dialog helpers ──────────────────────────
@@ -814,10 +851,25 @@ function initAutoUpdater(win: BrowserWindow): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!app.requestSingleInstanceLock()) {
     app.quit()
     return
+  }
+
+  configureRuntimePaths({
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    userDataPath: app.getPath('userData'),
+    isPackaged: app.isPackaged,
+  })
+
+  if (shouldUseDaemonChat()) {
+    await ensureNodeDaemonRuntime().catch(err => {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn(`[daemon] node runtime unavailable: ${message}`)
+      process.env.AVA_CHAT_RUNTIME = 'local'
+    })
   }
 
   app.on('second-instance', () => {
@@ -849,6 +901,13 @@ app.whenReady().then(() => {
     })
     .catch(err => console.warn('[mcp] initial apply failed:', err))
 
+  if (shouldStartEmbeddedDaemonRuntime()) {
+    startEmbeddedDaemonRuntime().catch(err => {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn(`[daemon] embedded runtime unavailable: ${message}`)
+    })
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow()
@@ -865,6 +924,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   isQuitting = true
   globalShortcut.unregisterAll()
+  stopNodeDaemonRuntime().catch(err => console.warn('[daemon] node shutdown failed:', err))
+  stopEmbeddedDaemonRuntime().catch(err => console.warn('[daemon] embedded shutdown failed:', err))
   mcpSupervisor.shutdown().catch(err => console.warn('[mcp] shutdown failed:', err))
 })
 

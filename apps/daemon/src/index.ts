@@ -21,7 +21,7 @@ export {
   type ToolCallFormat,
   type ToolCallPart,
   type ToolCallStatus,
-} from '../../shell/electron/llm'
+} from './llm'
 
 export {
   mcpSupervisor,
@@ -31,7 +31,7 @@ export {
   type McpServerRuntime,
   type McpServerStatus,
   type McpToolDescriptor,
-} from '../../shell/electron/services/mcpSupervisor'
+} from './services/mcpSupervisor'
 
 export {
   pluginManager,
@@ -50,14 +50,15 @@ export {
   type PluginSourceInfo,
   type PluginSourceKind,
   type PluginState,
-} from '../../shell/electron/services/pluginManager'
+} from './services/pluginManager'
 
-export { builtInTools } from '../../shell/electron/services/builtInTools'
-export { toolAuditLog } from '../../shell/electron/services/toolAuditLog'
-export { processRegistry } from '../../shell/electron/services/processRegistry'
-export { toolRuntime } from '../../shell/electron/services/toolRuntime'
-export { runtimeEnvironmentInfo, runtimeEnvironmentPrompt } from '../../shell/electron/services/runtimeEnvironment'
-export { windowsEnvironmentDriver } from '../../shell/electron/services/windowsEnvironmentDriver'
+export { builtInTools } from './services/builtInTools'
+export { loadConversations, loadSettings, saveConversations, saveSettings } from './storage'
+export { toolAuditLog } from './services/toolAuditLog'
+export { processRegistry } from './services/processRegistry'
+export { toolRuntime } from './services/toolRuntime'
+export { runtimeEnvironmentInfo, runtimeEnvironmentPrompt } from './services/runtimeEnvironment'
+export { windowsEnvironmentDriver } from './services/windowsEnvironmentDriver'
 export type {
   EnvironmentAction,
   EnvironmentActionResult,
@@ -67,4 +68,4 @@ export type {
   EnvironmentState,
   EnvironmentStateQuery,
   EnvironmentVerification,
-} from '../../shell/electron/services/environmentDriver'
+} from './services/environmentDriver'

@@ -22,6 +22,27 @@ function jsonResponse(res, statusCode, body) {
   res.end(payload)
 }
 
+async function runtimeJsonResponse(res, runtime, methodName, args = []) {
+  if (!runtime || typeof runtime[methodName] !== 'function') {
+    jsonResponse(res, 503, {
+      ok: false,
+      error: `Runtime service "${methodName}" is not attached.`,
+      runtimeAttached: Boolean(runtime),
+    })
+    return
+  }
+
+  try {
+    const result = await runtime[methodName](...args)
+    jsonResponse(res, 200, { ok: true, result })
+  } catch (error) {
+    jsonResponse(res, 500, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 function emptyResponse(res, statusCode) {
   res.writeHead(statusCode, corsHeaders)
   res.end()
@@ -63,7 +84,7 @@ function readJsonBody(req) {
   })
 }
 
-function getRuntimeStatus() {
+function getRuntimeStatus(runtimeAttached = false) {
   return {
     ok: true,
     service: 'ava-daemon',
@@ -74,7 +95,7 @@ function getRuntimeStatus() {
     platform: process.platform,
     arch: process.arch,
     node: process.version,
-    runtimeAttached: false,
+    runtimeAttached,
   }
 }
 
@@ -144,7 +165,48 @@ function streamMockChatResponse(res, request = {}) {
   res.end()
 }
 
-async function routeRequest(req, res) {
+async function streamRuntimeChatResponse(res, request, runtime) {
+  let terminalEventSent = false
+
+  res.writeHead(200, {
+    ...corsHeaders,
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'X-Accel-Buffering': 'no',
+  })
+
+  const emit = (event) => {
+    if (event?.type === 'chat.run.completed' || event?.type === 'chat.run.failed') {
+      terminalEventSent = true
+    }
+    writeSseEvent(res, event)
+  }
+
+  try {
+    await runtime.streamChat(request, emit)
+    if (!terminalEventSent) {
+      emit({
+        type: 'chat.run.completed',
+        runId: typeof request.runId === 'string' ? request.runId : randomUUID(),
+        phase: 'completed',
+        timestamp: new Date().toISOString(),
+      })
+    }
+  } catch (error) {
+    emit({
+      type: 'chat.run.failed',
+      runId: typeof request.runId === 'string' ? request.runId : randomUUID(),
+      phase: 'failed',
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    })
+  } finally {
+    res.end()
+  }
+}
+
+async function routeRequest(req, res, runtime) {
   if (req.method === 'OPTIONS') {
     emptyResponse(res, 204)
     return
@@ -158,12 +220,12 @@ async function routeRequest(req, res) {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`)
 
   if (url.pathname === '/health') {
-    jsonResponse(res, 200, getRuntimeStatus())
+    jsonResponse(res, 200, getRuntimeStatus(Boolean(runtime)))
     return
   }
 
   if (url.pathname === '/runtime/status') {
-    jsonResponse(res, 200, getRuntimeStatus())
+    jsonResponse(res, 200, getRuntimeStatus(Boolean(runtime)))
     return
   }
 
@@ -173,12 +235,117 @@ async function routeRequest(req, res) {
       return
     }
 
+    if (runtime?.listMcpServers) {
+      await runtimeJsonResponse(res, runtime, 'listMcpServers')
+      return
+    }
+
     jsonResponse(res, 200, {
       ok: true,
       servers: [],
-      runtimeAttached: false,
-      note: 'MCP supervisor still runs inside Electron main until the runtime migration step.',
+      runtimeAttached: Boolean(runtime),
+      note: runtime
+        ? 'Runtime is attached through the embedded daemon bridge. MCP supervision still lives in Electron main until migration.'
+        : 'MCP supervisor still runs inside Electron main until the runtime migration step.',
     })
+    return
+  }
+
+  if (url.pathname === '/mcp/restart' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'restartMcpServer', [body?.serverId])
+    return
+  }
+
+  if (url.pathname === '/settings/load' && req.method === 'GET') {
+    await runtimeJsonResponse(res, runtime, 'loadSettings')
+    return
+  }
+
+  if (url.pathname === '/settings/save' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'saveSettings', [Object.prototype.hasOwnProperty.call(body, 'data') ? body.data : body])
+    return
+  }
+
+  if (url.pathname === '/plugins/list' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'listPlugins', [body?.states])
+    return
+  }
+
+  if (url.pathname === '/plugins/list-commands' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'listPluginCommands', [body?.states])
+    return
+  }
+
+  if (url.pathname === '/plugins/marketplace' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'getMarketplaceCatalog', [body?.states, body?.options])
+    return
+  }
+
+  if (url.pathname === '/plugins/install-git' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'installPluginFromGit', [body?.url])
+    return
+  }
+
+  if (url.pathname === '/plugins/install-folder' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'installPluginFromFolder', [body?.path])
+    return
+  }
+
+  if (url.pathname === '/plugins/install-zip' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'installPluginFromZip', [body?.path])
+    return
+  }
+
+  if (url.pathname === '/plugins/uninstall' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'uninstallPlugin', [body?.pluginId])
+    return
+  }
+
+  if (url.pathname === '/plugins/update' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'updatePlugin', [body?.pluginId])
+    return
+  }
+
+  if (url.pathname === '/tool-audit/list' && req.method === 'GET') {
+    const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined
+    await runtimeJsonResponse(res, runtime, 'listToolAudit', [Number.isFinite(limit) ? limit : undefined])
+    return
+  }
+
+  if (url.pathname === '/tool-audit/clear' && req.method === 'POST') {
+    await runtimeJsonResponse(res, runtime, 'clearToolAudit')
+    return
+  }
+
+  if (url.pathname === '/dev/unit-test-context' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'unitTestContext', [body?.states])
+    return
+  }
+
+  if (url.pathname === '/dev/unit-test-results/append' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'appendUnitTestResult', [body?.entry])
+    return
+  }
+
+  if (url.pathname === '/dev/unit-test-results/read' && req.method === 'GET') {
+    await runtimeJsonResponse(res, runtime, 'readUnitTestResults')
+    return
+  }
+
+  if (url.pathname === '/dev/unit-test-results/clear' && req.method === 'POST') {
+    await runtimeJsonResponse(res, runtime, 'clearUnitTestResults')
     return
   }
 
@@ -197,7 +364,11 @@ async function routeRequest(req, res) {
 
     try {
       const request = await readJsonBody(req)
-      streamMockChatResponse(res, request)
+      if (runtime?.streamChat) {
+        await streamRuntimeChatResponse(res, request, runtime)
+      } else {
+        streamMockChatResponse(res, request)
+      }
     } catch (error) {
       jsonResponse(res, 400, {
         ok: false,
@@ -213,8 +384,9 @@ async function routeRequest(req, res) {
 export function startDaemonServer(options = {}) {
   const host = options.host ?? process.env.AVA_DAEMON_HOST ?? DEFAULT_HOST
   const port = Number(options.port ?? process.env.AVA_DAEMON_PORT ?? DEFAULT_PORT)
+  const runtime = options.runtime ?? null
   const server = http.createServer((req, res) => {
-    routeRequest(req, res).catch((error) => {
+    routeRequest(req, res, runtime).catch((error) => {
       if (res.headersSent) {
         res.destroy(error)
         return

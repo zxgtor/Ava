@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "npm run dev --workspace=@ava/shell",
     "daemon:dev": "npm run dev --workspace=@ava/daemon",
+    "daemon:runtime": "npm run runtime --workspace=@ava/daemon",
     "build": "npm run build --workspace=@ava/shell",
     "start": "node scripts/dev-fresh.cjs",
     "start:with-daemon": "node scripts/dev-with-daemon.cjs",

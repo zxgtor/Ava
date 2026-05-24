@@ -7,8 +7,14 @@
   "dependencies": {
     "@ava/contracts": "*"
   },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  },
   "scripts": {
+    "build:runtime": "esbuild src/runtimeMain.ts --bundle --platform=node --target=node20 --format=cjs --outfile=out/runtimeMain.cjs --external:electron",
     "dev": "node src/main.mjs",
+    "runtime": "npm run build:runtime && node out/runtimeMain.cjs",
     "start": "node src/main.mjs"
   },
   "exports": {

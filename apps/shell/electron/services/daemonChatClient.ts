@@ -10,7 +10,10 @@ const activeDaemonStreams = new Map<string, AbortController>()
 
 export function shouldUseDaemonChat(): boolean {
   const value = process.env.AVA_CHAT_RUNTIME ?? process.env.AVA_USE_DAEMON_CHAT
-  return value === 'daemon' || value === '1' || value === 'true'
+  if (value === undefined) return true
+  const normalized = value.toLowerCase()
+  if (normalized === 'local' || normalized === 'off' || normalized === '0' || normalized === 'false') return false
+  return normalized === 'daemon' || normalized === '1' || normalized === 'true'
 }
 
 export function daemonBaseUrl(): string {
@@ -64,6 +67,7 @@ function buildDaemonRequest(args: StreamChatArgs, provider: ModelProvider, model
       activeFolderPath: args.activeFolderPath,
       activeStepRole: args.activeStepRole,
       activeStepRequiredTools: args.activeStepRequiredTools,
+      streamChatArgs: args,
     },
   }
 }
@@ -103,6 +107,17 @@ function emitDaemonEvent(
   model: string,
   event: AvaChatStreamEvent,
 ): { textDelta?: string; completed?: boolean; failedError?: string } {
+  if (event.type === 'chat.ipc.event') {
+    webContents.send(event.channel, event.payload)
+    if (event.channel === 'ava:llm:chunk') {
+      const payload = event.payload as { streamId?: string; text?: unknown }
+      if (payload.streamId === args.streamId && typeof payload.text === 'string') {
+        return { textDelta: payload.text }
+      }
+    }
+    return {}
+  }
+
   if (event.type === 'chat.run.started') {
     toolRuntime.sendRunStatus(webContents, args, provider, model, 'generating')
     return {}
