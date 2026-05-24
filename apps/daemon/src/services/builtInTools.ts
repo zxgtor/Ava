@@ -139,6 +139,10 @@ const FILE_TOOLS: McpToolDescriptor[] = [
       additionalProperties: false,
       properties: {
         path: { type: 'string' },
+        allowExisting: {
+          type: 'boolean',
+          description: 'If true, succeed when the directory already exists. Use this for idempotent setup or tests.',
+        },
       },
       required: ['path'],
     },

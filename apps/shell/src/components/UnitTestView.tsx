@@ -20,6 +20,7 @@ interface TestTarget {
 
 interface TestState {
   request: string
+  defaultRequest?: string
   status: TestStatus
   message?: string
   lastTool?: string
@@ -89,7 +90,7 @@ function defaultBuiltInRequest(toolName: string, cwd: string): string {
     'file.read_text': `Call file.read_text exactly once to read "${cwd}\\package.json".`,
     'file.write_text': `Call file.write_text exactly once to write "${testFile}" with content "ava unit test write ok".`,
     'file.list_dir': `Call file.list_dir exactly once to list "${cwd}".`,
-    'file.create_dir': `Call file.create_dir exactly once to create "${testDir}\\created-dir".`,
+    'file.create_dir': `Respond with exactly this one tool call and no extra tool calls: ${previewCall('file.create_dir', { path: `${testDir}\\created-dir`, allowExisting: true })}`,
     'file.stat': `Call file.stat exactly once for "${cwd}\\package.json".`,
     'file.patch': `Respond with exactly these two tool calls and no extra tool calls:\n${previewCall('file.write_text', { path: patchFile, content: 'before patch' })}\n${previewCall('file.patch', { path: patchFile, oldText: 'before', newText: 'after' })}`,
     'project.detect': `Call project.detect exactly once with cwd "${cwd}".`,
@@ -138,10 +139,19 @@ function minimalJsonForSchema(schema: unknown): unknown {
 
 function makeMcpRequest(toolName: string, schema: unknown): string {
   const args = minimalJsonForSchema(schema)
+  const call = `<tool_call>${JSON.stringify({ name: toolName, arguments: args })}</tool_call>`
+  if (toolName === 'filesystem.list_allowed_directories') {
+    return [
+      'List allowed directories for this MCP filesystem server.',
+      'Respond with exactly this one tool call and no extra tool calls:',
+      call,
+      'After the tool result, report the allowed directories briefly.',
+    ].join('\n')
+  }
   return [
-    `Call MCP tool ${toolName} exactly once.`,
-    `Use exactly these JSON arguments: ${JSON.stringify(args)}.`,
-    'Do not call any other tool.',
+    `Call MCP tool ${toolName} exactly once using this exact tool call.`,
+    'Respond with exactly this one tool call and no extra tool calls:',
+    call,
     'If the tool returns a validation or business error, report that result briefly.',
   ].join('\n')
 }
@@ -342,7 +352,18 @@ export function UnitTestView() {
       setTests(prev => {
         const next = { ...prev }
         for (const target of nextTargets) {
-          if (!next[target.id]) next[target.id] = { request: target.defaultRequest, status: 'idle' }
+          const existing = next[target.id]
+          if (!existing) {
+            next[target.id] = { request: target.defaultRequest, defaultRequest: target.defaultRequest, status: 'idle' }
+            continue
+          }
+          const wasUsingGeneratedRequest =
+            existing.defaultRequest === undefined || existing.request === existing.defaultRequest
+          next[target.id] = {
+            ...existing,
+            request: wasUsingGeneratedRequest ? target.defaultRequest : existing.request,
+            defaultRequest: target.defaultRequest,
+          }
         }
         return next
       })

@@ -24,7 +24,7 @@ export class AvaClient {
 
   constructor(options: AvaClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? 'http://127.0.0.1:17871').replace(/\/+$/, '')
-    this.fetchImpl = options.fetchImpl ?? fetch
+    this.fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init))
     this.WebSocketImpl = options.WebSocketImpl ?? (typeof WebSocket === 'undefined' ? undefined : WebSocket)
   }
 

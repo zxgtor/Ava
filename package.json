@@ -9,9 +9,13 @@
     "plugins/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=@ava/shell",
+    "dev": "node scripts/dev-control-panel.cjs",
+    "dev:desktop": "npm run dev --workspace=@ava/shell",
+    "dev:panel": "npm run dev --workspace=@ava/daemon-test-ui",
     "daemon:dev": "npm run dev --workspace=@ava/daemon",
     "daemon:runtime": "npm run runtime --workspace=@ava/daemon",
+    "daemon:test-ui": "npm run dev --workspace=@ava/daemon-test-ui",
+    "dev-control": "npm run dev --workspace=@ava/dev-control",
     "build": "npm run build --workspace=@ava/shell",
     "pack:daemon": "npm pack --workspace=@ava/daemon",
     "start": "node scripts/dev-fresh.cjs",
