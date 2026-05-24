@@ -107,12 +107,21 @@ The standalone runtime still receives provider settings and selected model
 context from the shell request via `metadata.streamChatArgs`. It is not yet a
 fully independent daemon with its own provider config loader or model router.
 
-## Phase 4: Shell Uses Node Daemon By Default
+## Phase 4: Renderer Uses Node Daemon By Default
 
 Electron shell now treats the Node daemon as the default runtime path. On app
 startup, shell checks `GET /runtime/status`; if no attached daemon is available,
 it starts `npm run daemon:runtime` in the project root and waits for
 `runtimeAttached: true`.
+
+Renderer chat calls now connect directly to daemon HTTP/SSE from preload:
+
+```text
+renderer -> preload -> daemon /chat/stream -> preload event tunnel -> renderer listeners
+```
+
+Electron IPC remains as a fallback path if the direct daemon connection cannot
+be opened before any SSE event is received.
 
 Disable this path only for debugging:
 
@@ -133,6 +142,13 @@ In daemon mode, these Electron IPC handlers proxy to daemon HTTP APIs:
 Daemon chat streaming tunnels the original `ava:llm:*` runtime events back to
 the shell, so tool blocks, part updates, status, reasoning deltas, and text
 chunks continue to render through the existing UI listeners.
+
+Disable direct renderer streaming only for debugging:
+
+```bash
+set AVA_RENDERER_DAEMON_STREAM=off
+npm start
+```
 
 ## Phase 5: Runtime Services Physically Live In Daemon
 
@@ -160,5 +176,5 @@ of the agent runtime code.
 1. Move settings/provider loading behind a daemon-owned config boundary instead of passing `metadata.streamChatArgs` from shell.
 2. Move shared progress policy out of `apps/shell/shared` into a neutral shared package.
 3. Keep Electron-specific services, such as window/DWM behavior, dialogs, tray, and auto-updater, in `apps/shell`.
-4. Replace renderer-to-Electron agent IPC with renderer-to-daemon API/SSE after the core can be imported independently.
+4. Move non-chat renderer APIs from Electron IPC proxies to direct daemon APIs where appropriate.
 5. Move MCP status push events from Electron `webContents` wiring to daemon event subscriptions.

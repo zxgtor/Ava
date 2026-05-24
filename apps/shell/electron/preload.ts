@@ -335,10 +335,223 @@ interface ToolAuditEntry {
 }
 
 // ── Event subscriptions (cleanup-aware) ─────────────────────────────
+const localListeners = new Map<string, Set<(payload: unknown) => void>>()
+const directDaemonStreams = new Map<string, AbortController>()
+
+function emitLocal<T>(channel: string, payload: T): void {
+  const listeners = localListeners.get(channel)
+  if (!listeners) return
+  for (const handler of [...listeners]) handler(payload)
+}
+
 function on<T>(channel: string, handler: (payload: T) => void): () => void {
+  const localHandler = handler as (payload: unknown) => void
+  const listeners = localListeners.get(channel) ?? new Set<(payload: unknown) => void>()
+  listeners.add(localHandler)
+  localListeners.set(channel, listeners)
+
   const listener = (_e: IpcRendererEvent, payload: T) => handler(payload)
   ipcRenderer.on(channel, listener)
-  return () => ipcRenderer.removeListener(channel, listener)
+  return () => {
+    ipcRenderer.removeListener(channel, listener)
+    listeners.delete(localHandler)
+    if (listeners.size === 0) localListeners.delete(channel)
+  }
+}
+
+function daemonBaseUrl(): string {
+  const configured = process.env.AVA_DAEMON_URL
+  if (configured) return configured.replace(/\/+$/, '')
+  const host = process.env.AVA_DAEMON_HOST || '127.0.0.1'
+  const port = process.env.AVA_DAEMON_PORT || '17871'
+  return `http://${host}:${port}`
+}
+
+function useDirectDaemonStream(): boolean {
+  const value = process.env.AVA_RENDERER_DAEMON_STREAM
+  if (value === undefined) return true
+  const normalized = value.toLowerCase()
+  return normalized !== '0' && normalized !== 'false' && normalized !== 'off'
+}
+
+function selectedProvider(args: StreamChatArgs): ModelProvider {
+  return args.providers.find(provider => provider.enabled) ?? args.providers[0]
+}
+
+function selectedModel(provider: ModelProvider): string {
+  return provider.defaultModel || provider.models[0] || 'daemon'
+}
+
+function daemonRequest(args: StreamChatArgs) {
+  const provider = selectedProvider(args)
+  const model = selectedModel(provider)
+  return {
+    runId: args.streamId,
+    providerId: provider.id,
+    model,
+    messages: args.messages.map(message => ({
+      role: message.role,
+      content: message.content,
+      taskId: message.taskId,
+      toolCallId: message.toolCallId,
+    })),
+    activeStepId: args.activeStepRequiredTools?.join(',') || undefined,
+    metadata: {
+      activeTaskId: args.activeTaskId,
+      activeFolderPath: args.activeFolderPath,
+      activeStepRole: args.activeStepRole,
+      activeStepRequiredTools: args.activeStepRequiredTools,
+      streamChatArgs: args,
+    },
+  }
+}
+
+function parseSseEvents(buffer: string): { events: Array<{ type?: string; [key: string]: unknown }>; rest: string } {
+  const events: Array<{ type?: string; [key: string]: unknown }> = []
+  let rest = buffer
+  let boundary = rest.indexOf('\n\n')
+
+  while (boundary >= 0) {
+    const rawEvent = rest.slice(0, boundary)
+    rest = rest.slice(boundary + 2)
+    boundary = rest.indexOf('\n\n')
+
+    const dataLines = rawEvent
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice('data:'.length).trimStart())
+
+    if (dataLines.length === 0) continue
+    try {
+      events.push(JSON.parse(dataLines.join('\n')) as { type?: string; [key: string]: unknown })
+    } catch {
+      // Ignore malformed SSE frames. The stream fails later if no completion arrives.
+    }
+  }
+
+  return { events, rest }
+}
+
+function applyToolPartUpdate(
+  parts: StreamChatOk['result']['parts'],
+  payload: PartUpdatePayload,
+): StreamChatOk['result']['parts'] {
+  return parts.map((part, index) => {
+    const isTarget = payload.partId
+      ? part.type === 'tool_call' && part.id === payload.partId
+      : index === payload.partIndex
+    return isTarget && part.type === 'tool_call'
+      ? { ...part, ...payload.patch } as StreamChatOk['result']['parts'][number]
+      : part
+  })
+}
+
+async function streamViaDaemonDirect(args: StreamChatArgs): Promise<StreamChatReply> {
+  const provider = selectedProvider(args)
+  const model = selectedModel(provider)
+  const controller = new AbortController()
+  let fullContent = ''
+  let parts: StreamChatOk['result']['parts'] = []
+  let completed = false
+  let failedError: string | null = null
+  let sawSseEvent = false
+
+  directDaemonStreams.set(args.streamId, controller)
+
+  try {
+    const response = await fetch(`${daemonBaseUrl()}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(daemonRequest(args)),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`Daemon chat stream failed: HTTP ${response.status}`)
+    }
+    if (!response.body) {
+      throw new Error('Daemon chat stream failed: empty response body')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    const handleEvent = (event: { type?: string; [key: string]: unknown }) => {
+      sawSseEvent = true
+      if (event.type === 'chat.ipc.event') {
+        const channel = typeof event.channel === 'string' ? event.channel : ''
+        const payload = event.payload
+        if (channel) emitLocal(channel, payload)
+
+        if (channel === 'ava:llm:chunk') {
+          const chunk = payload as ChunkPayload
+          if (chunk.streamId === args.streamId && typeof chunk.text === 'string') fullContent += chunk.text
+        } else if (channel === 'ava:llm:part') {
+          const partPayload = payload as PartPayload
+          if (partPayload.streamId === args.streamId) parts = [...parts, partPayload.part]
+        } else if (channel === 'ava:llm:partUpdate') {
+          const updatePayload = payload as PartUpdatePayload
+          if (updatePayload.streamId === args.streamId) parts = applyToolPartUpdate(parts, updatePayload)
+        }
+        return
+      }
+
+      if (event.type === 'chat.message.delta' && typeof event.delta === 'string') {
+        fullContent += event.delta
+        emitLocal('ava:llm:chunk', { streamId: args.streamId, text: event.delta })
+        return
+      }
+
+      if (event.type === 'chat.run.completed') {
+        completed = true
+        return
+      }
+
+      if (event.type === 'chat.run.failed') {
+        failedError = typeof event.error === 'string' ? event.error : 'Daemon chat stream failed.'
+      }
+    }
+
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parsed = parseSseEvents(buffer)
+      buffer = parsed.rest
+      parsed.events.forEach(handleEvent)
+    }
+
+    buffer += decoder.decode()
+    parseSseEvents(buffer).events.forEach(handleEvent)
+
+    if (failedError) return { ok: false, error: failedError }
+    if (!completed) return { ok: false, error: 'Daemon chat stream ended before chat.run.completed' }
+
+    return {
+      ok: true,
+      result: {
+        fullContent,
+        parts: parts.length > 0 ? parts : (fullContent ? [{ type: 'text', text: fullContent }] : []),
+        provider,
+        model,
+        attempts: [{ providerId: provider.id, providerName: provider.name, model, ok: true }],
+        fallbackUsed: false,
+        toolCallsIssued: parts.filter(part => part.type === 'tool_call').length,
+        loopRounds: 0,
+        detectedToolFormat: 'none',
+      },
+    }
+  } catch (error) {
+    if (!sawSseEvent) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    return { ok: false, error: message }
+  } finally {
+    directDaemonStreams.delete(args.streamId)
+  }
 }
 
 const ava = {
@@ -371,10 +584,23 @@ const ava = {
   },
 
   llm: {
-    stream: (args: StreamChatArgs): Promise<StreamChatReply> =>
-      ipcRenderer.invoke('ava:llm:stream', args),
-    abort: (streamId: string): Promise<boolean> =>
-      ipcRenderer.invoke('ava:llm:abort', streamId),
+    stream: async (args: StreamChatArgs): Promise<StreamChatReply> => {
+      if (!useDirectDaemonStream()) return ipcRenderer.invoke('ava:llm:stream', args)
+      try {
+        return await streamViaDaemonDirect(args)
+      } catch {
+        return ipcRenderer.invoke('ava:llm:stream', args)
+      }
+    },
+    abort: async (streamId: string): Promise<boolean> => {
+      const controller = directDaemonStreams.get(streamId)
+      if (controller) {
+        controller.abort()
+        directDaemonStreams.delete(streamId)
+        return true
+      }
+      return ipcRenderer.invoke('ava:llm:abort', streamId)
+    },
     probe: (args: { baseUrl: string; apiKey: string; providerId?: string }): Promise<
       { ok: true; models: string[] } | { ok: false; error: string }
     > => ipcRenderer.invoke('ava:llm:probe', args),
