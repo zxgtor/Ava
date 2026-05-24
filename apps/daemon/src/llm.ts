@@ -4,7 +4,6 @@
 // Exposes: streamChat() → emits text / tool-call parts to renderer via IPC.
 // ─────────────────────────────────────────────
 
-import type { WebContents } from 'electron'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { existsSync } from 'node:fs'
 import { mcpSupervisor, type CallToolError, type CallToolResult, type McpToolDescriptor } from './services/mcpSupervisor'
@@ -22,6 +21,7 @@ import { madeStepProgress } from './shared/agentProgressPolicy'
 import { buildCapabilityIndex, routeMcpTools, routeSkills } from './services/capabilityRouter'
 import { capabilityStats } from './services/capabilityStats'
 import { windowsEnvironmentDriver } from './services/windowsEnvironmentDriver'
+import type { RuntimeEventTarget } from './services/runtimeEventTarget'
 
 export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
@@ -1670,7 +1670,7 @@ function streamFromProvider(
 }
 
 function sendRunStatus(
-  webContents: WebContents,
+  webContents: RuntimeEventTarget,
   args: StreamChatArgs,
   provider: ModelProvider,
   model: string,
@@ -1679,16 +1679,16 @@ function sendRunStatus(
   toolRuntime.sendRunStatus(webContents, args, provider, model, phase)
 }
 
-function sendTextDelta(webContents: WebContents, args: StreamChatArgs, text: string): void {
+function sendTextDelta(webContents: RuntimeEventTarget, args: StreamChatArgs, text: string): void {
   toolRuntime.sendTextDelta(webContents, args, text)
 }
 
-function sendReasoningDelta(webContents: WebContents, args: StreamChatArgs, text: string): void {
+function sendReasoningDelta(webContents: RuntimeEventTarget, args: StreamChatArgs, text: string): void {
   toolRuntime.sendReasoningDelta(webContents, args, text)
 }
 
 async function runToolLoop(
-  webContents: WebContents,
+  webContents: RuntimeEventTarget,
   provider: ModelProvider,
   args: StreamChatArgs,
   controller: AbortController,
@@ -2351,7 +2351,7 @@ async function appendToolAudit(input: {
 }
 
 export async function streamChat(
-  webContents: WebContents,
+  webContents: RuntimeEventTarget,
   args: StreamChatArgs,
 ): Promise<StreamChatResult> {
   if (!args.providers.length) {

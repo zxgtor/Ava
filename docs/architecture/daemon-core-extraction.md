@@ -8,7 +8,8 @@ The target shape is:
 
 - `apps/shell`: desktop UI, windows, tray, Electron IPC wrapper.
 - `apps/daemon`: Ava Core Runtime.
-- `packages/contracts`: shared DTOs and stream event contracts in a later phase.
+- `packages/contracts`: shared DTOs and stream event contracts.
+- `packages/client-sdk`: stable daemon client for desktop, web, and mobile.
 
 ## Phase 1: Facade Boundary
 
@@ -182,3 +183,15 @@ of the agent runtime code.
 1. Move non-chat renderer APIs from Electron IPC proxies to direct daemon APIs where appropriate.
 2. Move MCP status push events from Electron `webContents` wiring to daemon event subscriptions.
 3. Keep Electron-specific services, such as window/DWM behavior, dialogs, tray, and auto-updater, in `apps/shell`.
+
+## Current API Boundary
+
+Daemon now exposes stable HTTP/SSE/WebSocket transport:
+
+- HTTP JSON: `/health`, `/runtime/status`, settings, MCP, plugin, tool-audit, and dev unit-test endpoints.
+- SSE: `POST /chat/stream`.
+- WebSocket: `/chat/ws`.
+
+Desktop preload uses `@ava/client-sdk` for direct daemon chat streaming. Future
+web/mobile clients should use the same SDK instead of calling shell IPC or
+daemon internals.

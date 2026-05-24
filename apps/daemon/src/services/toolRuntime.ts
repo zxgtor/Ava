@@ -1,4 +1,4 @@
-import type { WebContents } from 'electron'
+import type { RuntimeEventTarget } from './runtimeEventTarget'
 import type {
   AssistantRunPhase,
   ModelProvider,
@@ -24,13 +24,13 @@ export class ToolRuntime {
   private resolvedToolCallIds: string[] = []
   private resolvedToolCallIdSet = new Set<string>()
 
-  emit(webContents: WebContents, event: RuntimeStreamEvent): void {
+  emit(webContents: RuntimeEventTarget, event: RuntimeStreamEvent): void {
     if (webContents.isDestroyed()) return
     webContents.send('ava:llm:event', event)
   }
 
   sendRunStatus(
-    webContents: WebContents,
+    webContents: RuntimeEventTarget,
     args: StreamChatArgs,
     provider: ModelProvider,
     model: string,
@@ -49,7 +49,7 @@ export class ToolRuntime {
     this.emit(webContents, { type: 'run_status', ...payload })
   }
 
-  sendTextDelta(webContents: WebContents, args: StreamChatArgs, text: string): void {
+  sendTextDelta(webContents: RuntimeEventTarget, args: StreamChatArgs, text: string): void {
     if (webContents.isDestroyed()) return
     webContents.send('ava:llm:chunk', { streamId: args.streamId, text })
     this.emit(webContents, {
@@ -60,7 +60,7 @@ export class ToolRuntime {
     })
   }
 
-  sendReasoningDelta(webContents: WebContents, args: StreamChatArgs, text: string): void {
+  sendReasoningDelta(webContents: RuntimeEventTarget, args: StreamChatArgs, text: string): void {
     if (webContents.isDestroyed()) return
     webContents.send('ava:llm:reasoning-chunk', { streamId: args.streamId, text })
     this.emit(webContents, {
@@ -71,7 +71,7 @@ export class ToolRuntime {
     })
   }
 
-  sendToolStarted(webContents: WebContents, args: StreamChatArgs, partIndex: number, part: ToolCallPart): void {
+  sendToolStarted(webContents: RuntimeEventTarget, args: StreamChatArgs, partIndex: number, part: ToolCallPart): void {
     if (!webContents.isDestroyed()) {
       webContents.send('ava:llm:part', {
         streamId: args.streamId,
@@ -90,7 +90,7 @@ export class ToolRuntime {
   }
 
   sendToolResult(
-    webContents: WebContents,
+    webContents: RuntimeEventTarget,
     args: StreamChatArgs,
     partIndex: number,
     partId: string,
@@ -115,7 +115,7 @@ export class ToolRuntime {
     })
   }
 
-  sendError(webContents: WebContents, args: StreamChatArgs, message: string): void {
+  sendError(webContents: RuntimeEventTarget, args: StreamChatArgs, message: string): void {
     this.emit(webContents, {
       type: 'error',
       streamId: args.streamId,

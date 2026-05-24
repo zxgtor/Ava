@@ -3,32 +3,22 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
-const ts = require('typescript')
+const esbuild = require('esbuild')
 
 const root = path.resolve(__dirname, '..')
-const sourcePath = path.join(root, 'apps/shell/electron/services/builtInTools.ts')
-const runtimeEnvironmentPath = path.join(root, 'apps/shell/electron/services/runtimeEnvironment.ts')
-const processRegistryPath = path.join(root, 'apps/shell/electron/services/processRegistry.ts')
+const sourcePath = path.join(root, 'apps/daemon/src/services/builtInTools.ts')
 const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ava-builtins-compiled-'))
 const outPath = path.join(outDir, 'builtInTools.cjs')
-const runtimeEnvironmentOutPath = path.join(outDir, 'runtimeEnvironment.js')
-const processRegistryOutPath = path.join(outDir, 'processRegistry.js')
 
-function compileTsToCjs(inputPath, outputPath) {
-  const source = fs.readFileSync(inputPath, 'utf8')
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-  }).outputText
-  fs.writeFileSync(outputPath, compiled, 'utf8')
-}
-
-compileTsToCjs(runtimeEnvironmentPath, runtimeEnvironmentOutPath)
-compileTsToCjs(processRegistryPath, processRegistryOutPath)
-compileTsToCjs(sourcePath, outPath)
+esbuild.buildSync({
+  entryPoints: [sourcePath],
+  outfile: outPath,
+  bundle: true,
+  platform: 'node',
+  target: 'node20',
+  format: 'cjs',
+  external: ['@playwright/test', '@vscode/ripgrep'],
+})
 
 const { builtInTools } = require(outPath)
 
@@ -216,7 +206,7 @@ async function main() {
 
   const previewConsole = await builtInTools.callTool('preview.console', { url: dev.content.url, waitMs: 10 }, context)
   if (!previewConsole.ok) {
-    assert.match(previewConsole.error, /Electron|BrowserWindow|require/i)
+    assert.match(previewConsole.error, /playwright|browser|executable|require/i)
   }
 
   const blockedScreenshot = await builtInTools.callTool('preview.screenshot', {

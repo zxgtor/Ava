@@ -17,7 +17,7 @@ async function main() {
   }
 
   console.log(`[ava-daemon] runtime listening on ${daemon.url}`)
-  console.log('[ava-daemon] endpoints: /health, /runtime/status, /mcp/servers, /chat/stream')
+  console.log('[ava-daemon] endpoints: /health, /runtime/status, /mcp/servers, /chat/stream, /chat/ws')
 
   async function shutdown(signal: string) {
     console.log(`[ava-daemon] received ${signal}; shutting down`)
@@ -39,4 +39,3 @@ main().catch((error) => {
   console.error('[ava-daemon] failed to start runtime daemon', error)
   process.exit(1)
 })
-

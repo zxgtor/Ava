@@ -5,14 +5,16 @@
   "description": "Ava daemon core runtime facade.",
   "type": "module",
   "dependencies": {
-    "@ava/contracts": "*"
+    "@ava/contracts": "*",
+    "@playwright/test": "^1.59.1",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   },
   "scripts": {
-    "build:runtime": "esbuild src/runtimeMain.ts --bundle --platform=node --target=node20 --format=cjs --outfile=out/runtimeMain.cjs --external:electron",
+    "build:runtime": "esbuild src/runtimeMain.ts --bundle --platform=node --target=node20 --format=cjs --outfile=out/runtimeMain.cjs --external:@playwright/test --external:ws",
     "dev": "node src/main.mjs",
     "runtime": "npm run build:runtime && node out/runtimeMain.cjs",
     "start": "node src/main.mjs"

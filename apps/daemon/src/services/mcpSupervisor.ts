@@ -12,7 +12,7 @@
 import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
-import type { WebContents } from 'electron'
+import type { RuntimeEventTarget } from './runtimeEventTarget'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -148,11 +148,11 @@ function buildSpawnArgs(config: McpServerConfig): { args: string[]; missingWhite
 
 export class McpSupervisor extends EventEmitter {
   private entries = new Map<string, Entry>()
-  /** Where we broadcast `ava:mcp:status` payloads; set by wire(webContents). */
-  private broadcastTarget: WebContents | null = null
+  /** Where we broadcast `ava:mcp:status` payloads; set by wire(target). */
+  private broadcastTarget: RuntimeEventTarget | null = null
 
-  wire(webContents: WebContents): void {
-    this.broadcastTarget = webContents
+  wire(target: RuntimeEventTarget): void {
+    this.broadcastTarget = target
   }
 
   listServers(): McpServerRuntime[] {

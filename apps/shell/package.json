@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@ava/contracts": "*",
+    "@ava/client-sdk": "*",
     "@ava/mcp": "*",
     "@ava/plugin-sdk": "*",
     "@electron-toolkit/utils": "^3.0.0",

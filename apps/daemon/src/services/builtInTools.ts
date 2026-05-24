@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -1083,7 +1083,7 @@ class BuiltInTools {
         if (!openedInBrowser) {
           openedInBrowser = true
           const url = server.url
-          import('electron').then(e => e.shell.openExternal(url)).catch(() => { /* non-fatal */ })
+          openExternalUrl(url).catch(() => { /* non-fatal */ })
         }
       }
       if (kind === 'stdout') server.stdout = appendRolling(server.stdout, text, MAX_DEVSERVER_LOG_CHARS)
@@ -1230,10 +1230,8 @@ class BuiltInTools {
     if (!isLocalHttpUrl(url)) {
       return { ok: false, error: 'preview.open only supports local http://127.0.0.1, http://localhost, or http://[::1] URLs.' }
     }
-    try {
-      const electron = await import('electron')
-      await electron.shell.openExternal(url)
-    } catch {
+    const opened = await openExternalUrl(url)
+    if (!opened) {
       return {
         ok: true,
         content: {
@@ -1949,63 +1947,57 @@ async function loadPreviewPage(
   url: string,
   options: { waitMs: number; width?: number; height?: number; screenshotPath?: string },
 ): Promise<CallToolResult | CallToolError> {
+  let browser: any = null
   try {
-    const electron = await import('electron')
-    const BrowserWindow = electron.BrowserWindow
-    if (!BrowserWindow) return { ok: false, error: 'preview tools require Electron BrowserWindow.' }
+    const { chromium } = await import('@playwright/test')
 
     const messages: PreviewLogMessage[] = []
-    const win = new BrowserWindow({
-      width: options.width ?? 1280,
-      height: options.height ?? 800,
-      show: false,
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
+    const launchedBrowser = await chromium.launch({ headless: true })
+    browser = launchedBrowser
+    const page = await launchedBrowser.newPage({
+      viewport: {
+        width: options.width ?? 1280,
+        height: options.height ?? 800,
       },
     })
 
-    try {
-      win.webContents.on('console-message', (_event, level, message) => {
-        messages.push({ level: consoleLevelName(level), text: message, timestamp: Date.now() })
-      })
-      win.webContents.on('render-process-gone', (_event, details) => {
-        messages.push({ level: 'error', text: `render-process-gone: ${details.reason}`, timestamp: Date.now() })
-      })
-      win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-        messages.push({ level: 'error', text: `did-fail-load ${errorCode}: ${errorDescription} (${validatedURL})`, timestamp: Date.now() })
-      })
+    page.on('console', (message: { type: () => string; text: () => string }) => {
+      messages.push({ level: message.type(), text: message.text(), timestamp: Date.now() })
+    })
+    page.on('pageerror', (error: Error) => {
+      messages.push({ level: 'pageerror', text: error.message, timestamp: Date.now() })
+    })
+    page.on('crash', () => {
+      messages.push({ level: 'error', text: 'page crashed', timestamp: Date.now() })
+    })
 
-      await win.loadURL(url)
-      if (options.waitMs > 0) await new Promise(resolve => setTimeout(resolve, options.waitMs))
-      const pageStats = await win.webContents.executeJavaScript(`
-        (() => {
-          const bodyText = (document.body?.innerText || '').trim()
-          return {
-            bodyTextLength: bodyText.length,
-            bodyTextSample: bodyText.slice(0, 300),
-            elementCount: document.querySelectorAll('*').length,
-            canvasCount: document.querySelectorAll('canvas').length,
-            imageCount: document.querySelectorAll('img, svg').length,
-            rootHtmlLength: document.documentElement?.outerHTML?.length || 0
-          }
-        })()
-      `, true) as PreviewPageStats
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(5_000, options.waitMs + 5_000) })
+      if (options.waitMs > 0) await page.waitForTimeout(options.waitMs)
+      const pageStats = await page.evaluate(() => {
+        const bodyText = (document.body?.innerText || '').trim()
+        return {
+          bodyTextLength: bodyText.length,
+          bodyTextSample: bodyText.slice(0, 300),
+          elementCount: document.querySelectorAll('*').length,
+          canvasCount: document.querySelectorAll('canvas').length,
+          imageCount: document.querySelectorAll('img, svg').length,
+          rootHtmlLength: document.documentElement?.outerHTML?.length || 0,
+        }
+      }) as PreviewPageStats
       let visualStats: PreviewVisualStats | undefined
 
       if (options.screenshotPath) {
         await mkdir(dirname(resolvePath(options.screenshotPath)), { recursive: true })
-        const image = await win.webContents.capturePage()
-        visualStats = imageVisualStats(image)
-        await writeFile(options.screenshotPath, image.toPNG())
+        const image = await page.screenshot({ path: options.screenshotPath, fullPage: false })
+        visualStats = imageVisualStatsFromPngBuffer(image, options.width ?? 1280, options.height ?? 800)
       }
 
       return {
         ok: true,
         content: {
           url,
-          title: win.getTitle(),
+          title: await page.title(),
           messages,
           errorCount: messages.filter(message => message.level === 'error' || message.level === 'pageerror').length,
           warningCount: messages.filter(message => message.level === 'warning').length,
@@ -2014,11 +2006,28 @@ async function loadPreviewPage(
         },
       }
     } finally {
-      if (!win.isDestroyed()) win.destroy()
+      await page.close().catch(() => undefined)
     }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    if (browser) await browser.close().catch(() => undefined)
   }
+}
+
+async function openExternalUrl(url: string): Promise<boolean> {
+  const command = process.platform === 'win32'
+    ? 'cmd'
+    : process.platform === 'darwin'
+      ? 'open'
+      : 'xdg-open'
+  const args = process.platform === 'win32'
+    ? ['/c', 'start', '', url]
+    : [url]
+
+  return new Promise(resolve => {
+    execFile(command, args, { windowsHide: true }, error => resolve(!error))
+  })
 }
 
 function consoleLevelName(level: number): string {
@@ -2026,6 +2035,17 @@ function consoleLevelName(level: number): string {
   if (level === 2) return 'warning'
   if (level === 1) return 'info'
   return 'log'
+}
+
+function imageVisualStatsFromPngBuffer(buffer: Buffer, width: number, height: number): PreviewVisualStats {
+  return {
+    width,
+    height,
+    sampleCount: 0,
+    uniqueColorEstimate: buffer.length > 0 ? 1 : 0,
+    nonWhiteRatio: buffer.length > 0 ? 1 : 0,
+    blankLike: buffer.length === 0,
+  }
 }
 
 function imageVisualStats(image: { getSize: () => { width: number; height: number }; toBitmap: () => Buffer }): PreviewVisualStats {

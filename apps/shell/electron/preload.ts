@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+import { AvaClient } from '@ava/client-sdk'
 
 /**
  * `window.ava` — renderer-facing API surface.
@@ -409,32 +410,6 @@ function daemonRequest(args: StreamChatArgs) {
   }
 }
 
-function parseSseEvents(buffer: string): { events: Array<{ type?: string; [key: string]: unknown }>; rest: string } {
-  const events: Array<{ type?: string; [key: string]: unknown }> = []
-  let rest = buffer
-  let boundary = rest.indexOf('\n\n')
-
-  while (boundary >= 0) {
-    const rawEvent = rest.slice(0, boundary)
-    rest = rest.slice(boundary + 2)
-    boundary = rest.indexOf('\n\n')
-
-    const dataLines = rawEvent
-      .split(/\r?\n/)
-      .filter(line => line.startsWith('data:'))
-      .map(line => line.slice('data:'.length).trimStart())
-
-    if (dataLines.length === 0) continue
-    try {
-      events.push(JSON.parse(dataLines.join('\n')) as { type?: string; [key: string]: unknown })
-    } catch {
-      // Ignore malformed SSE frames. The stream fails later if no completion arrives.
-    }
-  }
-
-  return { events, rest }
-}
-
 function applyToolPartUpdate(
   parts: StreamChatOk['result']['parts'],
   payload: PartUpdatePayload,
@@ -464,26 +439,7 @@ async function streamViaDaemonDirect(args: StreamChatArgs): Promise<StreamChatRe
   directDaemonStreams.set(args.streamId, controller)
 
   try {
-    const response = await fetch(`${daemonBaseUrl()}/chat/stream`, {
-      method: 'POST',
-      headers: {
-        Accept: 'text/event-stream',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(daemonRequest(args)),
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      throw new Error(`Daemon chat stream failed: HTTP ${response.status}`)
-    }
-    if (!response.body) {
-      throw new Error('Daemon chat stream failed: empty response body')
-    }
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
+    const client = new AvaClient({ baseUrl: daemonBaseUrl() })
 
     const handleEvent = (event: { type?: string; [key: string]: unknown }) => {
       sawSseEvent = true
@@ -533,17 +489,11 @@ async function streamViaDaemonDirect(args: StreamChatArgs): Promise<StreamChatRe
       }
     }
 
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const parsed = parseSseEvents(buffer)
-      buffer = parsed.rest
-      parsed.events.forEach(handleEvent)
-    }
-
-    buffer += decoder.decode()
-    parseSseEvents(buffer).events.forEach(handleEvent)
+    await client.streamChatEvents({
+      request: daemonRequest(args),
+      signal: controller.signal,
+      onEvent: handleEvent,
+    })
 
     if (failedError) return { ok: false, error: failedError }
     if (!completed) return { ok: false, error: 'Daemon chat stream ended before chat.run.completed' }

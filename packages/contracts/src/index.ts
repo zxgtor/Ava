@@ -56,6 +56,87 @@ export type AvaChatStreamRequest = {
   metadata?: Record<string, unknown>
 }
 
+export type AvaApiOk<T> = {
+  ok: true
+  result: T
+}
+
+export type AvaApiErr = {
+  ok: false
+  error: string
+  runtimeAttached?: boolean
+}
+
+export type AvaApiResponse<T> = AvaApiOk<T> | AvaApiErr
+
+export type AvaDaemonStatus = {
+  ok: true
+  service: 'ava-daemon'
+  version: string
+  pid: number
+  uptimeMs: number
+  cwd: string
+  platform: string
+  arch: string
+  node: string
+  runtimeAttached: boolean
+}
+
+export type AvaDaemonApiPath =
+  | '/health'
+  | '/runtime/status'
+  | '/settings/load'
+  | '/settings/save'
+  | '/mcp/servers'
+  | '/mcp/restart'
+  | '/chat/stream'
+  | '/chat/ws'
+
+export type AvaDaemonStreamOptions = {
+  streamId: string
+  activeTaskId?: string
+  activeFolderPath?: string
+  taskAllowedDirs?: string[]
+  activeCommandInvocation?: unknown
+  temperature?: number
+  activeStepRequiredTools?: string[]
+  activeStepRole?: 'inspect' | 'scaffold' | 'install' | 'feature' | 'preview' | 'console' | 'screenshot' | 'repair' | 'validate' | 'final_report'
+  activeStepToolLoopBudget?: number
+  finalReportReadBudget?: number
+}
+
+export type AvaDaemonChatRequest = Omit<AvaChatStreamRequest, 'metadata'> & {
+  metadata?: {
+    streamOptions?: AvaDaemonStreamOptions
+    /** Compatibility only. New clients should let daemon load config/model routing. */
+    streamChatArgs?: unknown
+    [key: string]: unknown
+  }
+}
+
+export type AvaMcpServerStatus = 'stopped' | 'starting' | 'running' | 'error'
+
+export type AvaMcpToolDescriptor = {
+  rawName: string
+  name: string
+  description?: string
+  inputSchema?: unknown
+}
+
+export type AvaMcpServerRuntime = {
+  id: string
+  name: string
+  enabled: boolean
+  allowedDirs?: string[]
+  builtin?: boolean
+  pluginId?: string
+  status: AvaMcpServerStatus
+  pid?: number
+  tools?: AvaMcpToolDescriptor[]
+  lastError?: string
+  startedAt?: number
+}
+
 export type AvaChatRunStartedEvent = {
   type: 'chat.run.started'
   runId: string

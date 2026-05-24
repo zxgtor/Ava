@@ -1,5 +1,6 @@
 import http from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { WebSocketServer } from 'ws'
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 17871
@@ -51,6 +52,12 @@ function emptyResponse(res, statusCode) {
 function writeSseEvent(res, event) {
   res.write(`event: ${event.type}\n`)
   res.write(`data: ${JSON.stringify(event)}\n\n`)
+}
+
+function writeWsEvent(ws, event) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify(event))
+  }
 }
 
 function readJsonBody(req) {
@@ -206,6 +213,74 @@ async function streamRuntimeChatResponse(res, request, runtime) {
   }
 }
 
+async function streamRuntimeChatWebSocket(ws, request, runtime) {
+  let terminalEventSent = false
+  const runId = typeof request?.runId === 'string' ? request.runId : randomUUID()
+
+  const emit = (event) => {
+    if (event?.type === 'chat.run.completed' || event?.type === 'chat.run.failed') {
+      terminalEventSent = true
+    }
+    writeWsEvent(ws, event)
+  }
+
+  try {
+    if (runtime?.streamChat) {
+      await runtime.streamChat(request, emit)
+      if (!terminalEventSent) {
+        emit({
+          type: 'chat.run.completed',
+          runId,
+          phase: 'completed',
+          timestamp: new Date().toISOString(),
+        })
+      }
+    } else {
+      const timestamp = new Date().toISOString()
+      const userText = getLastUserText(request?.messages)
+      const preview = userText ? ` Request preview: ${userText.slice(0, 120)}` : ''
+      const content = `Daemon chat WebSocket is reachable. Runtime migration is not attached yet.${preview}`
+      emit({
+        type: 'chat.run.started',
+        runId,
+        phase: 'running',
+        timestamp,
+        runtimeAttached: false,
+      })
+      emit({
+        type: 'chat.message.delta',
+        runId,
+        delta: content,
+      })
+      emit({
+        type: 'chat.message.completed',
+        runId,
+        message: {
+          role: 'assistant',
+          content,
+          createdAt: new Date().toISOString(),
+        },
+      })
+      emit({
+        type: 'chat.run.completed',
+        runId,
+        phase: 'completed',
+        timestamp: new Date().toISOString(),
+      })
+    }
+  } catch (error) {
+    emit({
+      type: 'chat.run.failed',
+      runId,
+      phase: 'failed',
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    })
+  } finally {
+    ws.close()
+  }
+}
+
 async function routeRequest(req, res, runtime) {
   if (req.method === 'OPTIONS') {
     emptyResponse(res, 204)
@@ -240,14 +315,7 @@ async function routeRequest(req, res, runtime) {
       return
     }
 
-    jsonResponse(res, 200, {
-      ok: true,
-      servers: [],
-      runtimeAttached: Boolean(runtime),
-      note: runtime
-        ? 'Runtime is attached through the embedded daemon bridge. MCP supervision still lives in Electron main until migration.'
-        : 'MCP supervisor still runs inside Electron main until the runtime migration step.',
-    })
+    jsonResponse(res, 200, { ok: true, result: [] })
     return
   }
 
@@ -398,6 +466,37 @@ export function startDaemonServer(options = {}) {
       })
     })
   })
+  const wss = new WebSocketServer({ noServer: true })
+
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? DEFAULT_HOST}`)
+    if (url.pathname !== '/chat/ws') {
+      socket.destroy()
+      return
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req)
+    })
+  })
+
+  wss.on('connection', (ws) => {
+    ws.once('message', (raw) => {
+      try {
+        const request = JSON.parse(raw.toString())
+        void streamRuntimeChatWebSocket(ws, request, runtime)
+      } catch (error) {
+        writeWsEvent(ws, {
+          type: 'chat.run.failed',
+          runId: randomUUID(),
+          phase: 'failed',
+          timestamp: new Date().toISOString(),
+          error: error instanceof Error ? error.message : 'invalid_json_body',
+        })
+        ws.close()
+      }
+    })
+  })
 
   return new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -409,6 +508,7 @@ export function startDaemonServer(options = {}) {
         server,
         url: `http://${host}:${port}`,
         close: () => new Promise((closeResolve, closeReject) => {
+          wss.close()
           server.close((error) => {
             if (error) closeReject(error)
             else closeResolve()

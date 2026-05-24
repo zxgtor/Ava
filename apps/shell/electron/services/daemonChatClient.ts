@@ -1,5 +1,6 @@
 import type { WebContents } from 'electron'
-import type { AvaChatStreamEvent, AvaChatStreamRequest } from '@ava/contracts'
+import { AvaClient } from '@ava/client-sdk'
+import type { AvaChatStreamEvent, AvaDaemonChatRequest } from '@ava/contracts'
 import type { ModelProvider, StreamChatArgs, StreamChatResult } from '../llm'
 import { toolRuntime } from './toolRuntime'
 
@@ -50,7 +51,7 @@ function selectedModel(provider: ModelProvider): string {
   return provider.defaultModel || provider.models[0] || 'daemon'
 }
 
-function buildDaemonRequest(args: StreamChatArgs, provider: ModelProvider, model: string): AvaChatStreamRequest {
+function buildDaemonRequest(args: StreamChatArgs, provider: ModelProvider, model: string): AvaDaemonChatRequest {
   return {
     runId: args.streamId,
     providerId: provider.id,
@@ -70,34 +71,6 @@ function buildDaemonRequest(args: StreamChatArgs, provider: ModelProvider, model
       streamChatArgs: args,
     },
   }
-}
-
-function parseSseEvents(buffer: string): { events: AvaChatStreamEvent[]; rest: string } {
-  const events: AvaChatStreamEvent[] = []
-  let rest = buffer
-  let boundary = rest.indexOf('\n\n')
-
-  while (boundary >= 0) {
-    const rawEvent = rest.slice(0, boundary)
-    rest = rest.slice(boundary + 2)
-    boundary = rest.indexOf('\n\n')
-
-    const dataLines = rawEvent
-      .split(/\r?\n/)
-      .filter(line => line.startsWith('data:'))
-      .map(line => line.slice('data:'.length).trimStart())
-
-    if (dataLines.length === 0) continue
-
-    try {
-      events.push(JSON.parse(dataLines.join('\n')) as AvaChatStreamEvent)
-    } catch {
-      // Ignore malformed SSE frames; the final result fails if no completion
-      // event arrives.
-    }
-  }
-
-  return { events, rest }
 }
 
 function emitDaemonEvent(
@@ -150,7 +123,7 @@ export async function streamChatThroughDaemon(
   const model = selectedModel(provider)
   const controller = new AbortController()
   const request = buildDaemonRequest(args, provider, model)
-  const url = `${daemonBaseUrl()}/chat/stream`
+  const client = new AvaClient({ baseUrl: daemonBaseUrl() })
   let fullContent = ''
   let completed = false
 
@@ -158,51 +131,16 @@ export async function streamChatThroughDaemon(
   toolRuntime.sendRunStatus(webContents, args, provider, model, 'connecting')
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Accept: 'text/event-stream',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request),
+    await client.streamChatEvents({
+      request,
       signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      throw new Error(`Daemon chat stream failed: HTTP ${response.status}`)
-    }
-    if (!response.body) {
-      throw new Error('Daemon chat stream failed: empty response body')
-    }
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const parsed = parseSseEvents(buffer)
-      buffer = parsed.rest
-
-      for (const event of parsed.events) {
+      onEvent: (event) => {
         const result = emitDaemonEvent(webContents, args, provider, model, event)
         if (result.textDelta) fullContent += result.textDelta
         if (result.completed) completed = true
         if (result.failedError) throw new Error(result.failedError)
-      }
-    }
-
-    buffer += decoder.decode()
-    const parsed = parseSseEvents(buffer)
-    for (const event of parsed.events) {
-      const result = emitDaemonEvent(webContents, args, provider, model, event)
-      if (result.textDelta) fullContent += result.textDelta
-      if (result.completed) completed = true
-      if (result.failedError) throw new Error(result.failedError)
-    }
+      },
+    })
 
     if (!completed) {
       throw new Error('Daemon chat stream ended before chat.run.completed')
