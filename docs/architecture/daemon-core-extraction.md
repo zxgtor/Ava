@@ -58,10 +58,16 @@ Available endpoints:
 - `GET /health`
 - `GET /runtime/status`
 - `GET /mcp/servers`
+- `GET /chat/stream`
+- `POST /chat/stream`
 
 `/mcp/servers` intentionally reports an unattached runtime for now. The MCP
 supervisor still runs inside Electron main until a later migration moves the
 runtime services behind the daemon boundary.
+
+`/chat/stream` returns Server-Sent Events using the shared `@ava/contracts`
+event names. It is a mock stream in this phase and does not call providers,
+tools, MCP, or the current agent loop yet.
 
 ## Next Safe Steps
 

@@ -17,6 +17,7 @@
     "dist": "npm run bundle:knowledge && electron-vite build && electron-builder"
   },
   "dependencies": {
+    "@ava/contracts": "*",
     "@ava/mcp": "*",
     "@ava/plugin-sdk": "*",
     "@electron-toolkit/utils": "^3.0.0",

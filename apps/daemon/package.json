@@ -4,6 +4,9 @@
   "private": true,
   "description": "Ava daemon core runtime facade.",
   "type": "module",
+  "dependencies": {
+    "@ava/contracts": "*"
+  },
   "scripts": {
     "dev": "node src/main.mjs",
     "start": "node src/main.mjs"
