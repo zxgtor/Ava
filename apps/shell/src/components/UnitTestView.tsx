@@ -48,6 +48,13 @@ interface LlmPreflightResult {
   error?: string
 }
 
+interface DaemonTestRequest {
+  method: 'GET' | 'POST'
+  url: string
+  body?: unknown
+  expectEventTypes?: string[]
+}
+
 function defaultBuiltInRequest(toolName: string, cwd: string): string {
   const testDir = `${cwd}\\.ava-unit-test`
   const testFile = `${testDir}\\tool-write.txt`
@@ -142,6 +149,81 @@ function makeSkillRequest(skillName: string, pluginName: string): string {
   return `Use enabled skill "${skillName}" from plugin "${pluginName}" and answer with one concise sentence describing what this skill is for.`
 }
 
+function makeDaemonTargets(baseUrl: string, chatRuntimeEnabled: boolean): TestTarget[] {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
+  const request = (value: DaemonTestRequest) => JSON.stringify(value, null, 2)
+  return [
+    {
+      id: 'daemon:health',
+      kind: 'daemon',
+      name: 'daemon.health',
+      label: 'daemon.health',
+      meta: normalizedBaseUrl,
+      description: 'GET /health should return ok=true and service=ava-daemon.',
+      defaultRequest: request({ method: 'GET', url: `${normalizedBaseUrl}/health` }),
+    },
+    {
+      id: 'daemon:runtime-status',
+      kind: 'daemon',
+      name: 'daemon.runtime.status',
+      label: 'daemon.runtime.status',
+      meta: normalizedBaseUrl,
+      description: 'GET /runtime/status should return daemon process/runtime status.',
+      defaultRequest: request({ method: 'GET', url: `${normalizedBaseUrl}/runtime/status` }),
+    },
+    {
+      id: 'daemon:mcp-servers',
+      kind: 'daemon',
+      name: 'daemon.mcp.servers',
+      label: 'daemon.mcp.servers',
+      meta: normalizedBaseUrl,
+      description: 'GET /mcp/servers should return a valid daemon response, even before MCP is migrated.',
+      defaultRequest: request({ method: 'GET', url: `${normalizedBaseUrl}/mcp/servers` }),
+    },
+    {
+      id: 'daemon:chat-stream',
+      kind: 'daemon',
+      name: 'daemon.chat.stream',
+      label: 'daemon.chat.stream',
+      meta: chatRuntimeEnabled ? 'seam enabled' : 'seam disabled',
+      description: 'POST /chat/stream should return a complete SSE event sequence.',
+      defaultRequest: request({
+        method: 'POST',
+        url: `${normalizedBaseUrl}/chat/stream`,
+        body: {
+          messages: [
+            { role: 'user', content: 'hello daemon unit test' },
+          ],
+        },
+        expectEventTypes: [
+          'chat.run.started',
+          'chat.message.delta',
+          'chat.message.completed',
+          'chat.run.completed',
+        ],
+      }),
+    },
+  ]
+}
+
+function parseDaemonRequest(text: string): DaemonTestRequest {
+  const parsed = JSON.parse(text) as DaemonTestRequest
+  if (parsed.method !== 'GET' && parsed.method !== 'POST') {
+    throw new Error('Daemon request method must be GET or POST.')
+  }
+  if (!parsed.url || typeof parsed.url !== 'string') {
+    throw new Error('Daemon request url is required.')
+  }
+  return parsed
+}
+
+function parseSseEventTypes(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .filter(line => line.startsWith('event:'))
+    .map(line => line.slice('event:'.length).trim())
+}
+
 function statusIcon(status: TestStatus) {
   if (status === 'passed') return <CheckCircle2 size={15} className="text-success" />
   if (status === 'failed') return <XCircle size={15} className="text-error" />
@@ -207,7 +289,11 @@ export function UnitTestView() {
         description: skill.sourcePath,
         defaultRequest: makeSkillRequest(skill.name, skill.pluginName),
       }))
-      const nextTargets = [...builtIns, ...mcp, ...skills]
+      const daemon = makeDaemonTargets(
+        context.daemon?.baseUrl ?? 'http://127.0.0.1:17871',
+        Boolean(context.daemon?.chatRuntimeEnabled),
+      )
+      const nextTargets = [...builtIns, ...mcp, ...skills, ...daemon]
       setTargets(nextTargets)
       setTests(prev => {
         const next = { ...prev }
@@ -290,28 +376,119 @@ export function UnitTestView() {
     })
   }
 
+  const writeLog = (entry: UnitTestLogEntry) => {
+    try {
+      const devApi = window.ava.dev as typeof window.ava.dev & {
+        appendUnitTestResult?: (entry: UnitTestLogEntry) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
+      }
+      if (typeof devApi.appendUnitTestResult !== 'function') {
+        console.warn('[unit-test] log API unavailable; restart Ava to enable persistent logs')
+        return
+      }
+      devApi.appendUnitTestResult(entry).catch(err => {
+        console.warn('[unit-test] failed to write log:', err)
+      })
+    } catch (err) {
+      console.warn('[unit-test] failed to schedule log write:', err)
+    }
+  }
+
+  const runDaemonTarget = async (target: TestTarget) => {
+    const requestText = tests[target.id]?.request || target.defaultRequest
+    const startedAt = Date.now()
+    setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'running', message: 'Calling daemon...' } }))
+
+    try {
+      const request = parseDaemonRequest(requestText)
+      const response = await fetch(request.url, {
+        method: request.method,
+        headers: request.method === 'POST'
+          ? { Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json' }
+          : { Accept: 'application/json, text/event-stream' },
+        body: request.method === 'POST' ? JSON.stringify(request.body ?? {}) : undefined,
+      })
+      const text = await response.text()
+      const durationMs = Date.now() - startedAt
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`)
+      }
+
+      const contentType = response.headers.get('content-type') ?? ''
+      let passed = true
+      let message = `Passed in ${durationMs}ms`
+      let fullContent = text
+
+      if (contentType.includes('text/event-stream')) {
+        const eventTypes = parseSseEventTypes(text)
+        const missing = (request.expectEventTypes ?? []).filter(type => !eventTypes.includes(type))
+        passed = missing.length === 0
+        message = passed
+          ? `Passed in ${durationMs}ms; events: ${eventTypes.join(', ')}`
+          : `Missing SSE events: ${missing.join(', ')}`
+      } else {
+        const json = JSON.parse(text) as { ok?: boolean; service?: string; runtimeAttached?: boolean }
+        passed = json.ok === true
+        message = passed
+          ? `Passed in ${durationMs}ms; ok=true${json.runtimeAttached === false ? '; runtimeAttached=false' : ''}`
+          : `Daemon returned ok=false: ${text.slice(0, 300)}`
+        fullContent = JSON.stringify(json, null, 2)
+      }
+
+      setTests(prev => ({
+        ...prev,
+        [target.id]: {
+          request: requestText,
+          status: passed ? 'passed' : 'failed',
+          message,
+          durationMs,
+          lastTool: target.name,
+        },
+      }))
+      writeLog({
+        id: target.id,
+        kind: target.kind,
+        name: target.name,
+        status: passed ? 'passed' : 'failed',
+        message,
+        durationMs,
+        request: requestText,
+        fullContent,
+      })
+    } catch (err) {
+      const durationMs = Date.now() - startedAt
+      const message = err instanceof Error ? err.message : String(err)
+      setTests(prev => ({
+        ...prev,
+        [target.id]: {
+          request: requestText,
+          status: 'failed',
+          message,
+          durationMs,
+        },
+      }))
+      writeLog({
+        id: target.id,
+        kind: target.kind,
+        name: target.name,
+        status: 'failed',
+        message,
+        durationMs,
+        request: requestText,
+      })
+    }
+  }
+
   const runTarget = async (target: TestTarget, options: { skipPreflight?: boolean } = {}) => {
+    if (target.kind === 'daemon') {
+      await runDaemonTarget(target)
+      return
+    }
+
     const request = tests[target.id]?.request || target.defaultRequest
     const startedAt = Date.now()
     const streamId = `ut_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const parts: any[] = []
-
-    const writeLog = (entry: UnitTestLogEntry) => {
-      try {
-        const devApi = window.ava.dev as typeof window.ava.dev & {
-          appendUnitTestResult?: (entry: UnitTestLogEntry) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
-        }
-        if (typeof devApi.appendUnitTestResult !== 'function') {
-          console.warn('[unit-test] log API unavailable; restart Ava to enable persistent logs')
-          return
-        }
-        devApi.appendUnitTestResult(entry).catch(err => {
-          console.warn('[unit-test] failed to write log:', err)
-        })
-      } catch (err) {
-        console.warn('[unit-test] failed to schedule log write:', err)
-      }
-    }
 
     const failBeforeStream = (message: string) => {
       const durationMs = Date.now() - startedAt
@@ -462,6 +639,14 @@ export function UnitTestView() {
 
   const runVisibleTargets = async () => {
     setError(null)
+    if (kind === 'daemon') {
+      for (const target of visibleTargets) {
+        setSelectedId(target.id)
+        await runDaemonTarget(target)
+      }
+      return
+    }
+
     const preflight = await checkLlmAvailable()
     if (!preflight.ok) {
       const message = preflight.error ?? 'LLM server unavailable.'

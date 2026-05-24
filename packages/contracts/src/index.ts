@@ -7,6 +7,13 @@ export type AvaChatTextPart = {
   text: string
 }
 
+export type AvaChatImageUrlPart = {
+  type: 'image_url'
+  image_url: {
+    url: string
+  }
+}
+
 export type AvaChatToolCallPart = {
   type: 'tool_call'
   id: string
@@ -23,12 +30,18 @@ export type AvaChatToolResultPart = {
   error?: string
 }
 
-export type AvaChatContentPart = AvaChatTextPart | AvaChatToolCallPart | AvaChatToolResultPart
+export type AvaChatContentPart =
+  | AvaChatTextPart
+  | AvaChatImageUrlPart
+  | AvaChatToolCallPart
+  | AvaChatToolResultPart
 
 export type AvaChatMessage = {
   id?: string
   role: AvaChatRole
   content: string | AvaChatContentPart[]
+  taskId?: string
+  toolCallId?: string
   createdAt?: string
 }
 

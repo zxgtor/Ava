@@ -5,7 +5,7 @@ import {
   ListFilter, Plus, User, Palette, GitBranch, Server, ClipboardList,
   Store, Puzzle, Mic, Info, Brain, ArrowLeft,
   CirclePlus, RefreshCw, MessageCircle, ArchiveRestore,
-  FlaskConical, Wrench,
+  FlaskConical, Wrench, Activity,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
@@ -50,6 +50,7 @@ const UNIT_TEST_CATEGORIES: Array<{ id: UnitTestSection; label: string; icon: an
   { id: 'built-in', label: 'Built-in Tools', icon: Wrench },
   { id: 'mcp', label: 'MCP Tools', icon: Server },
   { id: 'skill', label: 'Skills', icon: Puzzle },
+  { id: 'daemon', label: 'Daemon', icon: Activity },
 ]
 
 export function ConversationSidebar() {

@@ -69,6 +69,11 @@ runtime services behind the daemon boundary.
 event names. It is a mock stream in this phase and does not call providers,
 tools, MCP, or the current agent loop yet.
 
+Electron main has an optional daemon client seam. Set
+`AVA_CHAT_RUNTIME=daemon` or `AVA_USE_DAEMON_CHAT=1` to route
+`ava:llm:stream` through the daemon SSE endpoint. By default, shell still uses
+the existing in-process `streamChat()` runtime.
+
 ## Next Safe Steps
 
 1. Move pure/shared runtime types into `packages/contracts`.

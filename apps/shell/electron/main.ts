@@ -27,6 +27,12 @@ import {
   type StreamChatArgs,
 } from '@ava/daemon'
 import { applyWin11RoundedCorners } from './services/dwmCorners'
+import {
+  abortDaemonChatStream,
+  daemonBaseUrl,
+  shouldUseDaemonChat,
+  streamChatThroughDaemon,
+} from './services/daemonChatClient'
 
 const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
@@ -438,7 +444,9 @@ function registerIpc(): void {
   // ── LLM streaming ───────────────────────────
   ipcMain.handle('ava:llm:stream', async (event, args: StreamChatArgs) => {
     try {
-      const result = await streamChat(event.sender, args)
+      const result = shouldUseDaemonChat()
+        ? await streamChatThroughDaemon(event.sender, args)
+        : await streamChat(event.sender, args)
       return { ok: true as const, result }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -446,7 +454,9 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('ava:llm:abort', (_e, streamId: string) => abortStream(streamId))
+  ipcMain.handle('ava:llm:abort', (_e, streamId: string) =>
+    abortDaemonChatStream(streamId) || abortStream(streamId),
+  )
 
   // ── MCP runtime ─────────────────────────────
   ipcMain.handle('ava:mcp:listServers', () => mcpSupervisor.listServers())
@@ -461,6 +471,10 @@ function registerIpc(): void {
       return {
         isDev: false,
         cwd: process.cwd(),
+        daemon: {
+          baseUrl: daemonBaseUrl(),
+          chatRuntimeEnabled: shouldUseDaemonChat(),
+        },
         builtInTools: [],
         mcpTools: [],
         skills: [],
@@ -474,6 +488,10 @@ function registerIpc(): void {
       isDev: true,
       cwd: testWorkspace,
       logPath: join(testWorkspace, UNIT_TEST_RESULTS_FILE),
+      daemon: {
+        baseUrl: daemonBaseUrl(),
+        chatRuntimeEnabled: shouldUseDaemonChat(),
+      },
       builtInTools: builtInTools.listTools(),
       mcpTools: servers.flatMap(server =>
         (server.tools ?? []).map(tool => ({

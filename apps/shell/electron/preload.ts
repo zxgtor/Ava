@@ -180,6 +180,10 @@ interface UnitTestContext {
   isDev: boolean
   cwd: string
   logPath?: string
+  daemon?: {
+    baseUrl: string
+    chatRuntimeEnabled: boolean
+  }
   builtInTools: McpToolDescriptor[]
   mcpTools: Array<McpToolDescriptor & {
     serverId: string
@@ -196,7 +200,7 @@ interface UnitTestContext {
 
 interface UnitTestLogEntry {
   id: string
-  kind: 'built-in' | 'mcp' | 'skill' | 'feature'
+  kind: 'built-in' | 'mcp' | 'skill' | 'daemon' | 'feature'
   name: string
   status: 'passed' | 'failed'
   message?: string
