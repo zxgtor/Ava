@@ -297,6 +297,40 @@ async function clearUnitTestResults(): Promise<{ ok: true; path: string } | { ok
   }
 }
 
+async function localUnitTestContext(states: Record<string, PluginState> | undefined, daemonError?: string) {
+  const testWorkspace = await ensureUnitTestWorkspace()
+  const servers = mcpSupervisor.listServers()
+  const plugins = await pluginManager.discover(states ?? {})
+  return {
+    isDev: true,
+    cwd: testWorkspace,
+    logPath: join(testWorkspace, UNIT_TEST_RESULTS_FILE),
+    daemon: {
+      baseUrl: daemonBaseUrl(),
+      chatRuntimeEnabled: false,
+      error: daemonError,
+    },
+    builtInTools: builtInTools.listTools(),
+    mcpTools: servers.flatMap(server =>
+      (server.tools ?? []).map(tool => ({
+        ...tool,
+        serverId: server.id,
+        serverName: server.name,
+        serverStatus: server.status,
+      })),
+    ),
+    skills: plugins.flatMap(plugin =>
+      plugin.skills.map(skill => ({
+        ...skill,
+        pluginId: plugin.id,
+        pluginName: plugin.manifest?.name ?? plugin.id,
+        enabled: plugin.enabled,
+        valid: plugin.valid,
+      })),
+    ),
+  }
+}
+
 let mainWindow: BrowserWindow | null = null
 let previewWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -502,39 +536,17 @@ function registerIpc(): void {
     }
 
     if (shouldUseDaemonChat()) {
-      return daemonRuntimeClient.unitTestContext(states ?? {})
+      try {
+        await ensureNodeDaemonRuntime()
+        return await daemonRuntimeClient.unitTestContext(states ?? {})
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.warn(`[daemon] unit test context unavailable: ${message}`)
+        return localUnitTestContext(states, message)
+      }
     }
 
-    const testWorkspace = await ensureUnitTestWorkspace()
-    const servers = mcpSupervisor.listServers()
-    const plugins = await pluginManager.discover(states ?? {})
-    return {
-      isDev: true,
-      cwd: testWorkspace,
-      logPath: join(testWorkspace, UNIT_TEST_RESULTS_FILE),
-      daemon: {
-        baseUrl: daemonBaseUrl(),
-        chatRuntimeEnabled: shouldUseDaemonChat(),
-      },
-      builtInTools: builtInTools.listTools(),
-      mcpTools: servers.flatMap(server =>
-        (server.tools ?? []).map(tool => ({
-          ...tool,
-          serverId: server.id,
-          serverName: server.name,
-          serverStatus: server.status,
-        })),
-      ),
-      skills: plugins.flatMap(plugin =>
-        plugin.skills.map(skill => ({
-          ...skill,
-          pluginId: plugin.id,
-          pluginName: plugin.manifest?.name ?? plugin.id,
-          enabled: plugin.enabled,
-          valid: plugin.valid,
-        })),
-      ),
-    }
+    return localUnitTestContext(states)
   })
 
   ipcMain.handle('ava:dev:appendUnitTestResult', async (_e, raw: unknown) => {
@@ -868,7 +880,6 @@ app.whenReady().then(async () => {
     await ensureNodeDaemonRuntime().catch(err => {
       const message = err instanceof Error ? err.message : String(err)
       console.warn(`[daemon] node runtime unavailable: ${message}`)
-      process.env.AVA_CHAT_RUNTIME = 'local'
     })
   }
 

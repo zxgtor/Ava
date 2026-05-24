@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { daemonBaseUrl } from './daemonChatClient'
+import { runtimePaths } from './runtimePaths'
 
 let daemonProcess: ChildProcess | null = null
 let startPromise: Promise<void> | null = null
@@ -19,6 +22,65 @@ function npmCommand(): string {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm'
 }
 
+function daemonSpawnCommand(): { command: string; args: string[]; shell: boolean } {
+  const npmCli = process.env.npm_execpath
+  const nodeExe = process.env.npm_node_execpath
+  if (npmCli && nodeExe) {
+    return {
+      command: nodeExe,
+      args: [npmCli, 'run', 'daemon:runtime'],
+      shell: false,
+    }
+  }
+
+  return {
+    command: process.platform === 'win32' ? 'cmd.exe' : npmCommand(),
+    args: process.platform === 'win32'
+      ? ['/d', '/s', '/c', 'npm run daemon:runtime']
+      : ['run', 'daemon:runtime'],
+    shell: false,
+  }
+}
+
+function isMonorepoRoot(dir: string): boolean {
+  const packagePath = join(dir, 'package.json')
+  if (!existsSync(packagePath) || !existsSync(join(dir, 'apps', 'daemon', 'package.json'))) return false
+  try {
+    const pkg = JSON.parse(readFileSync(packagePath, 'utf8')) as { workspaces?: unknown }
+    return Array.isArray(pkg.workspaces) || Boolean(pkg.workspaces && typeof pkg.workspaces === 'object')
+  } catch {
+    return false
+  }
+}
+
+function findMonorepoRoot(start: string): string | null {
+  let dir = resolve(start)
+  while (true) {
+    if (isMonorepoRoot(dir)) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
+function daemonProjectRoot(): string {
+  const paths = runtimePaths()
+  const candidates = [
+    process.env.AVA_PROJECT_ROOT,
+    paths.projectRoot,
+    paths.appPath,
+    process.cwd(),
+    __dirname,
+  ].filter((item): item is string => Boolean(item))
+
+  for (const candidate of candidates) {
+    const root = findMonorepoRoot(candidate)
+    if (root) return root
+  }
+
+  return paths.projectRoot
+}
+
 async function waitForRuntime(timeoutMs: number): Promise<void> {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
@@ -33,12 +95,15 @@ export async function ensureNodeDaemonRuntime(): Promise<void> {
   if (startPromise) return startPromise
 
   startPromise = new Promise<void>((resolve, reject) => {
-    daemonProcess = spawn(npmCommand(), ['run', 'daemon:runtime'], {
-      cwd: process.cwd(),
+    const projectRoot = daemonProjectRoot()
+    const daemonCommand = daemonSpawnCommand()
+    daemonProcess = spawn(daemonCommand.command, daemonCommand.args, {
+      cwd: projectRoot,
       env: {
         ...process.env,
-        AVA_PROJECT_ROOT: process.cwd(),
+        AVA_PROJECT_ROOT: projectRoot,
       },
+      shell: daemonCommand.shell,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
@@ -58,7 +123,7 @@ export async function ensureNodeDaemonRuntime(): Promise<void> {
       }
     })
 
-    waitForRuntime(15_000).then(resolve, reject)
+    waitForRuntime(45_000).then(resolve, reject)
   }).finally(() => {
     startPromise = null
   })
@@ -72,4 +137,3 @@ export async function stopNodeDaemonRuntime(): Promise<void> {
   if (!child || child.killed) return
   child.kill()
 }
-

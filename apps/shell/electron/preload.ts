@@ -184,6 +184,7 @@ interface UnitTestContext {
   daemon?: {
     baseUrl: string
     chatRuntimeEnabled: boolean
+    error?: string
   }
   builtInTools: McpToolDescriptor[]
   mcpTools: Array<McpToolDescriptor & {

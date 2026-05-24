@@ -279,7 +279,7 @@ export function UnitTestView() {
   const [error, setError] = useState<string | null>(null)
   const [devCwd, setDevCwd] = useState('')
   const [logPath, setLogPath] = useState('')
-  const [daemonInfo, setDaemonInfo] = useState<{ baseUrl: string; chatRuntimeEnabled: boolean } | null>(null)
+  const [daemonInfo, setDaemonInfo] = useState<{ baseUrl: string; chatRuntimeEnabled: boolean; error?: string } | null>(null)
   const [targets, setTargets] = useState<TestTarget[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
@@ -841,6 +841,7 @@ export function UnitTestView() {
                 }`}>
                   {daemonInfo.chatRuntimeEnabled ? 'runtime connected' : 'runtime disabled'}
                 </span>
+                {daemonInfo.error && <span className="ml-2 text-error">{daemonInfo.error}</span>}
               </p>
             )}
           </div>
