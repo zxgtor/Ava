@@ -16,6 +16,7 @@ import {
 } from './index'
 import type { AvaChatStreamEvent, AvaChatStreamRequest } from '@ava/contracts'
 import { runtimePaths } from './services/runtimePaths'
+import { resolveStreamChatArgsFromDaemonConfig, type DaemonStreamOptions } from './services/modelRouter'
 
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
@@ -45,13 +46,24 @@ async function readRuntimeMcpServers(raw: unknown): Promise<McpServerConfig[] | 
   return [...baseServers, ...pluginServers]
 }
 
-function streamChatArgsFromRequest(request: AvaChatStreamRequest): StreamChatArgs {
+async function streamChatArgsFromRequest(request: AvaChatStreamRequest): Promise<StreamChatArgs> {
   const metadata = request.metadata as { streamChatArgs?: unknown } | undefined
   const args = metadata?.streamChatArgs as StreamChatArgs | undefined
-  if (!args || !Array.isArray(args.messages) || !Array.isArray(args.providers)) {
-    throw new Error('Daemon runtime request is missing metadata.streamChatArgs.')
+  if (args && Array.isArray(args.messages) && Array.isArray(args.providers)) {
+    return args
   }
-  return args
+
+  const streamOptions = (request.metadata as { streamOptions?: unknown } | undefined)?.streamOptions as Partial<DaemonStreamOptions> | undefined
+  const streamId = typeof streamOptions?.streamId === 'string'
+    ? streamOptions.streamId
+    : typeof request.runId === 'string' && request.runId.trim()
+      ? request.runId
+      : `daemon_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+  return resolveStreamChatArgsFromDaemonConfig(request.messages as StreamChatArgs['messages'], {
+    ...(streamOptions ?? {}),
+    streamId,
+  })
 }
 
 function createRuntimeEventTarget(args: StreamChatArgs, emit: EmitDaemonEvent): { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void } {
@@ -199,7 +211,7 @@ async function clearUnitTestResults(): Promise<{ ok: true; path: string } | { ok
 export function createDaemonRuntimeServices() {
   return {
     async streamChat(request: AvaChatStreamRequest, emit: EmitDaemonEvent) {
-      const args = streamChatArgsFromRequest(request)
+      const args = await streamChatArgsFromRequest(request)
       const eventTarget = createRuntimeEventTarget(args, emit)
       const result = await streamChat(eventTarget as never, args)
 

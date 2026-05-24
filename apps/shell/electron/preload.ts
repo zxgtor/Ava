@@ -383,12 +383,8 @@ function selectedModel(provider: ModelProvider): string {
 }
 
 function daemonRequest(args: StreamChatArgs) {
-  const provider = selectedProvider(args)
-  const model = selectedModel(provider)
   return {
     runId: args.streamId,
-    providerId: provider.id,
-    model,
     messages: args.messages.map(message => ({
       role: message.role,
       content: message.content,
@@ -397,11 +393,18 @@ function daemonRequest(args: StreamChatArgs) {
     })),
     activeStepId: args.activeStepRequiredTools?.join(',') || undefined,
     metadata: {
-      activeTaskId: args.activeTaskId,
-      activeFolderPath: args.activeFolderPath,
-      activeStepRole: args.activeStepRole,
-      activeStepRequiredTools: args.activeStepRequiredTools,
-      streamChatArgs: args,
+      streamOptions: {
+        streamId: args.streamId,
+        activeTaskId: args.activeTaskId,
+        activeFolderPath: args.activeFolderPath,
+        taskAllowedDirs: args.taskAllowedDirs,
+        activeCommandInvocation: args.activeCommandInvocation,
+        temperature: args.temperature,
+        activeStepRequiredTools: args.activeStepRequiredTools,
+        activeStepRole: args.activeStepRole,
+        activeStepToolLoopBudget: args.activeStepToolLoopBudget,
+        finalReportReadBudget: args.finalReportReadBudget,
+      },
     },
   }
 }
@@ -455,6 +458,8 @@ async function streamViaDaemonDirect(args: StreamChatArgs): Promise<StreamChatRe
   let completed = false
   let failedError: string | null = null
   let sawSseEvent = false
+  let runtimeProvider = provider
+  let runtimeModel = model
 
   directDaemonStreams.set(args.streamId, controller)
 
@@ -490,6 +495,18 @@ async function streamViaDaemonDirect(args: StreamChatArgs): Promise<StreamChatRe
         if (channel === 'ava:llm:chunk') {
           const chunk = payload as ChunkPayload
           if (chunk.streamId === args.streamId && typeof chunk.text === 'string') fullContent += chunk.text
+        } else if (channel === 'ava:llm:status') {
+          const status = payload as StatusPayload
+          if (status.streamId === args.streamId) {
+            if (typeof status.providerId === 'string' || typeof status.providerName === 'string') {
+              runtimeProvider = {
+                ...runtimeProvider,
+                id: status.providerId ?? runtimeProvider.id,
+                name: status.providerName ?? runtimeProvider.name,
+              }
+            }
+            if (typeof status.model === 'string') runtimeModel = status.model
+          }
         } else if (channel === 'ava:llm:part') {
           const partPayload = payload as PartPayload
           if (partPayload.streamId === args.streamId) parts = [...parts, partPayload.part]
@@ -536,9 +553,9 @@ async function streamViaDaemonDirect(args: StreamChatArgs): Promise<StreamChatRe
       result: {
         fullContent,
         parts: parts.length > 0 ? parts : (fullContent ? [{ type: 'text', text: fullContent }] : []),
-        provider,
-        model,
-        attempts: [{ providerId: provider.id, providerName: provider.name, model, ok: true }],
+        provider: runtimeProvider,
+        model: runtimeModel,
+        attempts: [{ providerId: runtimeProvider.id, providerName: runtimeProvider.name, model: runtimeModel, ok: true }],
         fallbackUsed: false,
         toolCallsIssued: parts.filter(part => part.type === 'tool_call').length,
         loopRounds: 0,

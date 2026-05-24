@@ -123,6 +123,12 @@ renderer -> preload -> daemon /chat/stream -> preload event tunnel -> renderer l
 Electron IPC remains as a fallback path if the direct daemon connection cannot
 be opened before any SSE event is received.
 
+Renderer direct chat requests no longer send provider config, tool-format map,
+or plugin states in `metadata.streamChatArgs`. They send only messages and
+execution options. The daemon loads settings from its own storage, applies the
+primary model chain, filters enabled providers, and injects daemon-owned
+`modelToolFormatMap` and `pluginStates` before calling `streamChat()`.
+
 Disable this path only for debugging:
 
 ```bash
@@ -173,8 +179,6 @@ of the agent runtime code.
 
 ## Next Safe Steps
 
-1. Move settings/provider loading behind a daemon-owned config boundary instead of passing `metadata.streamChatArgs` from shell.
-2. Move shared progress policy out of `apps/shell/shared` into a neutral shared package.
+1. Move non-chat renderer APIs from Electron IPC proxies to direct daemon APIs where appropriate.
+2. Move MCP status push events from Electron `webContents` wiring to daemon event subscriptions.
 3. Keep Electron-specific services, such as window/DWM behavior, dialogs, tray, and auto-updater, in `apps/shell`.
-4. Move non-chat renderer APIs from Electron IPC proxies to direct daemon APIs where appropriate.
-5. Move MCP status push events from Electron `webContents` wiring to daemon event subscriptions.
