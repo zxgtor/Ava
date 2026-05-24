@@ -26,6 +26,7 @@ const stripImportFrom = (specifier) => {
   '\\.\\/services\\/toolRuntime',
   '\\.\\/services\\/capabilityRouter',
   '\\.\\/services\\/capabilityStats',
+  '\\.\\/services\\/windowsEnvironmentDriver',
   '\\.\\.\\/shared\\/agentProgressPolicy',
 ].forEach(stripImportFrom)
 source += `
@@ -43,6 +44,7 @@ function buildCapabilityIndex(){ return [] }
 function routeSkills(){ return [] }
 function routeMcpTools(){ return [] }
 const capabilityStats = { recordSelection: async () => {}, recordUse: async () => {}, appendRouteLog: async () => {} }
+const windowsEnvironmentDriver = { canHandleTool: () => false, act: async () => ({ ok: false, error: 'not implemented' }) }
 function previewValue(value){ return String(value) }
 class OpenAiAdapter {}
 class AnthropicAdapter {}

@@ -21,6 +21,7 @@ import { duplicateToolResultPatch, toolRuntime } from './services/toolRuntime'
 import { madeStepProgress } from '../shared/agentProgressPolicy'
 import { buildCapabilityIndex, routeMcpTools, routeSkills } from './services/capabilityRouter'
 import { capabilityStats } from './services/capabilityStats'
+import { windowsEnvironmentDriver } from './services/windowsEnvironmentDriver'
 
 export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
@@ -737,6 +738,7 @@ async function ensureTaskWorkingDirectory(
 async function callToolSafely(input: {
   toolCall: ToolCallCandidate
   builtInTool: { serverId: string; rawName: string } | null
+  resolvedMcpTool?: { serverId: string; rawName: string } | null
   args: StreamChatArgs
 }): Promise<CallToolResult | CallToolError> {
   try {
@@ -745,15 +747,28 @@ async function callToolSafely(input: {
       : null
     if (preflight && (!preflight.ok || preflight.isError)) return preflight
 
-    return input.builtInTool
-      ? await builtInTools.callTool(input.toolCall.name, input.toolCall.args, {
-          activeFolderPath: input.args.activeFolderPath,
-          allowedDirs: taskScopedAllowedDirs(input.args.activeFolderPath, input.args.taskAllowedDirs),
-        })
-      : await mcpSupervisor.callTool({
-          namespacedName: input.toolCall.name,
-          rawArgs: input.toolCall.args,
-        })
+    if (input.builtInTool) {
+      return builtInTools.callTool(input.toolCall.name, input.toolCall.args, {
+        activeFolderPath: input.args.activeFolderPath,
+        allowedDirs: taskScopedAllowedDirs(input.args.activeFolderPath, input.args.taskAllowedDirs),
+      })
+    }
+
+    if (input.resolvedMcpTool && windowsEnvironmentDriver.canHandleTool(input.toolCall.name)) {
+      const result = await windowsEnvironmentDriver.act({
+        type: 'mcp_tool',
+        name: input.toolCall.name,
+        args: input.toolCall.args,
+      })
+      return result.ok
+        ? { ok: true, content: result.content, isError: result.isError }
+        : { ok: false, error: result.error ?? 'Windows environment action failed', aborted: result.aborted }
+    }
+
+    return mcpSupervisor.callTool({
+      namespacedName: input.toolCall.name,
+      rawArgs: input.toolCall.args,
+    })
   } catch (err) {
     return { ok: false, error: `Tool runtime error: ${err instanceof Error ? err.message : String(err)}` }
   }
@@ -2074,6 +2089,7 @@ async function runToolLoop(
       const result = await callToolSafely({
         toolCall,
         builtInTool,
+        resolvedMcpTool: builtInTool ? null : resolvedTool,
         args,
       })
       const compactedResult = result.ok

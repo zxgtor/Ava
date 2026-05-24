@@ -16,14 +16,16 @@ import {
   getUserDataPath,
 } from './storage'
 import {
-  streamChat,
   abortStream,
+  builtInTools,
+  mcpSupervisor,
+  pluginManager,
+  streamChat,
+  toolAuditLog,
+  type McpServerConfig,
+  type PluginState,
   type StreamChatArgs,
-} from './llm'
-import { mcpSupervisor, type McpServerConfig } from './services/mcpSupervisor'
-import { pluginManager, type PluginState } from './services/pluginManager'
-import { toolAuditLog } from './services/toolAuditLog'
-import { builtInTools } from './services/builtInTools'
+} from '@ava/daemon'
 import { applyWin11RoundedCorners } from './services/dwmCorners'
 
 const execAsync = promisify(exec)

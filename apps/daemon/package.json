@@ -1,0 +1,10 @@
+{
+  "name": "@ava/daemon",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Ava daemon core runtime facade.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

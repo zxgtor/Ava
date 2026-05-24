@@ -5,6 +5,11 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
+    resolve: {
+      alias: {
+        '@ava/daemon': resolve(__dirname, '../daemon/src/index.ts'),
+      },
+    },
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
