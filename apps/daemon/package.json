@@ -1,26 +1,36 @@
 {
   "name": "@ava/daemon",
   "version": "0.0.1",
-  "private": true,
-  "description": "Ava daemon core runtime facade.",
+  "description": "Ava standalone daemon core runtime.",
   "type": "module",
+  "main": "./dist/ava-daemon.cjs",
+  "bin": {
+    "ava-daemon": "./dist/ava-daemon.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
   "dependencies": {
-    "@ava/contracts": "*",
     "@playwright/test": "^1.59.1",
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@ava/contracts": "*",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   },
   "scripts": {
-    "build:runtime": "esbuild src/runtimeMain.ts --bundle --platform=node --target=node20 --format=cjs --outfile=out/runtimeMain.cjs --external:@playwright/test --external:ws",
+    "build": "npm run clean && npm run build:runtime",
+    "build:runtime": "esbuild src/runtimeMain.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/ava-daemon.cjs --banner:js=\"#!/usr/bin/env node\" --external:@playwright/test --external:ws",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "dev": "node src/main.mjs",
-    "runtime": "npm run build:runtime && node out/runtimeMain.cjs",
-    "start": "node src/main.mjs"
+    "prepack": "npm run build",
+    "runtime": "npm run build && node dist/ava-daemon.cjs",
+    "start": "node dist/ava-daemon.cjs"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./server": "./src/httpServer.mjs"
+    ".": "./dist/ava-daemon.cjs"
   }
 }

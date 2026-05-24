@@ -13,6 +13,7 @@
     "daemon:dev": "npm run dev --workspace=@ava/daemon",
     "daemon:runtime": "npm run runtime --workspace=@ava/daemon",
     "build": "npm run build --workspace=@ava/shell",
+    "pack:daemon": "npm pack --workspace=@ava/daemon",
     "start": "node scripts/dev-fresh.cjs",
     "start:with-daemon": "node scripts/dev-with-daemon.cjs",
     "start:packed": "npm run start --workspace=@ava/shell",
@@ -20,6 +21,7 @@
     "typecheck:client-sdk": "npm run typecheck --workspace=@ava/client-sdk",
     "typecheck:contracts": "npm run typecheck --workspace=@ava/contracts",
     "test:builtins": "node scripts/smoke-built-in-tools.js",
+    "test:daemon-package": "node scripts/smoke-daemon-package.js",
     "pack": "npm run pack --workspace=@ava/shell",
     "dist": "npm run dist --workspace=@ava/shell",
     "test:e2e": "playwright test"
