@@ -60,7 +60,7 @@ function isReachable(url) {
   return new Promise(resolve => {
     const req = http.get(url, res => {
       res.resume()
-      resolve(true)
+      resolve(res.statusCode >= 200 && res.statusCode < 300)
     })
     req.on('error', () => resolve(false))
     req.setTimeout(750, () => {
@@ -89,8 +89,12 @@ process.on('SIGTERM', () => {
 
 async function main() {
   console.log('[dev] starting Ava Dev Control Panel')
-  if (await isReachable('http://127.0.0.1:17872/health')) {
+  const devControlHealthOk = await isReachable('http://127.0.0.1:17872/health')
+  const devControlEnvironmentOk = await isReachable('http://127.0.0.1:17872/environment')
+  if (devControlHealthOk && devControlEnvironmentOk) {
     console.log('[dev] reusing existing dev-control at http://127.0.0.1:17872')
+  } else if (devControlHealthOk) {
+    console.log('[dev] existing dev-control is stale; restart it so /environment is available')
   } else {
     spawnChild('dev-control', ['run', 'dev-control'])
   }

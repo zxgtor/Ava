@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent, WheelEvent } from 'react'
-import { CheckCircle2, FlaskConical, MoreHorizontal, Play, RefreshCw, X, XCircle } from 'lucide-react'
+import { CheckCircle2, FlaskConical, Play, RefreshCw, X, XCircle } from 'lucide-react'
 import { AvaClient } from '@ava/client-sdk'
 import type { AvaChatStreamEvent, AvaDaemonChatRequest } from '@ava/contracts'
 
@@ -8,6 +8,7 @@ type TargetKind = 'daemon' | 'built-in' | 'mcp' | 'skill' | 'dev'
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed'
 type BackendStatus = 'checking' | 'online' | 'offline'
 type CanvasView = { x: number; y: number; scale: number }
+type CanvasSize = { width: number; height: number }
 type NodePosition = { x: number; y: number }
 type PinLine = {
   id: string
@@ -110,6 +111,23 @@ interface DevLogLine {
   line: string
 }
 
+interface DevEnvironment {
+  nodeRuntime?: {
+    kind: string
+    version: string
+    execPath: string
+    platform: string
+    arch: string
+    npmCommand: string
+  }
+  localhostPorts?: {
+    kind: string
+    host: string
+    devControlPort: number
+    knownPorts: number[]
+  }
+}
+
 interface DevDependencyNode {
   id: string
   x: number
@@ -120,11 +138,12 @@ interface DevDependencyNode {
     label: string
     description: string
     status: string
-    url: string
+    url?: string
   }
 }
 
 interface DevNodeMetadata {
+  type: 'runtime-core' | 'desktop-client' | 'web-client' | 'dev-infra' | 'test-surface' | 'environment'
   features: string[]
   dependencies: string[]
   dependsOn: string[]
@@ -136,13 +155,19 @@ const NODE_POSITIONS_STORAGE_KEY = 'ava-dev-control-node-positions'
 const TEST_KINDS = ['daemon', 'built-in', 'mcp', 'skill'] as const
 const DEFAULT_NODE_POSITIONS: Record<string, NodePosition> = {
   daemon: { x: 50, y: 50 },
+  'node-runtime': { x: 50, y: 8 },
+  'localhost-ports': { x: 84, y: 8 },
   'ava-desktop': { x: 21, y: 25 },
   'web-ui': { x: 21, y: 72 },
-  'daemon-test-ui': { x: 79, y: 31 },
+  'dev-control-backend': { x: 79, y: 28 },
+  'daemon-test-ui': { x: 79, y: 47 },
   'unit-test': { x: 79, y: 70 },
 }
+const CANVAS_NODE_POSITION_MIN = -500
+const CANVAS_NODE_POSITION_MAX = 600
 const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
   daemon: {
+    type: 'runtime-core',
     features: [
       'Runtime HTTP/SSE API',
       'Config and model router',
@@ -150,39 +175,77 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'MCP and skill context',
       'Process registry',
     ],
-    dependencies: ['Local config', 'Provider runtime', 'Workspace filesystem', 'MCP servers'],
-    dependsOn: [],
+    dependencies: ['Node runtime', 'Localhost ports', 'Local config', 'Provider runtime', 'Workspace filesystem', 'MCP servers'],
+    dependsOn: ['node-runtime', 'localhost-ports'],
   },
   'ava-desktop': {
+    type: 'desktop-client',
     features: [
       'Chat workspace UI',
       'Settings and providers',
       'Tool blocks and preview',
       'Agent task progress',
     ],
-    dependencies: ['Ava Daemon runtime API', 'Electron shell'],
-    dependsOn: ['daemon'],
+    dependencies: ['Ava Daemon runtime API', 'Node runtime', 'Localhost ports', 'Electron shell'],
+    dependsOn: ['daemon', 'node-runtime', 'localhost-ports'],
   },
   'web-ui': {
+    type: 'web-client',
     features: [
       'Future browser client',
       'Shared client SDK',
       'Remote/mobile-ready UI',
     ],
-    dependencies: ['Ava Daemon runtime API', 'Client SDK'],
-    dependsOn: ['daemon'],
+    dependencies: ['Ava Daemon runtime API', 'Node runtime', 'Localhost ports', 'Client SDK'],
+    dependsOn: ['daemon', 'node-runtime', 'localhost-ports'],
   },
   'daemon-test-ui': {
+    type: 'dev-infra',
     features: [
       'Feature orchestration canvas',
-      'Dev process control',
       'Daemon health monitor',
       'Unit test launcher',
+      'Browser test surface',
     ],
-    dependencies: ['Dev-control supervisor', 'Ava Daemon for tests'],
-    dependsOn: ['daemon'],
+    dependencies: ['Ava Dev Supervisor', 'Ava Daemon for tests', 'Node runtime', 'Localhost ports'],
+    dependsOn: ['dev-control-backend', 'daemon', 'node-runtime', 'localhost-ports'],
+  },
+  'dev-control-backend': {
+    type: 'dev-infra',
+    features: [
+      'Process registry API',
+      'Start/stop/restart services',
+      'Managed process logs',
+      'Workspace script orchestration',
+      'Dev service health',
+    ],
+    dependencies: ['Node runtime', 'Localhost ports', 'Root package scripts'],
+    dependsOn: ['node-runtime', 'localhost-ports'],
+  },
+  'node-runtime': {
+    type: 'environment',
+    features: [
+      'HTTP/SSE daemon host',
+      'npm workspace scripts',
+      'Child process runtime',
+      'Build/toolchain runtime',
+      'MCP/tool helper runtime',
+    ],
+    dependencies: [],
+    dependsOn: [],
+  },
+  'localhost-ports': {
+    type: 'environment',
+    features: [
+      'Listening port PID scan',
+      'Local service URL registry',
+      'External process detection',
+    ],
+    dependencies: [],
+    dependsOn: [],
   },
   'unit-test': {
+    type: 'test-surface',
     features: [
       'Daemon API smoke tests',
       'Built-in tool routing tests',
@@ -195,11 +258,19 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
 }
 const DEPENDENCY_PIN_COLORS: Record<string, string> = {
   daemon: '#56d6ff',
+  'node-runtime': '#d7b36a',
+  'localhost-ports': '#d7b36a',
   'ava-desktop': '#76e2a8',
   'web-ui': '#ff7aa7',
+  'dev-control-backend': '#f4c95d',
   'daemon-test-ui': '#ffd36a',
   'unit-test': '#a8ccff',
 }
+const SVG_NODE_WIDTH = 285
+const SVG_NODE_BASE_HEIGHT = 148
+const SVG_NODE_BOTTOM_PADDING = 40
+const SVG_FEATURE_HEIGHT = 23
+const SVG_FEATURE_GAP = 7
 
 function targetKindLabel(kind: TargetKind) {
   if (kind === 'built-in') return 'Built-in Tools'
@@ -215,9 +286,85 @@ function clampCanvasScale(scale: number) {
 
 function clampNodePosition(position: NodePosition): NodePosition {
   return {
-    x: Math.min(94, Math.max(6, position.x)),
-    y: Math.min(92, Math.max(8, position.y)),
+    x: Math.min(CANVAS_NODE_POSITION_MAX, Math.max(CANVAS_NODE_POSITION_MIN, position.x)),
+    y: Math.min(CANVAS_NODE_POSITION_MAX, Math.max(CANVAS_NODE_POSITION_MIN, position.y)),
   }
+}
+
+function truncateText(text: string, maxLength: number) {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`
+}
+
+function wrapTextLines(text: string, maxLineLength: number, maxLines: number) {
+  const words = text.split(/\s+/).filter(Boolean)
+  const lines: string[] = []
+  let current = ''
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word
+    if (next.length <= maxLineLength) {
+      current = next
+      continue
+    }
+    if (current) lines.push(current)
+    current = word
+    if (lines.length >= maxLines) break
+  }
+  if (current && lines.length < maxLines) lines.push(current)
+  if (lines.length === 0) lines.push('')
+  if (lines.length === maxLines && words.join(' ').length > lines.join(' ').length) {
+    lines[maxLines - 1] = truncateText(lines[maxLines - 1], maxLineLength)
+  }
+  return lines
+}
+
+function nodeCenter(node: NodePosition, canvasSize: CanvasSize) {
+  return {
+    x: (node.x / 100) * canvasSize.width,
+    y: (node.y / 100) * canvasSize.height,
+  }
+}
+
+function nodeLeft(node: NodePosition, canvasSize: CanvasSize) {
+  return nodeCenter(node, canvasSize).x - SVG_NODE_WIDTH / 2
+}
+
+function nodeHeight(node: Pick<DevDependencyNode, 'metadata'>) {
+  const featureCount = Math.max(1, node.metadata.features.length)
+  return SVG_NODE_BASE_HEIGHT + featureCount * (SVG_FEATURE_HEIGHT + SVG_FEATURE_GAP) + SVG_NODE_BOTTOM_PADDING
+}
+
+function nodeTop(node: DevDependencyNode, canvasSize: CanvasSize) {
+  return nodeCenter(node, canvasSize).y - nodeHeight(node) / 2
+}
+
+function cardDependencyPinPosition(node: DevDependencyNode, canvasSize: CanvasSize, side: 'input' | 'output') {
+  const x = side === 'input'
+    ? nodeLeft(node, canvasSize)
+    : nodeLeft(node, canvasSize) + SVG_NODE_WIDTH
+  const y = nodeTop(node, canvasSize) + nodeHeight(node) / 2
+  return { x, y }
+}
+
+function nodeScreenStyle(node: DevDependencyNode, canvasSize: CanvasSize, canvasView: CanvasView): CSSProperties {
+  const center = nodeCenter(node, canvasSize)
+  const scale = canvasView.scale
+  return {
+    left: center.x * scale + canvasView.x,
+    top: center.y * scale + canvasView.y,
+    width: SVG_NODE_WIDTH * scale,
+    minHeight: nodeHeight(node) * scale,
+    '--node-scale': scale,
+  } as CSSProperties
+}
+
+function openExternalTab(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function displayDevStatus(node: DevDependencyNode, status: string, process?: DevProcess) {
+  if (node.id === 'daemon-test-ui' && process?.status === 'external') return 'active'
+  return status
 }
 
 function loadNodePositions(): Record<string, NodePosition> {
@@ -461,18 +608,19 @@ export function App() {
   const [tests, setTests] = useState<Record<string, TestState>>({})
   const [devProcesses, setDevProcesses] = useState<DevProcess[]>([])
   const [devLogs, setDevLogs] = useState<Record<string, DevLogLine[]>>({})
+  const [devEnvironment, setDevEnvironment] = useState<DevEnvironment>({})
+  const [devEnvironmentError, setDevEnvironmentError] = useState<string | null>(null)
   const [selectedDevNodeId, setSelectedDevNodeId] = useState<string | null>(null)
   const [canvasView, setCanvasView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 })
+  const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 1, height: 1 })
   const [isCanvasPanning, setIsCanvasPanning] = useState(false)
   const [nodePositions, setNodePositions] = useState<Record<string, NodePosition>>(loadNodePositions)
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null)
   const [openNodeMenuId, setOpenNodeMenuId] = useState<string | null>(null)
-  const [pinLines, setPinLines] = useState<PinLine[]>([])
   const targetRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const devControlStatusRef = useRef<BackendStatus>('checking')
+  const canvasRef = useRef<HTMLDivElement | null>(null)
   const canvasPanRef = useRef({ pointerId: -1, startX: 0, startY: 0, originX: 0, originY: 0 })
-  const canvasWorldRef = useRef<HTMLDivElement | null>(null)
-  const pinRefs = useRef<Record<string, HTMLElement | null>>({})
   const nodeDragRef = useRef({
     pointerId: -1,
     nodeId: '',
@@ -488,6 +636,24 @@ export function App() {
   const visibleTargets = useMemo(() => targets.filter(target => target.kind === kind), [kind, targets])
   const selected = targets.find(target => target.id === selectedId) ?? visibleTargets[0] ?? targets[0]
   const selectedState = selected ? tests[selected.id] : undefined
+
+  useEffect(() => {
+    const element = canvasRef.current
+    if (!element) return
+
+    const updateCanvasSize = () => {
+      const rect = element.getBoundingClientRect()
+      setCanvasSize({
+        width: Math.max(1, rect.width),
+        height: Math.max(1, rect.height),
+      })
+    }
+
+    updateCanvasSize()
+    const observer = new ResizeObserver(updateCanvasSize)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [kind])
 
   const devFetch = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(`${devControlUrl.replace(/\/+$/, '')}${path}`, init)
@@ -516,6 +682,14 @@ export function App() {
     try {
       const processes = await devFetch<DevProcess[]>('/processes')
       setDevProcesses(processes)
+      try {
+        const environment = await devFetch<DevEnvironment>('/environment')
+        setDevEnvironment(environment)
+        setDevEnvironmentError(null)
+      } catch {
+        setDevEnvironment({})
+        setDevEnvironmentError('Dev Supervisor needs restart. Current backend does not expose /environment.')
+      }
       await Promise.all(processes.map(async process => {
         try {
           const logs = await devFetch<DevLogLine[]>(`/processes/${encodeURIComponent(process.id)}/logs?limit=120`)
@@ -649,7 +823,8 @@ export function App() {
       const wasOnline = devControlStatusRef.current === 'online'
       const isOnline = await checkDevControlHealth()
       if (disposed) return
-      if (isOnline && (!wasOnline || devProcesses.length === 0)) void loadDevProcesses()
+      if (isOnline && kind === 'dev') void loadDevProcesses()
+      if (isOnline && kind !== 'dev' && !wasOnline && devProcesses.length === 0) void loadDevProcesses()
     }
 
     void tick()
@@ -658,7 +833,7 @@ export function App() {
       disposed = true
       window.clearInterval(id)
     }
-  }, [checkDevControlHealth, devProcesses.length, loadDevProcesses])
+  }, [checkDevControlHealth, devProcesses.length, kind, loadDevProcesses])
 
   const updateRequest = (id: string, request: string) => {
     setTests(prev => ({
@@ -893,6 +1068,26 @@ export function App() {
         process: get('daemon'),
       },
       {
+        id: 'node-runtime',
+        ...position('node-runtime'),
+        metadata: DEV_NODE_METADATA['node-runtime'],
+        feature: {
+          label: 'Node Runtime',
+          description: 'Local Node.js and npm runtime used by the dev supervisor.',
+          status: 'environment',
+        },
+      },
+      {
+        id: 'localhost-ports',
+        ...position('localhost-ports'),
+        metadata: DEV_NODE_METADATA['localhost-ports'],
+        feature: {
+          label: 'Localhost Ports',
+          description: 'Local port availability and service URL detection.',
+          status: 'environment',
+        },
+      },
+      {
         id: 'ava-desktop',
         ...position('ava-desktop'),
         metadata: DEV_NODE_METADATA['ava-desktop'],
@@ -903,6 +1098,17 @@ export function App() {
         ...position('web-ui'),
         metadata: DEV_NODE_METADATA['web-ui'],
         process: get('web-ui'),
+      },
+      {
+        id: 'dev-control-backend',
+        ...position('dev-control-backend'),
+        metadata: DEV_NODE_METADATA['dev-control-backend'],
+        feature: {
+          label: 'Ava Dev Supervisor',
+          description: 'Local supervisor API for starting and observing Ava dev services.',
+          status: devControlStatus === 'online' ? 'managed' : 'unavailable',
+          url: devControlUrl,
+        },
       },
       {
         id: 'daemon-test-ui',
@@ -922,62 +1128,74 @@ export function App() {
         },
       },
     ]
-  }, [baseUrl, nodePositions, processById])
+  }, [baseUrl, devControlStatus, devControlUrl, nodePositions, processById])
 
   const featureDependencyEdges = useMemo(() => dependencyNodes.flatMap(node => (
-    node.metadata.features.slice(0, 3).flatMap((featureName, featureIndex) => (
-      node.metadata.dependsOn.map(dependencyId => ({
-        id: `${node.id}:${featureIndex}:${dependencyId}`,
-        from: node.id,
-        to: dependencyId,
-        featureName,
-        featureIndex,
-      }))
-    ))
+    node.metadata.dependsOn.map(dependencyId => ({
+      id: `${node.id}:${dependencyId}`,
+      from: node.id,
+      to: dependencyId,
+      featureName: `${node.id} depends on ${dependencyId}`,
+    }))
   )), [dependencyNodes])
-  const dependencyColorFor = (dependencyId: string) => DEPENDENCY_PIN_COLORS[dependencyId] ?? '#6bdcff'
-
-  useLayoutEffect(() => {
-    const updatePinLines = () => {
-      const world = canvasWorldRef.current
-      if (!world) return
-      const worldRect = world.getBoundingClientRect()
-      if (worldRect.width === 0 || worldRect.height === 0) return
-
-      const nextLines: PinLine[] = []
-      for (const edge of featureDependencyEdges) {
-        const sourceNode = dependencyNodes.find(node => node.id === edge.from)
-        const targetNode = dependencyNodes.find(node => node.id === edge.to)
-        if (!sourceNode || !targetNode) continue
-        const sourceSide = sourceNode.x <= targetNode.x ? 'output' : 'input'
-        const targetSide = sourceNode.x <= targetNode.x ? 'input' : 'output'
-        const sourcePin = pinRefs.current[`${edge.from}:${edge.featureIndex}:${sourceSide}`]
-        const targetPin = pinRefs.current[`${edge.to}:${edge.featureIndex}:${targetSide}`]
-        if (!sourcePin || !targetPin) continue
-        const sourceRect = sourcePin.getBoundingClientRect()
-        const targetRect = targetPin.getBoundingClientRect()
-        nextLines.push({
-          id: edge.id,
-          featureName: edge.featureName,
-          dependencyId: edge.to,
-          sourceX: ((sourceRect.left + sourceRect.width / 2 - worldRect.left) / worldRect.width) * 100,
-          sourceY: ((sourceRect.top + sourceRect.height / 2 - worldRect.top) / worldRect.height) * 100,
-          targetX: ((targetRect.left + targetRect.width / 2 - worldRect.left) / worldRect.width) * 100,
-          targetY: ((targetRect.top + targetRect.height / 2 - worldRect.top) / worldRect.height) * 100,
-        })
-      }
-      setPinLines(nextLines)
+  const pinLines = useMemo<PinLine[]>(() => {
+    const nodeById = new Map(dependencyNodes.map(node => [node.id, node]))
+    return featureDependencyEdges.flatMap(edge => {
+      const sourceNode = nodeById.get(edge.from)
+      const targetNode = nodeById.get(edge.to)
+      if (!sourceNode || !targetNode) return []
+      const sourceSide = sourceNode.x <= targetNode.x ? 'output' : 'input'
+      const targetSide = sourceNode.x <= targetNode.x ? 'input' : 'output'
+      const source = cardDependencyPinPosition(sourceNode, canvasSize, sourceSide)
+      const target = cardDependencyPinPosition(targetNode, canvasSize, targetSide)
+      return [{
+        id: edge.id,
+        featureName: edge.featureName,
+        dependencyId: edge.to,
+        sourceX: source.x,
+        sourceY: source.y,
+        targetX: target.x,
+        targetY: target.y,
+      }]
+    })
+  }, [canvasSize, dependencyNodes, featureDependencyEdges])
+  const visibleCardPins = useMemo(() => {
+    const pins = new Set<string>()
+    const nodeById = new Map(dependencyNodes.map(node => [node.id, node]))
+    for (const edge of featureDependencyEdges) {
+      const sourceNode = nodeById.get(edge.from)
+      const targetNode = nodeById.get(edge.to)
+      if (!sourceNode || !targetNode) continue
+      const sourceSide = sourceNode.x <= targetNode.x ? 'output' : 'input'
+      const targetSide = sourceNode.x <= targetNode.x ? 'input' : 'output'
+      pins.add(`${edge.from}:${sourceSide}`)
+      pins.add(`${edge.to}:${targetSide}`)
     }
-
-    const frame = window.requestAnimationFrame(updatePinLines)
-    window.addEventListener('resize', updatePinLines)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.removeEventListener('resize', updatePinLines)
-    }
-  }, [canvasView, featureDependencyEdges, nodePositions])
+    return pins
+  }, [dependencyNodes, featureDependencyEdges])
   const selectedDevNode = selectedDevNodeId ? dependencyNodes.find(node => node.id === selectedDevNodeId) : undefined
   const selectedDevProcess = selectedDevNode?.process
+  const selectedDevStatus = selectedDevNode
+    ? displayDevStatus(
+      selectedDevNode,
+      selectedDevNode.feature?.status ?? selectedDevProcess?.status ?? 'unavailable',
+      selectedDevProcess,
+    )
+    : 'unavailable'
+
+  const renderNodeActions = (node: DevDependencyNode, process?: DevProcess) => (
+    node.feature
+      ? node.id === 'unit-test'
+        ? [
+          { label: 'Open Unit Test', disabled: false, run: () => { setOpenNodeMenuId(null); setKind('daemon') } },
+        ]
+        : []
+      : [
+        { label: 'Start', disabled: !process?.available || Boolean(process.running), run: () => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'start') } },
+        { label: 'Stop', disabled: !process?.available || !process.running, run: () => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'stop') } },
+        { label: 'Restart', disabled: !process?.available, run: () => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'restart') } },
+      ]
+  )
 
   const handleCanvasWheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -1036,7 +1254,7 @@ export function App() {
     setCanvasView(prev => ({ ...prev, scale: clampCanvasScale(prev.scale * factor) }))
   }
 
-  const handleNodePointerDown = (event: PointerEvent<HTMLElement>, nodeId: string) => {
+  const handleNodePointerDown = (event: PointerEvent<Element>, nodeId: string) => {
     if (event.button !== 0) return
     const target = event.target
     if (target instanceof Element && target.closest('button, a, input, textarea, select')) return
@@ -1060,7 +1278,7 @@ export function App() {
     setDraggedNodeId(nodeId)
   }
 
-  const handleNodePointerMove = (event: PointerEvent<HTMLElement>) => {
+  const handleNodePointerMove = (event: PointerEvent<Element>) => {
     if (nodeDragRef.current.pointerId !== event.pointerId) return
     const deltaX = ((event.clientX - nodeDragRef.current.startX) / canvasView.scale / nodeDragRef.current.canvasWidth) * 100
     const deltaY = ((event.clientY - nodeDragRef.current.startY) / canvasView.scale / nodeDragRef.current.canvasHeight) * 100
@@ -1071,7 +1289,7 @@ export function App() {
     setNodePositions(prev => ({ ...prev, [nodeDragRef.current.nodeId]: nextPosition }))
   }
 
-  const stopNodeDrag = (event: PointerEvent<HTMLElement>) => {
+  const stopNodeDrag = (event: PointerEvent<Element>) => {
     if (nodeDragRef.current.pointerId === event.pointerId) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -1133,6 +1351,7 @@ export function App() {
           <section className="dev-panel">
             <div
               className={`dev-canvas ${isCanvasPanning ? 'panning' : ''}`}
+              ref={canvasRef}
               onWheel={handleCanvasWheel}
               onPointerDown={handleCanvasPointerDown}
               onPointerMove={handleCanvasPointerMove}
@@ -1146,20 +1365,24 @@ export function App() {
               </div>
               <div
                 className="canvas-world"
-                ref={canvasWorldRef}
-                style={{ transform: `translate(${canvasView.x}px, ${canvasView.y}px) scale(${canvasView.scale})` }}
               >
-                <svg className="dependency-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <svg
+                  className="canvas-svg"
+                  viewBox={`${-canvasView.x / canvasView.scale} ${-canvasView.y / canvasView.scale} ${canvasSize.width / canvasView.scale} ${canvasSize.height / canvasView.scale}`}
+                  preserveAspectRatio="none"
+                  aria-label="Ava development feature dependency canvas"
+                >
                   <defs>
                     <linearGradient id="blueprintDependencyLine" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stopColor="#1da7ff" />
-                      <stop offset="50%" stopColor="#6bdcff" />
-                      <stop offset="100%" stopColor="#2f8cff" />
+                      <stop offset="0%" stopColor="#6f7788" />
+                      <stop offset="50%" stopColor="#a9b1c1" />
+                      <stop offset="100%" stopColor="#687284" />
                     </linearGradient>
                   </defs>
-                  {pinLines.map(line => {
+                  <g className="dependency-lines">
+                    {pinLines.map(line => {
                     const leftToRight = line.sourceX <= line.targetX
-                    const tension = Math.max(8, Math.abs(line.targetX - line.sourceX) * 0.42)
+                    const tension = Math.max(90, Math.abs(line.targetX - line.sourceX) * 0.42)
                     const controlSourceX = line.sourceX + (leftToRight ? tension : -tension)
                     const controlTargetX = line.targetX - (leftToRight ? tension : -tension)
                     const path = `M ${line.sourceX} ${line.sourceY} C ${controlSourceX} ${line.sourceY}, ${controlTargetX} ${line.targetY}, ${line.targetX} ${line.targetY}`
@@ -1170,75 +1393,119 @@ export function App() {
                         <path className="dependency-path" d={path} />
                       </g>
                     )
-                  })}
+                    })}
+                  </g>
                 </svg>
                 {dependencyNodes.map(node => {
                   const process = node.process
                   const feature = node.feature
                   const status = feature?.status ?? process?.status ?? 'unavailable'
-                  const dependencyId = node.metadata.dependsOn[0] ?? 'internal'
-                  const dependencyPinColor = dependencyColorFor(dependencyId)
+                  const displayStatus = displayDevStatus(node, status, process)
+                  const label = feature?.label ?? process?.label ?? node.id
+                  const description = feature?.description ?? process?.description ?? 'Not registered.'
+                  const url = feature?.url ?? process?.url ?? ''
+                  const hasInputDependency = visibleCardPins.has(`${node.id}:input`)
+                  const hasOutputDependents = visibleCardPins.has(`${node.id}:output`)
+                  const statusText = displayStatus === 'feature'
+                    ? 'open'
+                    : displayStatus === 'environment'
+                      ? 'environment'
+                      : displayStatus
+                  const actions = renderNodeActions(node, process)
+
                   return (
                     <article
                       key={node.id}
-                      className={`canvas-node ${status} ${draggedNodeId === node.id ? 'dragging' : ''}`}
-                      style={{ left: `${node.x}%`, top: `${node.y}%` }}
+                      className={`canvas-node type-${node.metadata.type} ${displayStatus} ${draggedNodeId === node.id ? 'dragging' : ''}`}
+                      style={nodeScreenStyle(node, canvasSize, canvasView)}
                       onPointerDown={event => handleNodePointerDown(event, node.id)}
                       onPointerMove={handleNodePointerMove}
                       onPointerUp={stopNodeDrag}
                       onPointerCancel={stopNodeDrag}
                     >
+                      {hasInputDependency && (
+                        <i
+                          className="canvas-card-dependency-pin input"
+                          style={{ '--pin-color': DEPENDENCY_PIN_COLORS[node.id] ?? '#6bdcff' } as CSSProperties}
+                        />
+                      )}
+                      {hasOutputDependents && (
+                        <i
+                          className="canvas-card-dependency-pin output"
+                          style={{ '--pin-color': DEPENDENCY_PIN_COLORS[node.id] ?? '#6bdcff' } as CSSProperties}
+                        />
+                      )}
                       <div className="canvas-node-top">
-                        <strong>{feature?.label ?? process?.label ?? node.id}</strong>
+                        <strong>{truncateText(label, 24)}</strong>
                         <div className="canvas-node-badges">
                           <button
                             className="icon-button"
-                            title="Actions"
-                            onClick={() => setOpenNodeMenuId(current => current === node.id ? null : node.id)}
+                            title="Information"
+                            onPointerDown={event => event.stopPropagation()}
+                            onClick={event => {
+                              event.stopPropagation()
+                              openNodeInfo(node.id)
+                            }}
                           >
-                            <MoreHorizontal size={13} />
+                            i
                           </button>
-                          {openNodeMenuId === node.id && (
+                          {actions.length > 0 && (
+                            <button
+                              className="icon-button"
+                              title="Actions"
+                              onPointerDown={event => event.stopPropagation()}
+                              onClick={event => {
+                                event.stopPropagation()
+                                setOpenNodeMenuId(current => current === node.id ? null : node.id)
+                              }}
+                            >
+                              •••
+                            </button>
+                          )}
+                          {openNodeMenuId === node.id && actions.length > 0 && (
                             <div className="node-action-menu" onPointerDown={event => event.stopPropagation()}>
-                              {feature ? (
-                                <>
-                                  <button onClick={() => { setOpenNodeMenuId(null); setKind('daemon') }}>Open Unit Test</button>
-                                  <button onClick={() => openNodeInfo(node.id)}>Information</button>
-                                </>
-                              ) : (
-                                <>
-                                  <button disabled={!process?.available || process.running} onClick={() => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'start') }}>Start</button>
-                                  <button disabled={!process?.available || !process.running} onClick={() => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'stop') }}>Stop</button>
-                                  <button disabled={!process?.available} onClick={() => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'restart') }}>Restart</button>
-                                  <button onClick={() => openNodeInfo(node.id)}>Information</button>
-                                </>
-                              )}
+                              {actions.map(action => (
+                                <button
+                                  key={action.label}
+                                  disabled={action.disabled}
+                                  onClick={event => {
+                                    event.stopPropagation()
+                                    action.run()
+                                  }}
+                                >
+                                  {action.label}
+                                </button>
+                              ))}
                             </div>
                           )}
                         </div>
-                    </div>
-                    <p>{feature?.description ?? process?.description ?? 'Not registered.'}</p>
+                      </div>
+                      <p>{description}</p>
+                      {url && (
+                        <a
+                          className="canvas-node-url-link"
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onPointerDown={event => event.stopPropagation()}
+                          onClick={event => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            openExternalTab(url)
+                          }}
+                        >
+                          {truncateText(url, 36)}
+                        </a>
+                      )}
                       <div className="node-feature-list">
-                        {node.metadata.features.slice(0, 3).map((item, featureIndex) => (
+                        {node.metadata.features.map(item => (
                           <div className="node-feature-row" key={item}>
-                            <i
-                              className="dependency-row-pin input"
-                              ref={element => { pinRefs.current[`${node.id}:${featureIndex}:input`] = element }}
-                              style={{ '--pin-color': DEPENDENCY_PIN_COLORS[node.id] ?? '#6bdcff' } as CSSProperties}
-                              title="Dependency input"
-                            />
-                            <span>{item}</span>
-                            <i
-                              className={node.metadata.dependsOn.length > 0 ? 'dependency-row-pin output' : 'dependency-row-pin output internal'}
-                              ref={element => { pinRefs.current[`${node.id}:${featureIndex}:output`] = element }}
-                              style={{ '--pin-color': dependencyPinColor } as CSSProperties}
-                              title={node.metadata.dependsOn.length > 0 ? 'Connected dependency' : 'Internal feature'}
-                            />
+                            <span>{truncateText(item, 34)}</span>
                           </div>
                         ))}
                       </div>
                       <div className="canvas-node-footer">
-                        <span className={`pill ${status}`}>{status === 'feature' ? 'open' : process?.status ?? 'missing'}</span>
+                        <span className={`pill ${displayStatus}`}>{truncateText(statusText, 13)}</span>
                       </div>
                     </article>
                   )
@@ -1255,8 +1522,8 @@ export function App() {
                       <p>{selectedDevNode.feature?.description ?? selectedDevProcess?.description ?? 'Not registered.'}</p>
                     </div>
                     <div className="modal-head-actions">
-                      <span className={`pill ${selectedDevNode.feature?.status ?? selectedDevProcess?.status ?? 'unavailable'}`}>
-                        {selectedDevNode.feature?.status ?? selectedDevProcess?.status ?? 'missing'}
+                      <span className={`pill ${selectedDevStatus}`}>
+                        {selectedDevStatus}
                       </span>
                       <button className="icon-button" title="Close" onClick={() => setSelectedDevNodeId(null)}>
                         <X size={13} />
@@ -1273,9 +1540,13 @@ export function App() {
                     </section>
                     <section className="dev-detail-section">
                       <h3>Dependencies</h3>
-                      <ul>
-                        {selectedDevNode.metadata.dependencies.map(item => <li key={item}>{item}</li>)}
-                      </ul>
+                      {selectedDevNode.metadata.dependencies.length > 0 ? (
+                        <ul>
+                          {selectedDevNode.metadata.dependencies.map(item => <li key={item}>{item}</li>)}
+                        </ul>
+                      ) : (
+                        <p className="empty-dependency-note">None. This is an environment dependency in the Ava dev graph.</p>
+                      )}
                     </section>
                   </div>
 
@@ -1286,7 +1557,7 @@ export function App() {
                         <div><strong>CWD</strong><code>{selectedDevProcess.cwd}</code></div>
                         <div><strong>Ports</strong><code>{selectedDevProcess.ports.join(', ') || '-'}</code></div>
                         <div><strong>PID</strong><code>{selectedDevProcess.pid ?? selectedDevProcess.externalPids?.join(', ') ?? '-'}</code></div>
-                        <div><strong>URL</strong><code>{selectedDevProcess.url}</code></div>
+                        <div><strong>URL</strong><a href={selectedDevProcess.url} target="_blank" rel="noreferrer" onClick={event => { event.preventDefault(); openExternalTab(selectedDevProcess.url) }}>{selectedDevProcess.url}</a></div>
                       </div>
 
                       <div className="dev-actions">
@@ -1300,13 +1571,55 @@ export function App() {
                       </pre>
                     </>
                   ) : (
-                    <div className="dev-meta">
-                      <div><strong>Type</strong><code>Feature</code></div>
-                      <div><strong>URL</strong><code>{selectedDevNode.feature?.url ?? '-'}</code></div>
-                    </div>
+                    selectedDevNode.metadata.type === 'environment' ? (
+                      <div className="dev-meta">
+                        {selectedDevNode.id === 'node-runtime' ? (
+                          <>
+                            <div><strong>Type</strong><code>Environment / Node runtime</code></div>
+                            {devEnvironmentError && <div><strong>Status</strong><code>{devEnvironmentError}</code></div>}
+                            <div><strong>Node version</strong><code>{devEnvironment.nodeRuntime?.version ?? '-'}</code></div>
+                            <div><strong>Node path</strong><code>{devEnvironment.nodeRuntime?.execPath ?? '-'}</code></div>
+                            <div><strong>NPM command</strong><code>{devEnvironment.nodeRuntime?.npmCommand ?? '-'}</code></div>
+                            <div><strong>Platform</strong><code>{devEnvironment.nodeRuntime ? `${devEnvironment.nodeRuntime.platform} / ${devEnvironment.nodeRuntime.arch}` : '-'}</code></div>
+                          </>
+                        ) : (
+                          <>
+                            <div><strong>Type</strong><code>Environment / Local network</code></div>
+                            {devEnvironmentError && <div><strong>Status</strong><code>{devEnvironmentError}</code></div>}
+                            <div><strong>Host</strong><code>{devEnvironment.localhostPorts?.host ?? '-'}</code></div>
+                            <div><strong>Dev supervisor port</strong><code>{devEnvironment.localhostPorts?.devControlPort ?? '-'}</code></div>
+                            <div><strong>Known ports</strong><code>{devEnvironment.localhostPorts?.knownPorts.join(', ') || '-'}</code></div>
+                          </>
+                        )}
+                      </div>
+                    ) : selectedDevNode.id === 'dev-control-backend' ? (
+                      <>
+                        <div className="dev-meta">
+                          <div><strong>Type</strong><code>{selectedDevNode.metadata.type}</code></div>
+                          <div><strong>URL</strong><a href={selectedDevNode.feature?.url ?? devControlUrl} target="_blank" rel="noreferrer" onClick={event => { event.preventDefault(); openExternalTab(selectedDevNode.feature?.url ?? devControlUrl) }}>{selectedDevNode.feature?.url ?? devControlUrl}</a></div>
+                        </div>
+                        <section className="dev-detail-section dev-process-list">
+                          <h3>Processes</h3>
+                          <ul>
+                            {devProcesses.map(process => (
+                              <li key={process.id}>
+                                <strong>{process.label}</strong>
+                                <span>{process.status}</span>
+                                <code>{process.ports.join(', ') || '-'}</code>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      </>
+                    ) : (
+                      <div className="dev-meta">
+                        <div><strong>Type</strong><code>{selectedDevNode.metadata.type}</code></div>
+                        {selectedDevNode.feature?.url && <div><strong>URL</strong><a href={selectedDevNode.feature.url} target="_blank" rel="noreferrer" onClick={event => { event.preventDefault(); openExternalTab(selectedDevNode.feature?.url ?? '') }}>{selectedDevNode.feature.url}</a></div>}
+                      </div>
+                    )
                   )}
 
-                  {selectedDevNode.feature && (
+                  {selectedDevNode.id === 'unit-test' && (
                     <div className="dev-actions">
                       <button className="primary" onClick={() => { setSelectedDevNodeId(null); setKind('daemon') }}>Open Unit Test</button>
                     </div>

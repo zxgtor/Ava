@@ -247,6 +247,25 @@ function logsFor(targetId, limit = 200) {
   return entry.logs.slice(-limit)
 }
 
+function environmentState() {
+  return {
+    nodeRuntime: {
+      kind: 'runtime',
+      version: process.version,
+      execPath: process.execPath,
+      platform: process.platform,
+      arch: process.arch,
+      npmCommand: NPM,
+    },
+    localhostPorts: {
+      kind: 'network',
+      host: HOST,
+      devControlPort: PORT,
+      knownPorts: Array.from(new Set(targets.flatMap(target => target.ports))).sort((a, b) => a - b),
+    },
+  }
+}
+
 async function handle(req, res) {
   if (req.method === 'OPTIONS') {
     empty(res, 204)
@@ -268,6 +287,11 @@ async function handle(req, res) {
 
     if (url.pathname === '/processes' && req.method === 'GET') {
       json(res, 200, { ok: true, result: targets.map(processState) })
+      return
+    }
+
+    if (url.pathname === '/environment' && req.method === 'GET') {
+      json(res, 200, { ok: true, result: environmentState() })
       return
     }
 
