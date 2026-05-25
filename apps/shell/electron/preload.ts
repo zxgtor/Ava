@@ -177,29 +177,6 @@ interface McpToolDescriptor {
   inputSchema?: unknown
 }
 
-interface UnitTestContext {
-  isDev: boolean
-  cwd: string
-  logPath?: string
-  daemon?: {
-    baseUrl: string
-    chatRuntimeEnabled: boolean
-    error?: string
-  }
-  builtInTools: McpToolDescriptor[]
-  mcpTools: Array<McpToolDescriptor & {
-    serverId: string
-    serverName: string
-    serverStatus: McpServerRuntime['status']
-  }>
-  skills: Array<PluginCapabilityView & {
-    pluginId: string
-    pluginName: string
-    enabled: boolean
-    valid: boolean
-  }>
-}
-
 interface UnitTestLogEntry {
   id: string
   kind: 'built-in' | 'mcp' | 'skill' | 'daemon' | 'feature'
@@ -591,14 +568,9 @@ const ava = {
   },
 
   dev: {
-    unitTestContext: (states: Record<string, PluginState>): Promise<UnitTestContext> =>
-      ipcRenderer.invoke('ava:dev:unitTestContext', states),
+    openControlPanel: (): Promise<string> => ipcRenderer.invoke('ava:dev:openControlPanel'),
     appendUnitTestResult: (entry: UnitTestLogEntry): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
       ipcRenderer.invoke('ava:dev:appendUnitTestResult', entry),
-    readUnitTestResults: (): Promise<{ ok: true; path: string; text: string } | { ok: false; error: string }> =>
-      ipcRenderer.invoke('ava:dev:readUnitTestResults'),
-    clearUnitTestResults: (): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
-      ipcRenderer.invoke('ava:dev:clearUnitTestResults'),
   },
 
   toolAudit: {

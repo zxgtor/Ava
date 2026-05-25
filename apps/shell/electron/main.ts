@@ -29,7 +29,6 @@ import {
 import { applyWin11RoundedCorners } from './services/dwmCorners'
 import {
   abortDaemonChatStream,
-  daemonBaseUrl,
   shouldUseDaemonChat,
   streamChatThroughDaemon,
 } from './services/daemonChatClient'
@@ -46,6 +45,7 @@ const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
+const DEV_CONTROL_PANEL_URL = process.env.AVA_DEV_CONTROL_PANEL_URL || 'http://127.0.0.1:5179'
 
 function isBrokenPipeError(err: unknown): boolean {
   return Boolean(err && typeof err === 'object' && (err as NodeJS.ErrnoException).code === 'EPIPE')
@@ -276,61 +276,6 @@ async function appendUnitTestResult(raw: unknown): Promise<{ ok: true; path: str
   }
 }
 
-async function readUnitTestResults(): Promise<{ ok: true; path: string; text: string } | { ok: false; error: string }> {
-  const root = await ensureUnitTestWorkspace()
-  const file = join(root, UNIT_TEST_RESULTS_FILE)
-  try {
-    return { ok: true, path: file, text: await fs.readFile(file, 'utf8').catch(() => '') }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
-  }
-}
-
-async function clearUnitTestResults(): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
-  const root = await ensureUnitTestWorkspace()
-  const file = join(root, UNIT_TEST_RESULTS_FILE)
-  try {
-    await fs.writeFile(file, '', 'utf8')
-    return { ok: true, path: file }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
-  }
-}
-
-async function localUnitTestContext(states: Record<string, PluginState> | undefined, daemonError?: string) {
-  const testWorkspace = await ensureUnitTestWorkspace()
-  const servers = mcpSupervisor.listServers()
-  const plugins = await pluginManager.discover(states ?? {})
-  return {
-    isDev: true,
-    cwd: testWorkspace,
-    logPath: join(testWorkspace, UNIT_TEST_RESULTS_FILE),
-    daemon: {
-      baseUrl: daemonBaseUrl(),
-      chatRuntimeEnabled: false,
-      error: daemonError,
-    },
-    builtInTools: builtInTools.listTools(),
-    mcpTools: servers.flatMap(server =>
-      (server.tools ?? []).map(tool => ({
-        ...tool,
-        serverId: server.id,
-        serverName: server.name,
-        serverStatus: server.status,
-      })),
-    ),
-    skills: plugins.flatMap(plugin =>
-      plugin.skills.map(skill => ({
-        ...skill,
-        pluginId: plugin.id,
-        pluginName: plugin.manifest?.name ?? plugin.id,
-        enabled: plugin.enabled,
-        valid: plugin.valid,
-      })),
-    ),
-  }
-}
-
 let mainWindow: BrowserWindow | null = null
 let previewWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -519,50 +464,15 @@ function registerIpc(): void {
     return true
   })
 
-  ipcMain.handle('ava:dev:unitTestContext', async (_e, states: Record<string, PluginState> | undefined) => {
-    const devToolsEnabled = is.dev || process.env.AVA_E2E === '1'
-    if (!devToolsEnabled) {
-      return {
-        isDev: false,
-        cwd: process.cwd(),
-        daemon: {
-          baseUrl: daemonBaseUrl(),
-          chatRuntimeEnabled: shouldUseDaemonChat(),
-        },
-        builtInTools: [],
-        mcpTools: [],
-        skills: [],
-      }
-    }
-
-    if (shouldUseDaemonChat()) {
-      try {
-        await ensureNodeDaemonRuntime()
-        return await daemonRuntimeClient.unitTestContext(states ?? {})
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.warn(`[daemon] unit test context unavailable: ${message}`)
-        return localUnitTestContext(states, message)
-      }
-    }
-
-    return localUnitTestContext(states)
+  ipcMain.handle('ava:dev:openControlPanel', async () => {
+    await shell.openExternal(DEV_CONTROL_PANEL_URL)
+    return DEV_CONTROL_PANEL_URL
   })
 
   ipcMain.handle('ava:dev:appendUnitTestResult', async (_e, raw: unknown) => {
     if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
     if (shouldUseDaemonChat()) return daemonRuntimeClient.appendUnitTestResult(raw)
     return appendUnitTestResult(raw)
-  })
-  ipcMain.handle('ava:dev:readUnitTestResults', async () => {
-    if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
-    if (shouldUseDaemonChat()) return daemonRuntimeClient.readUnitTestResults()
-    return readUnitTestResults()
-  })
-  ipcMain.handle('ava:dev:clearUnitTestResults', async () => {
-    if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
-    if (shouldUseDaemonChat()) return daemonRuntimeClient.clearUnitTestResults()
-    return clearUnitTestResults()
   })
 
   // ── Tool audit log ──────────────────────────

@@ -22,7 +22,6 @@ import type {
   TaskExecutionStep,
   TaskExecutionValidation,
   ToolCallStatus,
-  UnitTestSection,
   ViewMode,
 } from './types'
 import {
@@ -39,7 +38,6 @@ interface AppState {
   activeConversationId: string | null
   settings: Settings
   settingsSection: string
-  unitTestSection: UnitTestSection
   viewMode: ViewMode
   sidebarOpen: boolean
   rightPanelOpen: boolean
@@ -51,7 +49,6 @@ type Action =
   | { type: 'HYDRATE'; conversations: Conversation[]; settings: Settings; activeId: string | null }
   | { type: 'SET_VIEW'; view: ViewMode }
   | { type: 'SET_SETTINGS_SECTION'; section: string }
-  | { type: 'SET_UNIT_TEST_SECTION'; section: UnitTestSection }
   | { type: 'SET_SIDEBAR'; open: boolean }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_RIGHT_PANEL'; open: boolean }
@@ -101,9 +98,6 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_SETTINGS_SECTION':
       return { ...state, settingsSection: action.section }
-
-    case 'SET_UNIT_TEST_SECTION':
-      return { ...state, unitTestSection: action.section }
 
     case 'SET_SIDEBAR':
       return { ...state, sidebarOpen: action.open }
@@ -446,7 +440,6 @@ function initialState(): AppState {
     activeConversationId: null,
     settings: defaultSettings(),
     settingsSection: 'persona',
-    unitTestSection: 'built-in',
     viewMode: 'chat',
     sidebarOpen: true,
     rightPanelOpen: false,

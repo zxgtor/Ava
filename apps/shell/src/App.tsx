@@ -6,7 +6,6 @@ import { ConversationSidebar } from './components/ConversationSidebar'
 import { RightPanel } from './components/RightPanel'
 import { PreviewView } from './components/PreviewView'
 import { ChatHeader } from './components/ChatHeader'
-import { UnitTestView } from './components/UnitTestView'
 import { useTranslation } from 'react-i18next'
 import i18n from './lib/i18n'
 
@@ -63,9 +62,7 @@ function Shell() {
         <div className="flex flex-col flex-1 min-w-0 backdrop-blur-main">
           {state.viewMode === 'settings'
             ? <SettingsView />
-            : state.viewMode === 'unit-test'
-              ? <UnitTestView />
-              : <ChatView />}
+            : <ChatView />}
         </div>
         {state.rightPanelOpen && state.viewMode === 'chat' && <RightPanel />}
       </div>
