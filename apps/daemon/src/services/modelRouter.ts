@@ -7,6 +7,7 @@ interface RuntimeSettings {
   modelProviders?: unknown
   primaryModelChain?: unknown
   modelToolFormatMap?: unknown
+  modelCapabilityMap?: unknown
   pluginStates?: unknown
 }
 
@@ -50,11 +51,30 @@ function providerChainFromSettings(settings: RuntimeSettings, providers: ModelPr
   return chain.length > 0 ? chain : providers.map(provider => provider.id)
 }
 
-function toolFormatMapFromSettings(settings: RuntimeSettings): Record<string, ToolCallFormat> {
-  if (!settings.modelToolFormatMap || typeof settings.modelToolFormatMap !== 'object') return {}
+function toolFormatMapFromSettings(settings: RuntimeSettings, providers: ModelProvider[]): Record<string, ToolCallFormat> {
   const result: Record<string, ToolCallFormat> = {}
-  for (const [key, value] of Object.entries(settings.modelToolFormatMap)) {
-    if (value === 'openai' || value === 'hermes' || value === 'none') result[key] = value
+  if (settings.modelToolFormatMap && typeof settings.modelToolFormatMap === 'object') {
+    for (const [key, value] of Object.entries(settings.modelToolFormatMap)) {
+      if (value === 'openai' || value === 'hermes' || value === 'none') result[key] = value
+    }
+  }
+  if (settings.modelCapabilityMap && typeof settings.modelCapabilityMap === 'object') {
+    for (const [key, value] of Object.entries(settings.modelCapabilityMap)) {
+      if (!value || typeof value !== 'object') continue
+      const capability = value as { tools?: unknown; toolFormat?: unknown }
+      const separatorIndex = key.indexOf(':')
+      const providerId = separatorIndex >= 0 ? key.slice(0, separatorIndex) : key
+      const provider = providers.find(item => item.id === providerId)
+      if (capability.toolFormat === 'openai' || capability.toolFormat === 'hermes') {
+        result[key] = capability.toolFormat
+        continue
+      }
+      // A local OpenAI-compatible server can expose no native function-calling
+      // support while still following Ava's XML/Hermes tool-call prompt.
+      if (provider?.type === 'local' && (capability.tools === 'no' || capability.toolFormat === 'none')) {
+        result[key] = 'hermes'
+      }
+    }
   }
   return result
 }
@@ -94,7 +114,7 @@ export async function resolveStreamChatArgsFromDaemonConfig(
     taskAllowedDirs: options.taskAllowedDirs,
     activeCommandInvocation: options.activeCommandInvocation,
     temperature: options.temperature,
-    toolFormatMap: toolFormatMapFromSettings(settings),
+    toolFormatMap: toolFormatMapFromSettings(settings, providers),
     pluginStates: pluginStatesFromSettings(settings),
     activeStepRequiredTools: options.activeStepRequiredTools,
     activeStepRole: options.activeStepRole,
@@ -102,4 +122,3 @@ export async function resolveStreamChatArgsFromDaemonConfig(
     finalReportReadBudget: options.finalReportReadBudget,
   }
 }
-

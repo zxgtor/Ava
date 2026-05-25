@@ -38,6 +38,7 @@ interface TestState {
   message?: string
   lastTool?: string
   durationMs?: number
+  completedAt?: number
   fullContent?: string
 }
 
@@ -76,6 +77,17 @@ interface ToolPart {
   status?: string
   error?: string
   args?: Record<string, unknown>
+}
+
+interface TestSummary {
+  total: number
+  tested: number
+  passed: number
+  failed: number
+  running: number
+  status: TestStatus
+  label: string
+  lastCompletedAt?: number
 }
 
 interface DaemonRequest {
@@ -192,9 +204,10 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
   'web-ui': {
     type: 'web-client',
     features: [
-      'Future browser client',
+      'Browser chat workspace',
       'Shared client SDK',
-      'Remote/mobile-ready UI',
+      'Daemon stream client',
+      'Tool activity preview',
     ],
     dependencies: ['Ava Daemon runtime API', 'Node runtime', 'Localhost ports', 'Client SDK'],
     dependsOn: ['daemon', 'node-runtime', 'localhost-ports'],
@@ -252,8 +265,8 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'MCP tool routing tests',
       'Skill routing tests',
     ],
-    dependencies: ['Ava Daemon runtime API', 'LLM provider when routing tests run', 'Test workspace'],
-    dependsOn: ['daemon'],
+    dependencies: ['Ava Dev Control Panel route', 'Ava Daemon runtime API', 'LLM provider when routing tests run', 'Test workspace'],
+    dependsOn: ['daemon-test-ui', 'daemon'],
   },
 }
 const DEPENDENCY_PIN_COLORS: Record<string, string> = {
@@ -564,6 +577,40 @@ function statusIcon(status: TestStatus) {
   return <FlaskConical size={15} className="muted" />
 }
 
+function summarizeTestTargets(items: TestTarget[], tests: Record<string, TestState>): TestSummary {
+  const states = items.map(target => tests[target.id]).filter(Boolean)
+  const running = states.filter(state => state.status === 'running').length
+  const passed = states.filter(state => state.status === 'passed').length
+  const failed = states.filter(state => state.status === 'failed').length
+  const tested = passed + failed
+  const total = items.length
+  const lastCompletedAt = states.reduce<number | undefined>((latest, state) => (
+    state.completedAt && (!latest || state.completedAt > latest) ? state.completedAt : latest
+  ), undefined)
+  const status: TestStatus = running > 0
+    ? 'running'
+    : failed > 0
+      ? 'failed'
+      : tested > 0 && tested === total
+        ? 'passed'
+        : 'idle'
+  const label = total === 0
+    ? 'no tests'
+    : running > 0
+      ? `${running} running`
+      : tested === 0
+        ? 'not run'
+        : failed > 0
+          ? `${passed}/${total} passed, ${failed} failed`
+          : `${passed}/${total} passed`
+  return { total, tested, passed, failed, running, status, label, lastCompletedAt }
+}
+
+function formatTestTime(timestamp?: number) {
+  if (!timestamp) return '-'
+  return new Date(timestamp).toLocaleString()
+}
+
 function requiredToolsForTarget(target: TestTarget): string[] | undefined {
   if (target.kind === 'skill') return undefined
   if (target.kind === 'mcp') return [target.name]
@@ -597,6 +644,7 @@ export function App() {
   const [devControlUrl, setDevControlUrl] = useState(() => localStorage.getItem('ava-dev-control-url') || DEFAULT_DEV_CONTROL_URL)
   const [kind, setKind] = useState<TargetKind>('dev')
   const [loading, setLoading] = useState(false)
+  const [autoTestRunning, setAutoTestRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [devError, setDevError] = useState<string | null>(null)
   const [devControlStatus, setDevControlStatus] = useState<BackendStatus>('checking')
@@ -716,77 +764,120 @@ export function App() {
     }
   }
 
+  const waitForDaemonReady = useCallback(async () => {
+    const url = baseUrl.replace(/\/+$/, '')
+    const deadline = Date.now() + 30000
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${url}/runtime/status`)
+        if (response.ok) return true
+      } catch {
+        // Keep polling while the daemon build/start script is still coming up.
+      }
+      await new Promise(resolve => setTimeout(resolve, 800))
+    }
+    return false
+  }, [baseUrl])
+
+  const openUnitTestPage = useCallback(async () => {
+    setOpenNodeMenuId(null)
+    setDevError(null)
+    const daemonProcess = devProcesses.find(process => process.id === 'daemon')
+    try {
+      if (!daemonProcess?.running) {
+        setDevBusyId('daemon')
+        await devFetch<DevProcess>('/processes/daemon/start', { method: 'POST' })
+        await loadDevProcesses()
+      }
+      const ready = await waitForDaemonReady()
+      if (!ready) {
+        setDevError('Ava Daemon did not become ready within 30s. Check the daemon logs from the Ava Daemon card.')
+        return
+      }
+      setKind('daemon')
+    } catch (err) {
+      setDevError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDevBusyId(null)
+    }
+  }, [devFetch, devProcesses, loadDevProcesses, waitForDaemonReady])
+
   const writeLog = useCallback((entry: Record<string, unknown>) => {
     void client.appendUnitTestResult(entry).catch(err => {
       console.warn('[daemon-test-ui] failed to write test log:', err)
     })
   }, [client])
 
+  const loadUnitTestTargets = useCallback(async (preferredKind: TargetKind = kind) => {
+    localStorage.setItem('ava-daemon-test-url', baseUrl)
+    const context = await client.unitTestContext<UnitTestContext>({})
+    const nextCwd = context.cwd
+    setCwd(nextCwd)
+    setLogPath(context.logPath ?? '')
+
+    const builtIns: TestTarget[] = context.builtInTools.map(tool => ({
+      id: `built-in:${tool.name}`,
+      kind: 'built-in',
+      name: tool.name,
+      label: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      defaultRequest: defaultBuiltInRequest(tool.name, nextCwd),
+    }))
+    const mcp: TestTarget[] = context.mcpTools.map(tool => ({
+      id: `mcp:${tool.serverId}:${tool.name}`,
+      kind: 'mcp',
+      name: tool.name,
+      label: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      meta: `${tool.serverName} · ${tool.serverStatus}`,
+      defaultRequest: makeMcpRequest(tool.name, tool.inputSchema),
+    }))
+    const skills: TestTarget[] = context.skills.map(skill => ({
+      id: `skill:${skill.pluginId}:${skill.name}`,
+      kind: 'skill',
+      name: skill.name,
+      label: skill.name,
+      meta: `${skill.pluginName} · ${skill.enabled && skill.valid ? 'enabled' : 'disabled'}`,
+      description: skill.sourcePath,
+      defaultRequest: makeSkillRequest(skill.name, skill.pluginName),
+    }))
+    const nextTargets = [...makeDaemonTargets(baseUrl), ...builtIns, ...mcp, ...skills]
+    setTargets(nextTargets)
+    setTests(prev => {
+      const next = { ...prev }
+      for (const target of nextTargets) {
+        const existing = next[target.id]
+        if (!existing) {
+          next[target.id] = { request: target.defaultRequest, defaultRequest: target.defaultRequest, status: 'idle' }
+          continue
+        }
+        const wasUsingGeneratedRequest =
+          existing.defaultRequest === undefined || existing.request === existing.defaultRequest
+        next[target.id] = {
+          ...existing,
+          request: wasUsingGeneratedRequest ? target.defaultRequest : existing.request,
+          defaultRequest: target.defaultRequest,
+        }
+      }
+      return next
+    })
+    setSelectedId(current => current || nextTargets.find(target => target.kind === preferredKind)?.id || nextTargets[0]?.id || '')
+    return nextTargets
+  }, [baseUrl, client, kind])
+
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
-    localStorage.setItem('ava-daemon-test-url', baseUrl)
     try {
-      const context = await client.unitTestContext<UnitTestContext>({})
-      const nextCwd = context.cwd
-      setCwd(nextCwd)
-      setLogPath(context.logPath ?? '')
-
-      const builtIns: TestTarget[] = context.builtInTools.map(tool => ({
-        id: `built-in:${tool.name}`,
-        kind: 'built-in',
-        name: tool.name,
-        label: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-        defaultRequest: defaultBuiltInRequest(tool.name, nextCwd),
-      }))
-      const mcp: TestTarget[] = context.mcpTools.map(tool => ({
-        id: `mcp:${tool.serverId}:${tool.name}`,
-        kind: 'mcp',
-        name: tool.name,
-        label: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-        meta: `${tool.serverName} · ${tool.serverStatus}`,
-        defaultRequest: makeMcpRequest(tool.name, tool.inputSchema),
-      }))
-      const skills: TestTarget[] = context.skills.map(skill => ({
-        id: `skill:${skill.pluginId}:${skill.name}`,
-        kind: 'skill',
-        name: skill.name,
-        label: skill.name,
-        meta: `${skill.pluginName} · ${skill.enabled && skill.valid ? 'enabled' : 'disabled'}`,
-        description: skill.sourcePath,
-        defaultRequest: makeSkillRequest(skill.name, skill.pluginName),
-      }))
-      const nextTargets = [...makeDaemonTargets(baseUrl), ...builtIns, ...mcp, ...skills]
-      setTargets(nextTargets)
-      setTests(prev => {
-        const next = { ...prev }
-        for (const target of nextTargets) {
-          const existing = next[target.id]
-          if (!existing) {
-            next[target.id] = { request: target.defaultRequest, defaultRequest: target.defaultRequest, status: 'idle' }
-            continue
-          }
-          const wasUsingGeneratedRequest =
-            existing.defaultRequest === undefined || existing.request === existing.defaultRequest
-          next[target.id] = {
-            ...existing,
-            request: wasUsingGeneratedRequest ? target.defaultRequest : existing.request,
-            defaultRequest: target.defaultRequest,
-          }
-        }
-        return next
-      })
-      setSelectedId(current => current || nextTargets.find(target => target.kind === kind)?.id || nextTargets[0]?.id || '')
+      await loadUnitTestTargets(kind)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
     }
-  }, [baseUrl, client, kind])
+  }, [kind, loadUnitTestTargets])
 
   useEffect(() => {
     if (kind === 'dev') return
@@ -873,12 +964,12 @@ export function App() {
       const durationMs = Date.now() - startedAt
       const passed = /ava daemon runtime ok/i.test(fullContent)
       const message = passed ? `Passed in ${durationMs}ms` : `Unexpected response: ${fullContent.slice(0, 300) || '(empty)'}`
-      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: passed ? 'passed' : 'failed', message, durationMs, fullContent } }))
+      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: passed ? 'passed' : 'failed', message, durationMs, completedAt: Date.now(), fullContent } }))
       writeLog({ id: target.id, kind: target.kind, name: target.name, status: passed ? 'passed' : 'failed', message, durationMs, request: requestText, fullContent })
     } catch (err) {
       const durationMs = Date.now() - startedAt
       const message = err instanceof Error ? err.message : String(err)
-      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'failed', message, durationMs, fullContent } }))
+      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'failed', message, durationMs, completedAt: Date.now(), fullContent } }))
       writeLog({ id: target.id, kind: target.kind, name: target.name, status: 'failed', message, durationMs, request: requestText, fullContent })
     }
   }
@@ -909,12 +1000,12 @@ export function App() {
 
       const durationMs = Date.now() - startedAt
       const message = `Passed in ${durationMs}ms${eventTypes.length ? `; events: ${eventTypes.join(', ')}` : ''}`
-      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'passed', message, durationMs, fullContent } }))
+      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'passed', message, durationMs, completedAt: Date.now(), fullContent } }))
       writeLog({ id: target.id, kind: target.kind, name: target.name, status: 'passed', message, durationMs, request: requestText, fullContent })
     } catch (err) {
       const durationMs = Date.now() - startedAt
       const message = err instanceof Error ? err.message : String(err)
-      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'failed', message, durationMs } }))
+      setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'failed', message, durationMs, completedAt: Date.now() } }))
       writeLog({ id: target.id, kind: target.kind, name: target.name, status: 'failed', message, durationMs, request: requestText })
     }
   }
@@ -1015,7 +1106,7 @@ export function App() {
 
       setTests(prev => ({
         ...prev,
-        [target.id]: { request: requestText, status: passed ? 'passed' : 'failed', message, lastTool, durationMs, fullContent },
+        [target.id]: { request: requestText, status: passed ? 'passed' : 'failed', message, lastTool, durationMs, completedAt: Date.now(), fullContent },
       }))
       writeLog({
         id: target.id,
@@ -1033,7 +1124,7 @@ export function App() {
       const message = err instanceof Error ? err.message : String(err)
       setTests(prev => ({
         ...prev,
-        [target.id]: { request: requestText, status: 'failed', message, durationMs, fullContent },
+        [target.id]: { request: requestText, status: 'failed', message, durationMs, completedAt: Date.now(), fullContent },
       }))
       writeLog({ id: target.id, kind: target.kind, name: target.name, status: 'failed', message, durationMs, request: requestText, fullContent })
     }
@@ -1052,6 +1143,30 @@ export function App() {
     for (const target of visibleTargets) {
       setSelectedId(target.id)
       await runTarget(target)
+    }
+  }
+
+  const runAllTestTargets = async () => {
+    setAutoTestRunning(true)
+    setError(null)
+    try {
+      await openUnitTestPage()
+      const ready = await waitForDaemonReady()
+      if (!ready) {
+        setError('Ava Daemon did not become ready within 30s. Auto Test stopped.')
+        return
+      }
+      const nextTargets = await loadUnitTestTargets('daemon')
+      const allTargets = TEST_KINDS.flatMap(testKind => nextTargets.filter(target => target.kind === testKind))
+      setKind('daemon')
+      for (const target of allTargets) {
+        setSelectedId(target.id)
+        await runTarget(target)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAutoTestRunning(false)
     }
   }
 
@@ -1123,7 +1238,7 @@ export function App() {
         feature: {
           label: 'Unit Test',
           description: 'Open daemon, built-in tool, MCP, and skill routing tests.',
-          status: 'feature',
+          status: 'available',
           url: baseUrl,
         },
       },
@@ -1182,12 +1297,31 @@ export function App() {
       selectedDevProcess,
     )
     : 'unavailable'
+  const testSummariesByKind = useMemo(() => ({
+    daemon: summarizeTestTargets(targets.filter(target => target.kind === 'daemon'), tests),
+    'built-in': summarizeTestTargets(targets.filter(target => target.kind === 'built-in'), tests),
+    mcp: summarizeTestTargets(targets.filter(target => target.kind === 'mcp'), tests),
+    skill: summarizeTestTargets(targets.filter(target => target.kind === 'skill'), tests),
+  }), [targets, tests])
+  const allTestSummary = useMemo(
+    () => summarizeTestTargets(targets.filter(target => target.kind !== 'dev'), tests),
+    [targets, tests],
+  )
+
+  const testSummaryForFeature = (nodeId: string, featureName: string): TestSummary | null => {
+    if (nodeId !== 'unit-test') return null
+    if (/daemon/i.test(featureName)) return testSummariesByKind.daemon
+    if (/built-in/i.test(featureName)) return testSummariesByKind['built-in']
+    if (/mcp/i.test(featureName)) return testSummariesByKind.mcp
+    if (/skill/i.test(featureName)) return testSummariesByKind.skill
+    return null
+  }
 
   const renderNodeActions = (node: DevDependencyNode, process?: DevProcess) => (
     node.feature
       ? node.id === 'unit-test'
         ? [
-          { label: 'Open Unit Test', disabled: false, run: () => { setOpenNodeMenuId(null); setKind('daemon') } },
+          { label: 'Open Unit Test', disabled: devBusyId === 'daemon', run: () => { void openUnitTestPage() } },
         ]
         : []
       : [
@@ -1322,7 +1456,20 @@ export function App() {
               {kind !== 'dev' && logPath && <p>Log: <code>{logPath}</code></p>}
             </div>
           </div>
-          {kind !== 'dev' && (
+          {kind === 'dev' ? (
+            <div className="actions">
+              <button
+                className="top-icon-action"
+                title="Auto test all Unit Test items"
+                onClick={() => { void runAllTestTargets() }}
+                disabled={autoTestRunning || loading}
+                aria-label="Auto test all Unit Test items"
+              >
+                {autoTestRunning ? <RefreshCw size={16} className="spin" /> : <FlaskConical size={16} />}
+                <span>Auto Test</span>
+              </button>
+            </div>
+          ) : (
             <div className="actions">
               <button className="ghost" onClick={() => setKind('dev')}>Back</button>
               <div className="section-tabs">
@@ -1406,9 +1553,7 @@ export function App() {
                   const url = feature?.url ?? process?.url ?? ''
                   const hasInputDependency = visibleCardPins.has(`${node.id}:input`)
                   const hasOutputDependents = visibleCardPins.has(`${node.id}:output`)
-                  const statusText = displayStatus === 'feature'
-                    ? 'open'
-                    : displayStatus === 'environment'
+                  const statusText = displayStatus === 'environment'
                       ? 'environment'
                       : displayStatus
                   const actions = renderNodeActions(node, process)
@@ -1498,11 +1643,19 @@ export function App() {
                         </a>
                       )}
                       <div className="node-feature-list">
-                        {node.metadata.features.map(item => (
+                        {node.metadata.features.map(item => {
+                          const featureSummary = testSummaryForFeature(node.id, item)
+                          return (
                           <div className="node-feature-row" key={item}>
-                            <span>{truncateText(item, 34)}</span>
+                            <span>{truncateText(item, featureSummary ? 25 : 34)}</span>
+                            {featureSummary && (
+                              <em className={`feature-test-chip ${featureSummary.status}`}>
+                                {featureSummary.label}
+                              </em>
+                            )}
                           </div>
-                        ))}
+                          )
+                        })}
                       </div>
                       <div className="canvas-node-footer">
                         <span className={`pill ${displayStatus}`}>{truncateText(statusText, 13)}</span>
@@ -1549,6 +1702,22 @@ export function App() {
                       )}
                     </section>
                   </div>
+
+                  {selectedDevNode.id === 'unit-test' && (
+                    <section className="dev-detail-section dev-test-summary">
+                      <h3>Test result</h3>
+                      <div className="test-summary-grid">
+                        <div><strong>Total</strong><code>{allTestSummary.label}</code></div>
+                        <div><strong>Last test time</strong><code>{formatTestTime(allTestSummary.lastCompletedAt)}</code></div>
+                      </div>
+                      <ul>
+                        <li><strong>Daemon</strong><span>{testSummariesByKind.daemon.label}</span></li>
+                        <li><strong>Built-in</strong><span>{testSummariesByKind['built-in'].label}</span></li>
+                        <li><strong>MCP</strong><span>{testSummariesByKind.mcp.label}</span></li>
+                        <li><strong>Skill</strong><span>{testSummariesByKind.skill.label}</span></li>
+                      </ul>
+                    </section>
+                  )}
 
                   {selectedDevProcess ? (
                     <>
@@ -1621,7 +1790,7 @@ export function App() {
 
                   {selectedDevNode.id === 'unit-test' && (
                     <div className="dev-actions">
-                      <button className="primary" onClick={() => { setSelectedDevNodeId(null); setKind('daemon') }}>Open Unit Test</button>
+                      <button className="primary" disabled={devBusyId === 'daemon'} onClick={() => { setSelectedDevNodeId(null); void openUnitTestPage() }}>Open Unit Test</button>
                     </div>
                   )}
                 </article>

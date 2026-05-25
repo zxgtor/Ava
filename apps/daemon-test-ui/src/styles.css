@@ -23,6 +23,7 @@ body {
   margin: 0;
   min-width: 960px;
   min-height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(circle at 15% 10%, rgba(94, 208, 165, 0.16), transparent 34%),
     radial-gradient(circle at 85% 25%, rgba(99, 164, 255, 0.18), transparent 34%),
@@ -46,8 +47,10 @@ textarea {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: flex;
+  overflow: hidden;
 }
 
 .brand {
@@ -185,8 +188,10 @@ textarea {
 .main {
   width: 100%;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .top {
@@ -237,6 +242,32 @@ textarea {
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
+}
+
+.top-icon-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 8px 12px;
+  border: 1px solid rgba(94, 208, 165, 0.28);
+  border-radius: 999px;
+  background: rgba(94, 208, 165, 0.08);
+  color: #dfffee;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  box-shadow: 0 0 22px rgba(94, 208, 165, 0.08);
+}
+
+.top-icon-action:hover:not(:disabled) {
+  border-color: rgba(94, 208, 165, 0.52);
+  background: rgba(94, 208, 165, 0.14);
+}
+
+.top-icon-action:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .section-tabs {
@@ -824,6 +855,10 @@ button:disabled {
     rgba(15, 22, 36, 0.92);
 }
 
+.canvas-node.available {
+  border-color: rgba(99, 164, 255, 0.46);
+}
+
 .canvas-node.unavailable {
   opacity: 0.72;
 }
@@ -879,7 +914,10 @@ button:disabled {
 }
 
 .node-feature-row {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: calc(8px * var(--node-scale));
+  align-items: center;
   border: 1px solid rgba(177, 197, 255, 0.12);
   border-radius: calc(10px * var(--node-scale));
   background: rgba(255, 255, 255, 0.045);
@@ -894,6 +932,37 @@ button:disabled {
   color: var(--text-2);
   font-size: calc(10px * var(--node-scale));
   font-weight: 750;
+}
+
+.feature-test-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: calc(112px * var(--node-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: calc(2px * var(--node-scale)) calc(6px * var(--node-scale));
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  font-size: calc(8px * var(--node-scale));
+  font-style: normal;
+  font-weight: 950;
+}
+
+.feature-test-chip.passed {
+  color: var(--ok);
+  background: rgba(121, 226, 168, 0.1);
+}
+
+.feature-test-chip.failed {
+  color: var(--danger);
+  background: rgba(255, 107, 123, 0.11);
+}
+
+.feature-test-chip.running {
+  color: var(--accent-2);
+  background: rgba(99, 164, 255, 0.12);
 }
 
 .dependency-row-pin {
@@ -1147,6 +1216,11 @@ button:disabled {
   background: rgba(99, 164, 255, 0.14);
 }
 
+.pill.available {
+  color: #a8ccff;
+  background: rgba(99, 164, 255, 0.14);
+}
+
 .pill.environment {
   color: #ffd36a;
   background: rgba(255, 211, 106, 0.12);
@@ -1230,6 +1304,65 @@ button:disabled {
   font-size: 10px;
 }
 
+.dev-test-summary {
+  margin-top: 15px;
+}
+
+.test-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.test-summary-grid div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(177, 197, 255, 0.1);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 9px 10px;
+}
+
+.test-summary-grid strong {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.test-summary-grid code {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.dev-test-summary ul {
+  padding-left: 0;
+  list-style: none;
+}
+
+.dev-test-summary li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(177, 197, 255, 0.1);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 8px 10px;
+}
+
+.dev-test-summary li strong {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.dev-test-summary li span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .dev-actions {
   display: flex;
   gap: 8px;
@@ -1251,6 +1384,8 @@ button:disabled {
 }
 
 .target-list {
+  min-height: 0;
+  height: 100%;
   overflow: auto;
   padding: 12px;
   border-right: 1px solid var(--line);
@@ -1300,6 +1435,8 @@ button:disabled {
 
 .detail {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   overflow: auto;
   padding: 24px;
 }

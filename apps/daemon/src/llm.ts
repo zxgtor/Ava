@@ -427,6 +427,12 @@ function chooseReasoningMode(
   if (provider.reasoningMode === 'on') return 'on'
   if (isReasoningBroken(provider.id, provider.defaultModel)) return 'off'
   if (
+    toolsExposed &&
+    /<tool_call\b|exactly\s+(?:this\s+)?(?:one\s+)?tool\s+call|call\s+(?:mcp\s+)?tool\b/i.test(currentTask)
+  ) {
+    return 'off'
+  }
+  if (
     activeStepRole === 'scaffold' ||
     activeStepRole === 'install' ||
     activeStepRole === 'preview' ||

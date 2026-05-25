@@ -48,7 +48,7 @@ const targets = [
   {
     id: 'web-ui',
     label: 'Ava Web UI',
-    description: 'Reserved for future web client.',
+    description: 'Browser chat client for Ava daemon.',
     command: NPM,
     args: ['run', 'dev', '--workspace=@ava/web'],
     cwd: ROOT,
@@ -82,6 +82,37 @@ function empty(res, statusCode) {
 
 function targetById(id) {
   return targets.find(target => target.id === id)
+}
+
+function npmSpawnCommand(args) {
+  const npmCli = process.env.npm_execpath
+  const nodeExe = process.env.npm_node_execpath || process.execPath
+  if (npmCli && nodeExe) {
+    return {
+      command: nodeExe,
+      args: [npmCli, ...args],
+      shell: false,
+    }
+  }
+
+  if (IS_WIN) {
+    return {
+      command: 'cmd.exe',
+      args: ['/d', '/s', '/c', `npm ${args.join(' ')}`],
+      shell: false,
+    }
+  }
+
+  return {
+    command: 'npm',
+    args,
+    shell: false,
+  }
+}
+
+function spawnCommandForTarget(target) {
+  if (target.command === NPM) return npmSpawnCommand(target.args)
+  return { command: target.command, args: target.args, shell: false }
 }
 
 function appendLog(entry, stream, chunk) {
@@ -183,11 +214,13 @@ async function startTarget(target) {
   const state = processState(target)
   if (state.running) return state
 
-  const child = spawn(target.command, target.args, {
+  const spawnCommand = spawnCommandForTarget(target)
+  const child = spawn(spawnCommand.command, spawnCommand.args, {
     cwd: target.cwd,
     env: process.env,
     detached: !IS_WIN,
-    windowsHide: false,
+    windowsHide: true,
+    shell: spawnCommand.shell,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
