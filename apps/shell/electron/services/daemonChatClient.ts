@@ -9,14 +9,6 @@ const DEFAULT_DAEMON_PORT = '17871'
 
 const activeDaemonStreams = new Map<string, AbortController>()
 
-export function shouldUseDaemonChat(): boolean {
-  const value = process.env.AVA_CHAT_RUNTIME ?? process.env.AVA_USE_DAEMON_CHAT
-  if (value === undefined) return true
-  const normalized = value.toLowerCase()
-  if (normalized === 'local' || normalized === 'off' || normalized === '0' || normalized === 'false') return false
-  return normalized === 'daemon' || normalized === '1' || normalized === 'true'
-}
-
 export function daemonBaseUrl(): string {
   if (process.env.AVA_DAEMON_URL) return process.env.AVA_DAEMON_URL.replace(/\/+$/, '')
   const host = process.env.AVA_DAEMON_HOST || DEFAULT_DAEMON_HOST

@@ -17,6 +17,7 @@ import {
 import type { AvaChatStreamEvent, AvaChatStreamRequest } from '@ava/contracts'
 import { runtimePaths } from './services/runtimePaths'
 import { resolveStreamChatArgsFromDaemonConfig, type DaemonStreamOptions } from './services/modelRouter'
+import { streamTaskExecutionPlan } from './agentTaskLoop'
 
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
@@ -213,7 +214,9 @@ export function createDaemonRuntimeServices() {
     async streamChat(request: AvaChatStreamRequest, emit: EmitDaemonEvent) {
       const args = await streamChatArgsFromRequest(request)
       const eventTarget = createRuntimeEventTarget(args, emit)
-      const result = await streamChat(eventTarget as never, args)
+      const result = args.activeTaskPlan
+        ? await streamTaskExecutionPlan(eventTarget, args)
+        : await streamChat(eventTarget as never, args)
 
       emit({
         type: 'chat.message.completed',

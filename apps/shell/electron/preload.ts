@@ -69,6 +69,7 @@ interface StreamChatArgs {
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
+  activeTaskPlan?: unknown
   activeFolderPath?: string
   taskAllowedDirs?: string[]
   activeCommandInvocation?: ToolAuditCommandInvocation
@@ -168,6 +169,7 @@ type RuntimeStreamEvent =
   | { type: 'run_status'; streamId: string; taskId?: string; phase: AssistantRunPhase; providerId?: string; providerName?: string; model?: string }
   | { type: 'tool_call_started'; streamId: string; taskId?: string; partIndex: number; part: StreamChatOk['result']['parts'][number] }
   | { type: 'tool_result'; streamId: string; taskId?: string; partIndex: number; partId?: string; patch: Record<string, unknown> }
+  | { type: 'task_plan_update'; streamId: string; taskId?: string; phase: 'started' | 'advanced' | 'completed' | 'blocked'; plan: unknown; validation?: unknown; stepTitle?: string; error?: string }
   | { type: 'error'; streamId: string; taskId?: string; message: string }
 
 interface McpToolDescriptor {
@@ -375,6 +377,7 @@ function daemonRequest(args: StreamChatArgs) {
       streamOptions: {
         streamId: args.streamId,
         activeTaskId: args.activeTaskId,
+        activeTaskPlan: args.activeTaskPlan,
         activeFolderPath: args.activeFolderPath,
         taskAllowedDirs: args.taskAllowedDirs,
         activeCommandInvocation: args.activeCommandInvocation,
@@ -568,6 +571,7 @@ const ava = {
   },
 
   dev: {
+    isEnabled: (): boolean => process.env.NODE_ENV === 'development' || process.env.AVA_E2E === '1',
     openControlPanel: (): Promise<string> => ipcRenderer.invoke('ava:dev:openControlPanel'),
     appendUnitTestResult: (entry: UnitTestLogEntry): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
       ipcRenderer.invoke('ava:dev:appendUnitTestResult', entry),

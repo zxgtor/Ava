@@ -1111,8 +1111,182 @@ export function ChatView() {
       }
 
       try {
+        if (taskPlan) {
+          let latestPlan = taskPlan
+          let daemonCompleted = false
+          let daemonBlockedError: string | undefined
+          const activeStep = nextTaskStep(taskPlan)
+          if (activeStep) {
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { taskStepTitle: activeStep.title },
+            })
+          }
+          setStreamId(id)
+          const result = await sendChat({
+            conversation: currentSnapshot,
+            settings: state.settings,
+            projectBrief,
+            folderPath: currentSnapshot.folderPath,
+            streamId: id,
+            activeTaskId,
+            activeTaskPlan: taskPlan,
+            activeStep: activeStep ?? undefined,
+            finalReportAllowed: activeStep && (activeStep.role === 'final_report' || activeStep.id === 'final_report')
+              ? finalValidationGateSatisfied(taskPlan.validation, taskPlan)
+              : false,
+            onStatus: ({ taskId, phase }) => {
+              if (taskId && taskId !== activeTaskId) return
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { runPhase: phase },
+              })
+            },
+            onDelta: delta => {
+              accumulatedParts = appendLocalDelta(accumulatedParts, delta)
+              dispatch({
+                type: 'APPEND_DELTA',
+                conversationId,
+                messageId: placeholderId,
+                delta,
+              })
+            },
+            onReasoningDelta: delta => {
+              dispatch({
+                type: 'APPEND_REASONING_DELTA',
+                conversationId,
+                messageId: placeholderId,
+                delta,
+              })
+            },
+            onPart: ({ taskId, part }) => {
+              if (taskId && taskId !== activeTaskId) return
+              const nextPart = part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? activeTaskId } : part
+              accumulatedParts = [...accumulatedParts, nextPart]
+              dispatch({
+                type: 'ADD_PART',
+                conversationId,
+                messageId: placeholderId,
+                part: nextPart,
+              })
+            },
+            onPartUpdate: ({ taskId, partIndex, partId, patch }) => {
+              if (taskId && taskId !== activeTaskId) return
+              accumulatedParts = updateLocalToolPart(accumulatedParts, partIndex, partId, patch)
+              dispatch({
+                type: 'UPDATE_PART',
+                conversationId,
+                messageId: placeholderId,
+                partIndex,
+                partId,
+                patch,
+              })
+            },
+            onTaskPlanUpdate: ({ taskId, phase, plan, validation, stepTitle, error }) => {
+              if (taskId && taskId !== activeTaskId) return
+              latestPlan = plan
+              if (phase === 'blocked') {
+                daemonBlockedError = error ?? 'Task plan blocked in daemon.'
+                dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan })
+              } else if (phase === 'completed') {
+                daemonCompleted = true
+                dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan })
+              } else {
+                dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan })
+              }
+              if (validation) dispatch({ type: 'UPDATE_TASK_VALIDATION', conversationId, validation })
+              if (stepTitle || phase === 'completed' || phase === 'blocked') {
+                dispatch({
+                  type: 'UPDATE_MESSAGE',
+                  conversationId,
+                  messageId: placeholderId,
+                  patch: { taskStepTitle: phase === 'completed' || phase === 'blocked' ? undefined : stepTitle },
+                })
+              }
+            },
+          })
+
+          if (result.ok) {
+            accumulatedParts = mergeAuthoritativeParts(accumulatedParts, result.parts, activeTaskId)
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { content: accumulatedParts },
+            })
+            if (result.detectedToolFormat !== 'none') {
+              const key = `${result.providerId}:${result.model}`
+              dispatch({
+                type: 'UPDATE_SETTINGS',
+                settings: {
+                  ...state.settings,
+                  modelToolFormatMap: {
+                    ...state.settings.modelToolFormatMap,
+                    [key]: result.detectedToolFormat,
+                  },
+                },
+              })
+            }
+            if (daemonBlockedError) {
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { streaming: false, error: daemonBlockedError, runPhase: 'error' },
+              })
+              await logFeatureTest({ status: 'failed', message: daemonBlockedError, fullContent: result.fullContent })
+              return
+            }
+            if (daemonCompleted || latestPlan.status === 'completed') {
+              dispatch({
+                type: 'UPDATE_MESSAGE',
+                conversationId,
+                messageId: placeholderId,
+                patch: { streaming: false, runPhase: 'completed', taskStepTitle: undefined },
+              })
+              await logFeatureTest({ status: 'passed', fullContent: result.fullContent })
+              return
+            }
+            const error = result.stopReason
+              ? `Daemon task loop stopped with ${result.stopReason}.`
+              : 'Daemon task loop ended before completing or blocking the active task plan.'
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { streaming: false, error, runPhase: 'error' },
+            })
+            await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
+            return
+          }
+
+          if (result.error === 'aborted') {
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId,
+              messageId: placeholderId,
+              patch: { streaming: false, aborted: true, runPhase: 'aborted', taskStepTitle: undefined },
+            })
+            await logFeatureTest({ status: 'failed', message: 'aborted' })
+            return
+          }
+
+          dispatch({
+            type: 'UPDATE_MESSAGE',
+            conversationId,
+            messageId: placeholderId,
+            patch: { streaming: false, error: result.error, runPhase: 'error', taskStepTitle: undefined },
+          })
+          await logFeatureTest({ status: 'failed', message: result.error })
+          return
+        }
+
         while (true) {
-          const activeStep = taskPlan ? nextTaskStep(taskPlan) : null
+          const activeStep: TaskExecutionPlan['steps'][number] | null = taskPlan ? nextTaskStep(taskPlan) : null
           if (taskPlan && !activeStep) {
             taskPlan = completePlan(taskPlan)
             dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })

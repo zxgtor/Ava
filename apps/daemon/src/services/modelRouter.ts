@@ -14,6 +14,7 @@ interface RuntimeSettings {
 export interface DaemonStreamOptions {
   streamId: string
   activeTaskId?: string
+  activeTaskPlan?: StreamChatArgs['activeTaskPlan']
   activeFolderPath?: string
   taskAllowedDirs?: string[]
   activeCommandInvocation?: StreamChatArgs['activeCommandInvocation']
@@ -110,6 +111,7 @@ export async function resolveStreamChatArgsFromDaemonConfig(
     messages: requestMessages,
     providers: enabledProviders,
     activeTaskId: options.activeTaskId,
+    activeTaskPlan: options.activeTaskPlan,
     activeFolderPath: options.activeFolderPath,
     taskAllowedDirs: options.taskAllowedDirs,
     activeCommandInvocation: options.activeCommandInvocation,

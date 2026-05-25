@@ -9,42 +9,22 @@ import { basename, join } from 'node:path'
 
 
 import {
-  loadSettings,
-  saveSettings,
   loadConversations,
   saveConversations,
   getUserDataPath,
 } from './storage'
-import {
-  abortStream,
-  builtInTools,
-  mcpSupervisor,
-  pluginManager,
-  streamChat,
-  toolAuditLog,
-  type McpServerConfig,
-  type PluginState,
-  type StreamChatArgs,
-} from '@ava/daemon'
 import { applyWin11RoundedCorners } from './services/dwmCorners'
 import {
   abortDaemonChatStream,
-  shouldUseDaemonChat,
   streamChatThroughDaemon,
 } from './services/daemonChatClient'
-import {
-  shouldStartEmbeddedDaemonRuntime,
-  startEmbeddedDaemonRuntime,
-  stopEmbeddedDaemonRuntime,
-} from './services/embeddedDaemonServer'
 import { daemonRuntimeClient } from './services/daemonRuntimeClient'
 import { ensureNodeDaemonRuntime, stopNodeDaemonRuntime } from './services/nodeDaemonProcess'
 import { configureRuntimePaths } from './services/runtimePaths'
+import type { PluginState, StreamChatArgs } from '@ava/daemon'
 
 const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
-const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
-const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
 const DEV_CONTROL_PANEL_URL = process.env.AVA_DEV_CONTROL_PANEL_URL || 'http://127.0.0.1:5179'
 
 function isBrokenPipeError(err: unknown): boolean {
@@ -231,51 +211,6 @@ function defaultProjectFileContent(fileName: string): string | null {
   return null
 }
 
-async function ensureUnitTestWorkspace(): Promise<string> {
-  const root = join(process.cwd(), UNIT_TEST_WORKSPACE_DIR)
-  await fs.mkdir(join(root, 'src'), { recursive: true })
-  await fs.writeFile(
-    join(root, 'package.json'),
-    JSON.stringify({
-      name: 'ava-unit-test-workspace',
-      version: '0.0.0',
-      private: true,
-      type: 'module',
-      scripts: {
-        test: 'node src/index.js',
-        build: 'node src/index.js',
-      },
-    }, null, 2),
-    'utf8',
-  )
-  await fs.writeFile(
-    join(root, 'src', 'index.js'),
-    'console.log("ava unit test workspace ok")\n',
-    'utf8',
-  )
-  await fs.writeFile(
-    join(root, 'README.md'),
-    '# Ava Unit Test Workspace\n\nThis folder is generated for safe dev tool-call tests.\n',
-    'utf8',
-  )
-  return root
-}
-
-async function appendUnitTestResult(raw: unknown): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
-  const root = await ensureUnitTestWorkspace()
-  const file = join(root, UNIT_TEST_RESULTS_FILE)
-  try {
-    const record = {
-      time: new Date().toISOString(),
-      ...(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : { value: raw }),
-    }
-    await fs.appendFile(file, `${JSON.stringify(record)}\n`, 'utf8')
-    return { ok: true, path: file }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
-  }
-}
-
 let mainWindow: BrowserWindow | null = null
 let previewWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -370,7 +305,6 @@ function createMainWindow(): void {
     if (mainWindow) {
       // Apply Win11 system-level rounded corners (no-op on non-Windows / Win10)
       applyWin11RoundedCorners(mainWindow, 'round')
-      mcpSupervisor.wire(mainWindow.webContents)
       initAutoUpdater(mainWindow)
     }
     mainWindow?.show()
@@ -395,35 +329,14 @@ function createMainWindow(): void {
 }
 
 function registerIpc(): void {
-  if (process.env.AVA_E2E === '1') {
-    ;(globalThis as typeof globalThis & {
-      __avaBuiltInTools?: typeof builtInTools
-    }).__avaBuiltInTools = builtInTools
-  }
-
   // ── smoke test ──────────────────────────────
   ipcMain.handle('ava:ping', () => 'pong')
   ipcMain.handle('ava:paths:userData', () => getUserDataPath())
 
   // ── settings persistence ────────────────────
-  ipcMain.handle('ava:settings:load', async () =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.loadSettings() : loadSettings(),
-  )
+  ipcMain.handle('ava:settings:load', async () => daemonRuntimeClient.loadSettings())
   ipcMain.handle('ava:settings:save', async (_e, data: unknown) => {
-    if (shouldUseDaemonChat()) {
-      await daemonRuntimeClient.saveSettings(data)
-      return true
-    }
-    await saveSettings(data)
-    const mcpServers = await readRuntimeMcpServers(data)
-    if (mcpServers) {
-      try {
-        await mcpSupervisor.applyConfigs(mcpServers)
-      } catch (err) {
-        if (!isBrokenPipeError(err)) throw err
-        console.warn('[mcp] ignored EPIPE while applying settings; server process likely closed its stdio pipe.')
-      }
-    }
+    await daemonRuntimeClient.saveSettings(data)
     return true
   })
 
@@ -437,9 +350,7 @@ function registerIpc(): void {
   // ── LLM streaming ───────────────────────────
   ipcMain.handle('ava:llm:stream', async (event, args: StreamChatArgs) => {
     try {
-      const result = shouldUseDaemonChat()
-        ? await streamChatThroughDaemon(event.sender, args)
-        : await streamChat(event.sender, args)
+      const result = await streamChatThroughDaemon(event.sender, args)
       return { ok: true as const, result }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -447,20 +358,12 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('ava:llm:abort', (_e, streamId: string) =>
-    abortDaemonChatStream(streamId) || abortStream(streamId),
-  )
+  ipcMain.handle('ava:llm:abort', (_e, streamId: string) => abortDaemonChatStream(streamId))
 
   // ── MCP runtime ─────────────────────────────
-  ipcMain.handle('ava:mcp:listServers', () =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.listMcpServers() : mcpSupervisor.listServers(),
-  )
+  ipcMain.handle('ava:mcp:listServers', () => daemonRuntimeClient.listMcpServers())
   ipcMain.handle('ava:mcp:restart', async (_e, serverId: string) => {
-    if (shouldUseDaemonChat()) {
-      await daemonRuntimeClient.restartMcpServer(serverId)
-      return true
-    }
-    await mcpSupervisor.restart(serverId)
+    await daemonRuntimeClient.restartMcpServer(serverId)
     return true
   })
 
@@ -471,29 +374,22 @@ function registerIpc(): void {
 
   ipcMain.handle('ava:dev:appendUnitTestResult', async (_e, raw: unknown) => {
     if (!is.dev && process.env.AVA_E2E !== '1') return { ok: false as const, error: 'Unit Test logging is only available in dev mode.' }
-    if (shouldUseDaemonChat()) return daemonRuntimeClient.appendUnitTestResult(raw)
-    return appendUnitTestResult(raw)
+    return daemonRuntimeClient.appendUnitTestResult(raw)
   })
 
   // ── Tool audit log ──────────────────────────
-  ipcMain.handle('ava:toolAudit:list', async (_e, limit?: number) =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.listToolAudit(limit) : toolAuditLog.list(limit),
-  )
+  ipcMain.handle('ava:toolAudit:list', async (_e, limit?: number) => daemonRuntimeClient.listToolAudit(limit))
   ipcMain.handle('ava:toolAudit:clear', async () => {
-    if (shouldUseDaemonChat()) {
-      await daemonRuntimeClient.clearToolAudit()
-      return true
-    }
-    await toolAuditLog.clear()
+    await daemonRuntimeClient.clearToolAudit()
     return true
   })
 
   // ── Plugins ─────────────────────────────────
   ipcMain.handle('ava:plugins:list', async (_e, states: Record<string, PluginState> | undefined) =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.listPlugins(states ?? {}) : pluginManager.discover(states ?? {}),
+    daemonRuntimeClient.listPlugins(states ?? {}),
   )
   ipcMain.handle('ava:plugins:listCommands', async (_e, states: Record<string, PluginState> | undefined) =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.listPluginCommands(states ?? {}) : pluginManager.commandsForStates(states ?? {}),
+    daemonRuntimeClient.listPluginCommands(states ?? {}),
   )
   ipcMain.handle('ava:plugins:installFolder', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
@@ -505,10 +401,9 @@ function registerIpc(): void {
       : await dialog.showOpenDialog({
           title: '选择插件目录',
           properties: ['openDirectory'],
-        })
+    })
     if (result.canceled || result.filePaths.length === 0) return null
-    if (shouldUseDaemonChat()) return daemonRuntimeClient.installPluginFromFolder(result.filePaths[0])
-    return pluginManager.installFromFolder(result.filePaths[0])
+    return daemonRuntimeClient.installPluginFromFolder(result.filePaths[0])
   })
   ipcMain.handle('ava:plugins:installZip', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
@@ -522,27 +417,22 @@ function registerIpc(): void {
           title: '选择插件 zip',
           properties: ['openFile'],
           filters: [{ name: 'Zip archives', extensions: ['zip'] }],
-        })
+    })
     if (result.canceled || result.filePaths.length === 0) return null
-    if (shouldUseDaemonChat()) return daemonRuntimeClient.installPluginFromZip(result.filePaths[0])
-    return pluginManager.installFromZip(result.filePaths[0])
+    return daemonRuntimeClient.installPluginFromZip(result.filePaths[0])
   })
   ipcMain.handle('ava:plugins:installGit', async (_e, url: string) =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.installPluginFromGit(url) : pluginManager.installFromGit(url),
+    daemonRuntimeClient.installPluginFromGit(url),
   )
   ipcMain.handle('ava:plugins:uninstall', async (_e, pluginId: string) => {
-    if (shouldUseDaemonChat()) {
-      await daemonRuntimeClient.uninstallPlugin(pluginId)
-      return true
-    }
-    await pluginManager.uninstall(pluginId)
+    await daemonRuntimeClient.uninstallPlugin(pluginId)
     return true
   })
   ipcMain.handle('ava:plugins:getMarketplaceCatalog', async (_e, states, options) =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.getMarketplaceCatalog(states, options) : pluginManager.getMarketplaceCatalog(states, options),
+    daemonRuntimeClient.getMarketplaceCatalog(states, options),
   )
   ipcMain.handle('ava:plugins:update', async (_e, pluginId: string) =>
-    shouldUseDaemonChat() ? daemonRuntimeClient.updatePlugin(pluginId) : pluginManager.update(pluginId),
+    daemonRuntimeClient.updatePlugin(pluginId),
   )
 
   // ── Dialog helpers ──────────────────────────
@@ -721,11 +611,9 @@ function createTray(): void {
   
   const contextMenu = Menu.buildFromTemplate([
     { label: '显示 Ava', click: () => mainWindow?.show() },
-    { label: '重启后端服务', click: () => {
-        for (const s of mcpSupervisor.listServers()) {
-          if (s.status === 'running') void mcpSupervisor.restart(s.id)
-        }
-      }
+    { label: '打开 Dev Control Panel', click: () => {
+        void shell.openExternal(DEV_CONTROL_PANEL_URL)
+      },
     },
     { type: 'separator' },
     { label: '退出 (Quit)', click: () => {
@@ -786,12 +674,10 @@ app.whenReady().then(async () => {
     isPackaged: app.isPackaged,
   })
 
-  if (shouldUseDaemonChat()) {
-    await ensureNodeDaemonRuntime().catch(err => {
-      const message = err instanceof Error ? err.message : String(err)
-      console.warn(`[daemon] node runtime unavailable: ${message}`)
-    })
-  }
+  await ensureNodeDaemonRuntime().catch(err => {
+    const message = err instanceof Error ? err.message : String(err)
+    console.warn(`[daemon] node runtime unavailable: ${message}`)
+  })
 
   app.on('second-instance', () => {
     if (mainWindow) {
@@ -814,21 +700,6 @@ app.whenReady().then(async () => {
     }
   })
 
-  loadSettings()
-    .then(async raw => {
-      const mcpServers = await readRuntimeMcpServers(raw)
-      if (mcpServers) return mcpSupervisor.applyConfigs(mcpServers)
-      return undefined
-    })
-    .catch(err => console.warn('[mcp] initial apply failed:', err))
-
-  if (shouldStartEmbeddedDaemonRuntime()) {
-    startEmbeddedDaemonRuntime().catch(err => {
-      const message = err instanceof Error ? err.message : String(err)
-      console.warn(`[daemon] embedded runtime unavailable: ${message}`)
-    })
-  }
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow()
@@ -846,25 +717,4 @@ app.on('before-quit', () => {
   isQuitting = true
   globalShortcut.unregisterAll()
   stopNodeDaemonRuntime().catch(err => console.warn('[daemon] node shutdown failed:', err))
-  stopEmbeddedDaemonRuntime().catch(err => console.warn('[daemon] embedded shutdown failed:', err))
-  mcpSupervisor.shutdown().catch(err => console.warn('[mcp] shutdown failed:', err))
 })
-
-async function readRuntimeMcpServers(raw: unknown): Promise<McpServerConfig[] | null> {
-  if (!raw || typeof raw !== 'object') return null
-  const src = raw as { version?: unknown; mcpServers?: unknown; pluginStates?: unknown }
-  if (src.version !== 2 || !Array.isArray(src.mcpServers)) return null
-  const baseServers = src.mcpServers
-    .filter((item): item is McpServerConfig => Boolean(item && typeof item === 'object' && typeof (item as McpServerConfig).id === 'string'))
-  const pluginStates = isPluginStates(src.pluginStates) ? src.pluginStates : {}
-  const pluginServers = await pluginManager.mcpServersForStates(pluginStates)
-  return [...baseServers, ...pluginServers]
-}
-
-function isPluginStates(raw: unknown): raw is Record<string, PluginState> {
-  if (!raw || typeof raw !== 'object') return false
-  for (const value of Object.values(raw)) {
-    if (!value || typeof value !== 'object') return false
-  }
-  return true
-}

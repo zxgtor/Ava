@@ -454,6 +454,14 @@ export interface SendOptions {
   activeTaskId?: string
   onPart?: (payload: { taskId?: string; partIndex: number; part: ContentPart }) => void
   onPartUpdate?: (payload: { taskId?: string; partIndex: number; partId?: string; patch: Record<string, unknown> }) => void
+  onTaskPlanUpdate?: (payload: {
+    taskId?: string
+    phase: 'started' | 'advanced' | 'completed' | 'blocked'
+    plan: TaskExecutionPlan
+    validation?: TaskExecutionPlan['validation']
+    stepTitle?: string
+    error?: string
+  }) => void
   streamId: string
   activeTaskPlan?: TaskExecutionPlan
   activeStep?: TaskExecutionStep
@@ -492,8 +500,8 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     options.projectBrief,
     options.folderPath,
     options.activeTaskPlan,
-    options.activeStep,
-    options.finalReportAllowed,
+    options.activeTaskPlan ? undefined : options.activeStep,
+    options.activeTaskPlan ? undefined : options.finalReportAllowed,
   )
 
   // Trait-based temperature
@@ -542,6 +550,25 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       }
     }))
   }
+  if (options.onTaskPlanUpdate && typeof window.ava.llm.onEvent === 'function') {
+    const cb = options.onTaskPlanUpdate
+    cleanups.push(window.ava.llm.onEvent(event => {
+      if (
+        event.type === 'task_plan_update' &&
+        event.streamId === options.streamId &&
+        (!options.activeTaskId || !event.taskId || event.taskId === options.activeTaskId)
+      ) {
+        cb({
+          taskId: event.taskId,
+          phase: event.phase,
+          plan: event.plan as TaskExecutionPlan,
+          validation: event.validation as TaskExecutionPlan['validation'] | undefined,
+          stepTitle: event.stepTitle,
+          error: event.error,
+        })
+      }
+    }))
+  }
 
   try {
     const activeFolderPath = options.folderPath || taskPlanWorkingDirectory(options.activeTaskPlan)
@@ -550,6 +577,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       messages,
       providers,
       activeTaskId: options.activeTaskId,
+      activeTaskPlan: options.activeTaskPlan,
       activeFolderPath,
       taskAllowedDirs: options.activeTaskPlan?.workingDirectory ? [options.activeTaskPlan.workingDirectory] : undefined,
       activeCommandInvocation: latestCommandInvocation(options.conversation),

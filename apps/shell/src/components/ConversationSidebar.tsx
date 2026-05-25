@@ -56,6 +56,7 @@ export function ConversationSidebar() {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [groupSorts, setGroupSorts] = useState<Record<string, 'updated' | 'created'>>({})
   const [groupShowModes, setGroupShowModes] = useState<Record<string, 'active' | 'all'>>({})
+  const [showDevTools, setShowDevTools] = useState(import.meta.env.DEV)
   const initializedOpenGroupRef = useRef(false)
   const editInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -243,6 +244,10 @@ export function ConversationSidebar() {
     initializedOpenGroupRef.current = true
     setCollapsedGroups(Object.fromEntries(groups.map(group => [group.id, group.id !== lastWorkedGroupId])))
   }, [groups, lastWorkedGroupId])
+
+  useEffect(() => {
+    setShowDevTools(import.meta.env.DEV || window.ava.dev.isEnabled())
+  }, [])
 
   if (state.viewMode === 'settings') {
     return (
@@ -526,7 +531,7 @@ export function ConversationSidebar() {
       </div>
 
       <div className="p-1.5">
-        {import.meta.env.DEV && (
+        {showDevTools && (
           <button
             type="button"
             onClick={() => window.ava.dev.openControlPanel()}

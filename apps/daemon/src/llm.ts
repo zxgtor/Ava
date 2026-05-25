@@ -72,6 +72,7 @@ export type RuntimeStreamEvent =
   | { type: 'run_status'; streamId: string; taskId?: string; phase: AssistantRunPhase; providerId?: string; providerName?: string; model?: string }
   | { type: 'tool_call_started'; streamId: string; taskId?: string; partIndex: number; part: ToolCallPart }
   | { type: 'tool_result'; streamId: string; taskId?: string; partIndex: number; partId?: string; patch: Partial<ToolCallPart> }
+  | { type: 'task_plan_update'; streamId: string; taskId?: string; phase: 'started' | 'advanced' | 'completed' | 'blocked'; plan: TaskExecutionPlan; validation?: TaskExecutionValidation; stepTitle?: string; error?: string }
   | { type: 'error'; streamId: string; taskId?: string; message: string }
 
 export interface ToolCallPart {
@@ -93,6 +94,7 @@ export interface StreamChatArgs {
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
+  activeTaskPlan?: TaskExecutionPlan
   activeFolderPath?: string
   taskAllowedDirs?: string[]
   activeCommandInvocation?: ToolAuditCommandInvocation
@@ -104,6 +106,62 @@ export interface StreamChatArgs {
   activeStepToolLoopBudget?: number
   finalReportReadBudget?: number
   routedMcpToolNames?: string[]
+}
+
+export type TaskExecutionStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type TaskExecutionPlanStatus = 'planning' | 'running' | 'blocked' | 'completed' | 'failed' | 'aborted'
+
+export interface TaskExecutionValidation {
+  devServerChecked: boolean
+  consoleChecked: boolean
+  screenshotChecked: boolean
+  buildChecked: boolean
+}
+
+export interface TaskExecutionEvidence {
+  toolName: string
+  toolCallId: string
+  status: ToolCallStatus
+  timestamp: number
+  summary?: string
+  processId?: string
+  command?: string
+  exitCode?: number | null
+  persistedOutputPath?: string
+}
+
+export interface TaskExecutionStep {
+  id: string
+  title: string
+  status: TaskExecutionStepStatus
+  requiredTools: string[]
+  completionSignals: string[]
+  attempts: number
+  lastError?: string
+  lastToolSummary?: string
+  lastProcessId?: string
+  lastCommand?: string
+  lastExitCode?: number | null
+  lastRecoveredAt?: number
+  evidence?: TaskExecutionEvidence[]
+  dependsOn?: string[]
+  subtasks?: TaskExecutionStep[]
+  workflowType?: 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research'
+  role?: TaskStepRole
+}
+
+export interface TaskExecutionPlan {
+  taskId: string
+  status: TaskExecutionPlanStatus
+  goal: string
+  workingDirectory: string
+  kind: 'coding-design'
+  currentStepId?: string
+  steps: TaskExecutionStep[]
+  validation: TaskExecutionValidation
+  architectureConstraints?: string
+  createdAt: number
+  updatedAt: number
 }
 
 export interface StreamStepArgs extends StreamChatArgs {
@@ -139,7 +197,7 @@ export interface ToolCallCandidate {
   args: Record<string, unknown>
 }
 
-type TaskStepRole =
+export type TaskStepRole =
   | 'inspect'
   | 'scaffold'
   | 'install'

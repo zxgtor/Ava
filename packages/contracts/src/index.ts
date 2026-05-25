@@ -95,6 +95,7 @@ export type AvaDaemonApiPath =
 export type AvaDaemonStreamOptions = {
   streamId: string
   activeTaskId?: string
+  activeTaskPlan?: unknown
   activeFolderPath?: string
   taskAllowedDirs?: string[]
   activeCommandInvocation?: unknown
