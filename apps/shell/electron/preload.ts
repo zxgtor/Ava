@@ -526,6 +526,11 @@ const ava = {
     save: (data: unknown): Promise<boolean> => ipcRenderer.invoke('ava:settings:save', data),
   },
 
+  agent: {
+    analyzeTask: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:analyzeTask', request),
+    planTask: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:planTask', request),
+  },
+
   conversations: {
     load: (): Promise<unknown> => ipcRenderer.invoke('ava:conversations:load'),
     save: (data: unknown): Promise<boolean> => ipcRenderer.invoke('ava:conversations:save', data),

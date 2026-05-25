@@ -22,6 +22,13 @@ import { buildCapabilityIndex, routeMcpTools, routeSkills } from './services/cap
 import { capabilityStats } from './services/capabilityStats'
 import { windowsEnvironmentDriver } from './services/windowsEnvironmentDriver'
 import type { RuntimeEventTarget } from './services/runtimeEventTarget'
+import type {
+  TaskExecutionPlan,
+  TaskExecutionStep,
+  TaskExecutionStepRole,
+  TaskExecutionValidation,
+} from '@ava/contracts'
+export type { TaskExecutionPlan, TaskExecutionStep, TaskExecutionValidation } from '@ava/contracts'
 
 export type LlmMessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 
@@ -108,62 +115,6 @@ export interface StreamChatArgs {
   routedMcpToolNames?: string[]
 }
 
-export type TaskExecutionStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
-export type TaskExecutionPlanStatus = 'planning' | 'running' | 'blocked' | 'completed' | 'failed' | 'aborted'
-
-export interface TaskExecutionValidation {
-  devServerChecked: boolean
-  consoleChecked: boolean
-  screenshotChecked: boolean
-  buildChecked: boolean
-}
-
-export interface TaskExecutionEvidence {
-  toolName: string
-  toolCallId: string
-  status: ToolCallStatus
-  timestamp: number
-  summary?: string
-  processId?: string
-  command?: string
-  exitCode?: number | null
-  persistedOutputPath?: string
-}
-
-export interface TaskExecutionStep {
-  id: string
-  title: string
-  status: TaskExecutionStepStatus
-  requiredTools: string[]
-  completionSignals: string[]
-  attempts: number
-  lastError?: string
-  lastToolSummary?: string
-  lastProcessId?: string
-  lastCommand?: string
-  lastExitCode?: number | null
-  lastRecoveredAt?: number
-  evidence?: TaskExecutionEvidence[]
-  dependsOn?: string[]
-  subtasks?: TaskExecutionStep[]
-  workflowType?: 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research'
-  role?: TaskStepRole
-}
-
-export interface TaskExecutionPlan {
-  taskId: string
-  status: TaskExecutionPlanStatus
-  goal: string
-  workingDirectory: string
-  kind: 'coding-design'
-  currentStepId?: string
-  steps: TaskExecutionStep[]
-  validation: TaskExecutionValidation
-  architectureConstraints?: string
-  createdAt: number
-  updatedAt: number
-}
-
 export interface StreamStepArgs extends StreamChatArgs {
   messages: LlmMessage[]
   tools: McpToolDescriptor[]
@@ -197,17 +148,7 @@ export interface ToolCallCandidate {
   args: Record<string, unknown>
 }
 
-export type TaskStepRole =
-  | 'inspect'
-  | 'scaffold'
-  | 'install'
-  | 'feature'
-  | 'preview'
-  | 'console'
-  | 'screenshot'
-  | 'repair'
-  | 'validate'
-  | 'final_report'
+export type TaskStepRole = TaskExecutionStepRole
 
 export interface ToolCallAccumulator {
   id?: string

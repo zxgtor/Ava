@@ -11,15 +11,11 @@ let source = await readFile(sourcePath, 'utf8')
 // Strip imports that pull in DOM/window-dependent modules; the helpers under
 // test do not use them at runtime.
 source = source.replace(/import\s*\{[^}]*\}\s*from\s*['"]\.\/chat['"];?/g, '')
-source = source.replace(/import\s*\{[^}]*\}\s*from\s*['"]\.\/roles\/planner['"];?/g, '')
 source = source.replace(/import\s*\{[^}]*\}\s*from\s*['"]\.\/runtime\/taskGraph['"];?/g, '')
 // Stub functions that the stripped imports provided. nextTaskStep is not used
 // by the helpers we test, but it is referenced elsewhere in the file.
 source += `
-function planningContextBudgetForProviders() { return 0 }
 class TaskGraph { constructor(p){this.p=p} getNextStep(){ return null } }
-async function runAnalyzePhase(){ return null }
-async function runPlanPhase(){ return null }
 `
 
 const compiled = ts.transpileModule(source, {

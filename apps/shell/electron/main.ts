@@ -20,7 +20,7 @@ import {
 } from './services/daemonChatClient'
 import { daemonRuntimeClient } from './services/daemonRuntimeClient'
 import { ensureNodeDaemonRuntime, stopNodeDaemonRuntime } from './services/nodeDaemonProcess'
-import { configureRuntimePaths } from './services/runtimePaths'
+import { configureRuntimePaths } from '../../daemon/src/services/runtimePaths'
 import type { PluginState, StreamChatArgs } from '@ava/daemon'
 
 const execAsync = promisify(exec)
@@ -339,6 +339,9 @@ function registerIpc(): void {
     await daemonRuntimeClient.saveSettings(data)
     return true
   })
+
+  ipcMain.handle('ava:agent:analyzeTask', async (_e, request: unknown) => daemonRuntimeClient.analyzeTask(request))
+  ipcMain.handle('ava:agent:planTask', async (_e, request: unknown) => daemonRuntimeClient.planTask(request))
 
   // ── conversations persistence ───────────────
   ipcMain.handle('ava:conversations:load', async () => loadConversations())

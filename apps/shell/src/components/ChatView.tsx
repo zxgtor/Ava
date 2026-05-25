@@ -17,7 +17,6 @@ import {
   makeUserMessage,
   partsToText,
   estimateContextUsage,
-  planningContextBudgetForProviders,
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
@@ -28,7 +27,6 @@ import {
   blockPlan,
   completePlan,
   createCodingDesignTaskPlan,
-  generateDynamicTaskPlan,
   evaluateStepCompletion,
   extractWorkingDirectoryFromText,
   finalValidationGateSatisfied,
@@ -46,7 +44,6 @@ import {
   shouldContinueAfterToolLimit,
   toolProgressContinuationText,
 } from '../lib/agent/runtime/agentRuntime'
-import { runAnalyzePhase } from '../lib/agent/roles/planner'
 import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, TaskExecutionPlan, ProjectAnalysis } from '../types'
 import type { ValidationProgressState } from '../lib/agent/taskExecution'
 
@@ -261,6 +258,61 @@ function withRequiredWorkingDirectoryUnknown(
 function planningTraitsFor(content: string, conversation: Conversation): string[] {
   if (isCodingDesignBigTask(content)) return ['code']
   return conversation.traits?.length ? conversation.traits : detectTraitsFromText(content)
+}
+
+async function runDaemonAnalyzePhase(input: {
+  taskId: string
+  goal: string
+  workingDirectory?: string
+  messages: Message[]
+  traits: string[]
+}): Promise<ProjectAnalysis | null> {
+  const result = await window.ava.agent.analyzeTask({
+    taskId: input.taskId,
+    goal: input.goal,
+    workingDirectory: input.workingDirectory,
+    traits: input.traits,
+    messages: messagesForDaemon(input.messages),
+  }) as { analysis?: ProjectAnalysis | null }
+  return result.analysis ?? null
+}
+
+async function generateDaemonTaskPlan(input: {
+  taskId: string
+  goal: string
+  workingDirectory?: string
+  analysis?: ProjectAnalysis | null
+  messages: Message[]
+  traits: string[]
+}): Promise<TaskExecutionPlan> {
+  const result = await window.ava.agent.planTask({
+    taskId: input.taskId,
+    goal: input.goal,
+    workingDirectory: input.workingDirectory,
+    analysis: input.analysis ?? null,
+    traits: input.traits,
+    messages: messagesForDaemon(input.messages),
+  }) as { plan?: TaskExecutionPlan }
+  if (!result.plan) {
+    throw new Error('Daemon did not return a TaskExecutionPlan.')
+  }
+  return result.plan
+}
+
+function messagesForDaemon(messages: Message[]) {
+  return messages.map(message => ({
+    id: message.id,
+    role: message.role,
+    taskId: message.taskId,
+    toolCallId: message.toolCallId,
+    createdAt: new Date(message.createdAt).toISOString(),
+    content: message.content
+      .filter(part => part.type === 'text' || part.type === 'image_url')
+      .map(part => part.type === 'text'
+        ? { type: 'text' as const, text: part.text }
+        : { type: 'image_url' as const, image_url: { url: part.image_url.url } }
+      ),
+  }))
 }
 
 function makeTaskIntakeText(content: string, conversation: Conversation): string {
@@ -1936,16 +1988,13 @@ export function ChatView() {
           ],
         })
         
-        const providers = getEnabledProviders(state.settings)
         const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(nextText)
-        const analysis = await runAnalyzePhase({
+        const analysis = await runDaemonAnalyzePhase({
           taskId,
           goal: nextText,
           workingDirectory,
-          providers,
-          settings: state.settings,
-          contextBudget: planningContextBudgetForProviders(providers, planningTraitsFor(nextText, conversation)),
           messages: conversation.messages,
+          traits: planningTraitsFor(nextText, conversation),
         })
         const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, nextText, conversation)
 
@@ -2080,18 +2129,14 @@ export function ChatView() {
             },
           })
 
-          taskPlan = await generateDynamicTaskPlan({
+          taskPlan = await generateDaemonTaskPlan({
             taskId: pending.taskId,
             goal: finalGoal,
             workingDirectory,
-            projectBrief,
-            providers: getEnabledProviders(state.settings),
-            settings: state.settings,
             traits: planningTraitsFor(finalGoal, conversation),
             analysis: pending.analysis
               ? { ...pending.analysis, unknowns: [] }
               : null,
-            skipAnalysis: true,
             messages: conversation.messages,
           })
 
@@ -2147,16 +2192,13 @@ export function ChatView() {
           }
         }
         
-        const providers = getEnabledProviders(state.settings)
         const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(content)
-        const analysis = await runAnalyzePhase({
+        const analysis = await runDaemonAnalyzePhase({
           taskId,
           goal: content,
           workingDirectory,
-          providers,
-          settings: state.settings,
-          contextBudget: planningContextBudgetForProviders(providers, planningTraitsFor(content, conversation)),
           messages: conversation.messages,
+          traits: planningTraitsFor(content, conversation),
         })
         const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, content, conversation)
 
@@ -2278,15 +2320,12 @@ export function ChatView() {
         }
 
         const combinedGoal = `${resolvedGoal(pendingTaskIntake)}\n\nUser correction before confirmation: ${content}`
-        const providers = getEnabledProviders(state.settings)
-        const analysis = await runAnalyzePhase({
+        const analysis = await runDaemonAnalyzePhase({
           taskId,
           goal: combinedGoal,
           workingDirectory: conversation.folderPath || extractWorkingDirectoryFromText(combinedGoal),
-          providers,
-          settings: state.settings,
-          contextBudget: planningContextBudgetForProviders(providers, planningTraitsFor(combinedGoal, conversation)),
           messages: conversation.messages,
+          traits: planningTraitsFor(combinedGoal, conversation),
         })
         const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, combinedGoal, conversation)
 

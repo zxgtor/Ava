@@ -1,5 +1,119 @@
 export type AvaRunPhase = 'planning' | 'running' | 'blocked' | 'completed' | 'failed' | 'aborted'
 
+export type AvaToolCallStatus = 'pending' | 'running' | 'ok' | 'error' | 'aborted'
+
+export type TaskExecutionStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type TaskExecutionPlanStatus = 'planning' | 'running' | 'blocked' | 'completed' | 'failed' | 'aborted'
+export type TaskExecutionStepRole =
+  | 'inspect'
+  | 'scaffold'
+  | 'install'
+  | 'feature'
+  | 'preview'
+  | 'console'
+  | 'screenshot'
+  | 'repair'
+  | 'validate'
+  | 'final_report'
+
+export interface TaskExecutionEvidence {
+  toolName: string
+  toolCallId: string
+  status: AvaToolCallStatus
+  timestamp: number
+  summary?: string
+  processId?: string
+  command?: string
+  exitCode?: number | null
+  persistedOutputPath?: string
+}
+
+export interface TaskExecutionStep {
+  id: string
+  title: string
+  status: TaskExecutionStepStatus
+  requiredTools: string[]
+  completionSignals: string[]
+  attempts: number
+  lastError?: string
+  lastToolSummary?: string
+  lastProcessId?: string
+  lastCommand?: string
+  lastExitCode?: number | null
+  lastRecoveredAt?: number
+  evidence?: TaskExecutionEvidence[]
+  dependsOn?: string[]
+  subtasks?: TaskExecutionStep[]
+  workflowType?: 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research'
+  role?: TaskExecutionStepRole
+}
+
+export interface TaskExecutionValidation {
+  devServerChecked: boolean
+  consoleChecked: boolean
+  screenshotChecked: boolean
+  buildChecked: boolean
+}
+
+export interface TaskExecutionPlan {
+  taskId: string
+  status: TaskExecutionPlanStatus
+  goal: string
+  workingDirectory: string
+  kind: 'coding-design'
+  currentStepId?: string
+  steps: TaskExecutionStep[]
+  validation: TaskExecutionValidation
+  architectureConstraints?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ProjectUnknown {
+  question: string
+  options: string[]
+  importance: 'high' | 'medium' | 'low'
+}
+
+export interface ProjectRisk {
+  risk: string
+  mitigation: string
+  impact: 'high' | 'medium' | 'low'
+}
+
+export interface ProjectAnalysis {
+  projectSummary: string
+  architecture: string
+  unknowns: ProjectUnknown[]
+  risks: ProjectRisk[]
+}
+
+export interface AvaTaskAnalyzeRequest {
+  taskId: string
+  goal: string
+  workingDirectory?: string
+  messages?: AvaChatMessage[]
+  traits?: string[]
+}
+
+export interface AvaTaskPlanRequest {
+  taskId: string
+  goal: string
+  workingDirectory?: string
+  analysis?: ProjectAnalysis | null
+  traits?: string[]
+  messages?: AvaChatMessage[]
+}
+
+export interface AvaTaskAnalyzeResult {
+  analysis: ProjectAnalysis | null
+}
+
+export interface AvaTaskPlanResult {
+  plan: TaskExecutionPlan
+  fallbackUsed: boolean
+}
+
 export type AvaChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
 export type AvaChatTextPart = {
@@ -87,6 +201,8 @@ export type AvaDaemonApiPath =
   | '/runtime/status'
   | '/settings/load'
   | '/settings/save'
+  | '/tasks/analyze'
+  | '/tasks/plan'
   | '/mcp/servers'
   | '/mcp/restart'
   | '/chat/stream'

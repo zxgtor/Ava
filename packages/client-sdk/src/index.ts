@@ -3,6 +3,10 @@ import type {
   AvaChatStreamEvent,
   AvaDaemonChatRequest,
   AvaDaemonStatus,
+  AvaTaskAnalyzeRequest,
+  AvaTaskAnalyzeResult,
+  AvaTaskPlanRequest,
+  AvaTaskPlanResult,
 } from '@ava/contracts'
 
 export interface AvaClientOptions {
@@ -42,6 +46,14 @@ export class AvaClient {
 
   async saveSettings(data: unknown): Promise<boolean> {
     return this.postResult<boolean>('/settings/save', { data })
+  }
+
+  async analyzeTask(request: AvaTaskAnalyzeRequest): Promise<AvaTaskAnalyzeResult> {
+    return this.postResult<AvaTaskAnalyzeResult>('/tasks/analyze', request)
+  }
+
+  async planTask(request: AvaTaskPlanRequest): Promise<AvaTaskPlanResult> {
+    return this.postResult<AvaTaskPlanResult>('/tasks/plan', request)
   }
 
   async listMcpServers<T = unknown>(): Promise<T> {

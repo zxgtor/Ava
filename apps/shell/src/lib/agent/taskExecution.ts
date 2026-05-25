@@ -1,5 +1,4 @@
-import type { ContentPart, Message, ModelProvider, ProjectAnalysis, Settings, TaskExecutionPlan, TaskExecutionStep, TaskExecutionValidation } from '../../types'
-import { planningContextBudgetForProviders } from './chat'
+import type { ContentPart, TaskExecutionPlan, TaskExecutionStep, TaskExecutionValidation } from '../../types'
 import { normalizeRequiredTools } from './toolNames'
 
 const CODING_DESIGN_TASK_RE =
@@ -119,68 +118,6 @@ export function createCodingDesignTaskPlan(input: {
     createdAt: now,
     updatedAt: now,
   }
-}
-
-import { runAnalyzePhase, runPlanPhase } from './roles/planner'
-
-export async function generateDynamicTaskPlan(input: {
-  taskId: string
-  goal: string
-  workingDirectory?: string
-  projectBrief?: any
-  providers: ModelProvider[]
-  settings: Settings
-  analysis?: ProjectAnalysis | null
-  skipAnalysis?: boolean
-  traits?: string[]
-  messages?: Message[]
-}): Promise<TaskExecutionPlan> {
-  const contextBudget = planningContextBudgetForProviders(input.providers, input.traits)
-
-  // Phase 1: Analyze only before user confirmation. After the user confirms
-  // the summary, reuse that confirmed analysis so planning cannot restart
-  // clarification questions.
-  const analysis = input.skipAnalysis
-    ? input.analysis ?? null
-    : await runAnalyzePhase({
-        taskId: input.taskId,
-        goal: input.goal,
-        workingDirectory: input.workingDirectory,
-        providers: input.providers,
-        settings: input.settings,
-        contextBudget,
-        messages: input.messages,
-      })
-  
-  // Phase 2: Plan (DAG generation)
-  const plan = await runPlanPhase({
-    taskId: input.taskId,
-    goal: input.goal,
-    workingDirectory: input.workingDirectory,
-    providers: input.providers,
-    settings: input.settings,
-    contextBudget
-  }, analysis)
-
-  if (plan) {
-    // Merge in validation tracking which is required by the current engine
-    plan.validation = {
-      devServerChecked: false,
-      consoleChecked: false,
-      screenshotChecked: false,
-      buildChecked: false,
-    }
-    return normalizeTaskExecutionPlan(plan)
-  }
-
-  console.warn('Dynamic planning failed, using fallback plan')
-  const fallbackPlan = createCodingDesignTaskPlan({
-    taskId: input.taskId,
-    goal: input.goal,
-    workingDirectory: input.workingDirectory,
-    architectureConstraints: typeof analysis?.architecture === 'string' ? analysis.architecture : undefined,
-  })
-  return normalizeTaskExecutionPlan(fallbackPlan)
 }
 
 import { TaskGraph } from './runtime/taskGraph'

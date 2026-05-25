@@ -2,7 +2,7 @@ import type { WebContents } from 'electron'
 import { AvaClient } from '@ava/client-sdk'
 import type { AvaChatStreamEvent, AvaDaemonChatRequest } from '@ava/contracts'
 import type { ModelProvider, StreamChatArgs, StreamChatResult } from '../llm'
-import { toolRuntime } from './toolRuntime'
+import { toolRuntime } from '../../../daemon/src/services/toolRuntime'
 
 const DEFAULT_DAEMON_HOST = '127.0.0.1'
 const DEFAULT_DAEMON_PORT = '17871'

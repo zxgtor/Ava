@@ -18,6 +18,7 @@ import type { AvaChatStreamEvent, AvaChatStreamRequest } from '@ava/contracts'
 import { runtimePaths } from './services/runtimePaths'
 import { resolveStreamChatArgsFromDaemonConfig, type DaemonStreamOptions } from './services/modelRouter'
 import { streamTaskExecutionPlan } from './agentTaskLoop'
+import { analyzeTask, planTask } from './agentPlanner'
 
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
@@ -236,6 +237,10 @@ export function createDaemonRuntimeServices() {
     },
 
     loadSettings,
+
+    analyzeTask,
+
+    planTask,
 
     async saveSettings(data: unknown) {
       await saveSettings(data)

@@ -336,6 +336,18 @@ async function routeRequest(req, res, runtime) {
     return
   }
 
+  if (url.pathname === '/tasks/analyze' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'analyzeTask', [body])
+    return
+  }
+
+  if (url.pathname === '/tasks/plan' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'planTask', [body])
+    return
+  }
+
   if (url.pathname === '/plugins/list' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'listPlugins', [body?.states])

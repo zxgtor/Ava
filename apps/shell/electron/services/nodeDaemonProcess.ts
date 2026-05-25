@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { daemonBaseUrl } from './daemonChatClient'
-import { runtimePaths } from './runtimePaths'
+import { runtimePaths } from '../../../daemon/src/services/runtimePaths'
 
 let daemonProcess: ChildProcess | null = null
 let startPromise: Promise<void> | null = null

@@ -109,7 +109,7 @@ export type AgentRole = 'planner' | 'executor' | 'critic' | 'orchestrator'
 export interface ProjectUnknown {
   question: string
   options: string[]
-  importance: 'high' | 'low'
+  importance: 'high' | 'medium' | 'low'
 }
 
 export interface ProjectRisk {
