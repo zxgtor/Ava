@@ -140,6 +140,11 @@ interface DevEnvironment {
   }
 }
 
+interface DevLayout {
+  nodePositions?: Record<string, NodePosition>
+  updatedAt?: string | null
+}
+
 interface DevDependencyNode {
   id: string
   x: number
@@ -380,17 +385,32 @@ function displayDevStatus(node: DevDependencyNode, status: string, process?: Dev
   return status
 }
 
-function loadNodePositions(): Record<string, NodePosition> {
+function normalizeNodePositions(value: unknown): Record<string, NodePosition> {
+  const input = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, Partial<NodePosition>>
+    : {}
+  return Object.fromEntries(
+    Object.entries(DEFAULT_NODE_POSITIONS).map(([id, fallback]) => {
+      const position = input[id]
+      return [
+        id,
+        typeof position?.x === 'number' && typeof position?.y === 'number'
+          ? clampNodePosition({ x: position.x, y: position.y })
+          : fallback,
+      ]
+    }),
+  )
+}
+
+function hasSavedNodePositions(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0)
+}
+
+function loadLocalNodePositions(): Record<string, NodePosition> {
   try {
     const raw = localStorage.getItem(NODE_POSITIONS_STORAGE_KEY)
     if (!raw) return DEFAULT_NODE_POSITIONS
-    const parsed = JSON.parse(raw) as Record<string, NodePosition>
-    return Object.fromEntries(
-      Object.entries(DEFAULT_NODE_POSITIONS).map(([id, fallback]) => {
-        const position = parsed[id]
-        return [id, position ? clampNodePosition(position) : fallback]
-      }),
-    )
+    return normalizeNodePositions(JSON.parse(raw))
   } catch {
     return DEFAULT_NODE_POSITIONS
   }
@@ -662,13 +682,15 @@ export function App() {
   const [canvasView, setCanvasView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 })
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 1, height: 1 })
   const [isCanvasPanning, setIsCanvasPanning] = useState(false)
-  const [nodePositions, setNodePositions] = useState<Record<string, NodePosition>>(loadNodePositions)
+  const [nodePositions, setNodePositions] = useState<Record<string, NodePosition>>(loadLocalNodePositions)
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null)
   const [openNodeMenuId, setOpenNodeMenuId] = useState<string | null>(null)
   const targetRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const devControlStatusRef = useRef<BackendStatus>('checking')
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const canvasPanRef = useRef({ pointerId: -1, startX: 0, startY: 0, originX: 0, originY: 0 })
+  const layoutLoadedRef = useRef(false)
+  const layoutSaveTimerRef = useRef<number | null>(null)
   const nodeDragRef = useRef({
     pointerId: -1,
     nodeId: '',
@@ -750,6 +772,32 @@ export function App() {
       setDevError(err instanceof Error ? err.message : String(err))
     }
   }, [devControlUrl, devFetch])
+
+  const saveDevLayout = useCallback(async (positions: Record<string, NodePosition>) => {
+    await devFetch<DevLayout>('/layout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodePositions: positions }),
+    })
+  }, [devFetch])
+
+  const loadDevLayout = useCallback(async () => {
+    try {
+      const layout = await devFetch<DevLayout>('/layout')
+      const backendHasLayout = hasSavedNodePositions(layout?.nodePositions)
+      const nextPositions = backendHasLayout
+        ? normalizeNodePositions(layout.nodePositions)
+        : loadLocalNodePositions()
+      setNodePositions(nextPositions)
+      localStorage.setItem(NODE_POSITIONS_STORAGE_KEY, JSON.stringify(nextPositions))
+      layoutLoadedRef.current = true
+      if (!backendHasLayout) {
+        await saveDevLayout(nextPositions)
+      }
+    } catch {
+      layoutLoadedRef.current = true
+    }
+  }, [devFetch, saveDevLayout])
 
   const controlDevProcess = async (id: string, action: 'start' | 'stop' | 'restart') => {
     setDevBusyId(id)
@@ -904,8 +952,29 @@ export function App() {
   }, [kind, loadDevProcesses])
 
   useEffect(() => {
+    if (devControlStatus !== 'online') return
+    layoutLoadedRef.current = false
+    void loadDevLayout()
+  }, [devControlStatus, loadDevLayout])
+
+  useEffect(() => {
+    if (!layoutLoadedRef.current) return
     localStorage.setItem(NODE_POSITIONS_STORAGE_KEY, JSON.stringify(nodePositions))
-  }, [nodePositions])
+    if (devControlStatus !== 'online') return
+    if (layoutSaveTimerRef.current !== null) {
+      window.clearTimeout(layoutSaveTimerRef.current)
+    }
+    layoutSaveTimerRef.current = window.setTimeout(() => {
+      layoutSaveTimerRef.current = null
+      void saveDevLayout(nodePositions)
+    }, 350)
+    return () => {
+      if (layoutSaveTimerRef.current !== null) {
+        window.clearTimeout(layoutSaveTimerRef.current)
+        layoutSaveTimerRef.current = null
+      }
+    }
+  }, [devControlStatus, nodePositions, saveDevLayout])
 
   useEffect(() => {
     let disposed = false

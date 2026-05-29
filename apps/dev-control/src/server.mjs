@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -7,6 +7,8 @@ import { spawn, spawnSync } from 'node:child_process'
 const HOST = process.env.AVA_DEV_CONTROL_HOST || '127.0.0.1'
 const PORT = Number(process.env.AVA_DEV_CONTROL_PORT || 17872)
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const STATE_DIR = resolve(ROOT, '.ava-dev-control')
+const LAYOUT_PATH = resolve(STATE_DIR, 'layout.json')
 const IS_WIN = process.platform === 'win32'
 const NPM = IS_WIN ? 'npm.cmd' : 'npm'
 const MAX_LOG_LINES = 500
@@ -64,6 +66,68 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type',
+}
+
+function readJsonBody(req) {
+  return new Promise((resolveBody, reject) => {
+    const chunks = []
+    req.on('data', chunk => chunks.push(chunk))
+    req.on('error', reject)
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8').trim()
+      if (!text) {
+        resolveBody({})
+        return
+      }
+      try {
+        resolveBody(JSON.parse(text))
+      } catch {
+        reject(new Error('Invalid JSON body.'))
+      }
+    })
+  })
+}
+
+function numberOrNull(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeNodePositions(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result = {}
+  for (const [id, position] of Object.entries(value)) {
+    if (!position || typeof position !== 'object' || Array.isArray(position)) continue
+    const x = numberOrNull(position.x)
+    const y = numberOrNull(position.y)
+    if (x === null || y === null) continue
+    result[id] = { x, y }
+  }
+  return result
+}
+
+function readLayout() {
+  if (!existsSync(LAYOUT_PATH)) return { nodePositions: {}, updatedAt: null }
+  try {
+    const raw = readFileSync(LAYOUT_PATH, 'utf8')
+    const parsed = JSON.parse(raw)
+    return {
+      nodePositions: normalizeNodePositions(parsed.nodePositions),
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
+    }
+  } catch {
+    return { nodePositions: {}, updatedAt: null }
+  }
+}
+
+function writeLayout(body) {
+  const source = body && typeof body === 'object' && !Array.isArray(body) ? body.nodePositions : {}
+  const layout = {
+    nodePositions: normalizeNodePositions(source),
+    updatedAt: new Date().toISOString(),
+  }
+  mkdirSync(STATE_DIR, { recursive: true })
+  writeFileSync(LAYOUT_PATH, `${JSON.stringify(layout, null, 2)}\n`, 'utf8')
+  return layout
 }
 
 function json(res, statusCode, body) {
@@ -325,6 +389,17 @@ async function handle(req, res) {
 
     if (url.pathname === '/environment' && req.method === 'GET') {
       json(res, 200, { ok: true, result: environmentState() })
+      return
+    }
+
+    if (url.pathname === '/layout' && req.method === 'GET') {
+      json(res, 200, { ok: true, result: readLayout() })
+      return
+    }
+
+    if (url.pathname === '/layout' && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      json(res, 200, { ok: true, result: writeLayout(body) })
       return
     }
 
