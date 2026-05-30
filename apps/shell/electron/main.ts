@@ -1,18 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Tray, Menu, nativeImage, globalShortcut, shell } from 'electron'
-import { promises as fs } from 'node:fs'
-import { exec } from 'node:child_process'
-import { promisify } from 'node:util'
 
 import { autoUpdater } from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 
 
-import {
-  loadConversations,
-  saveConversations,
-  getUserDataPath,
-} from './storage'
+import { getUserDataPath } from './storage'
 import { applyWin11RoundedCorners } from './services/dwmCorners'
 import {
   abortDaemonChatStream,
@@ -23,7 +16,6 @@ import { ensureNodeDaemonRuntime, stopNodeDaemonRuntime } from './services/nodeD
 import { configureRuntimePaths } from '../../daemon/src/services/runtimePaths'
 import type { PluginState, StreamChatArgs } from '@ava/daemon'
 
-const execAsync = promisify(exec)
 const TITLE_BAR_HEIGHT = 36
 const DEV_CONTROL_PANEL_URL = process.env.AVA_DEV_CONTROL_PANEL_URL || 'http://127.0.0.1:5179'
 
@@ -46,170 +38,6 @@ process.on('unhandledRejection', reason => {
   }
   console.error('[main] unhandled rejection:', reason)
 })
-
-type CapabilityValue = 'yes' | 'no' | 'unknown'
-type CapabilityToolFormat = 'openai' | 'hermes' | 'json' | 'none' | 'unknown'
-
-interface ModelCapabilityProfile {
-  model: string
-  providerId: string
-  vision: CapabilityValue
-  tools: CapabilityValue
-  thinking: CapabilityValue
-  toolFormat: CapabilityToolFormat
-  source: 'probe' | 'heuristic'
-  checkedAt: number
-  error?: string
-}
-
-function inferModelCapabilities(providerId: string, model: string): ModelCapabilityProfile {
-  const id = `${providerId} ${model}`.toLowerCase()
-  const hasVision = /\b(vision|vl|vlm|gpt-4o|o4|gemini|pixtral|llava|qwen2\.5-vl|qwen-vl|omni)\b/i.test(id)
-  const hasThinking = /\b(reason|thinking|think|qwen3|deepseek-r1|r1|o1|o3|o4|qwq)\b/i.test(id)
-  return {
-    model,
-    providerId,
-    vision: hasVision ? 'yes' : 'unknown',
-    tools: 'unknown',
-    thinking: hasThinking ? 'yes' : 'unknown',
-    toolFormat: 'unknown',
-    source: 'heuristic',
-    checkedAt: Date.now(),
-  }
-}
-
-function chatCompletionsUrl(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, '')
-  if (/\/chat\/completions$/i.test(trimmed)) return trimmed
-  if (/\/v1$/i.test(trimmed)) return `${trimmed}/chat/completions`
-  return `${trimmed}/v1/chat/completions`
-}
-
-function providerHeaders(provider: { id: string; apiKey: string }): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (provider.id === 'anthropic') {
-    if (provider.apiKey) headers['x-api-key'] = provider.apiKey
-    headers['anthropic-version'] = '2023-06-01'
-  } else if (provider.apiKey) {
-    headers.Authorization = `Bearer ${provider.apiKey}`
-  }
-  return headers
-}
-
-function detectToolFormatFromProbe(json: unknown): { tools: CapabilityValue; toolFormat: CapabilityToolFormat; thinking: CapabilityValue } {
-  const raw = JSON.stringify(json ?? {})
-  const parsed = json as {
-    choices?: Array<{
-      message?: {
-        content?: string
-        reasoning_content?: string
-        reasoning?: string
-        tool_calls?: unknown[]
-      }
-      delta?: {
-        reasoning_content?: string
-        reasoning?: string
-        tool_calls?: unknown[]
-      }
-    }>
-  }
-  const choice = parsed.choices?.[0]
-  const message = choice?.message
-  const content = typeof message?.content === 'string' ? message.content : ''
-  const hasNativeTool = Array.isArray(message?.tool_calls) && message.tool_calls.length > 0
-  const hasThinking = Boolean(message?.reasoning_content || message?.reasoning || choice?.delta?.reasoning_content || choice?.delta?.reasoning || /reasoning_content/i.test(raw))
-  if (hasNativeTool) return { tools: 'yes', toolFormat: 'openai', thinking: hasThinking ? 'yes' : 'unknown' }
-  if (/<tool_call>[\s\S]*?<\/tool_call>/i.test(content)) return { tools: 'yes', toolFormat: 'hermes', thinking: hasThinking ? 'yes' : 'unknown' }
-  if (/```(?:json)?\s*[\s\S]*?"name"\s*:\s*"ava_capability_probe"/i.test(content) || /^\s*\{[\s\S]*"name"\s*:\s*"ava_capability_probe"/i.test(content)) {
-    return { tools: 'yes', toolFormat: 'json', thinking: hasThinking ? 'yes' : 'unknown' }
-  }
-  return { tools: 'no', toolFormat: 'none', thinking: hasThinking ? 'yes' : 'unknown' }
-}
-
-async function probeModelCapabilities(args: {
-  provider: {
-    id: string
-    name: string
-    type: 'local' | 'cloud' | 'aggregator'
-    baseUrl: string
-    apiKey: string
-    defaultModel: string
-  }
-  model: string
-}): Promise<{ ok: true; profile: ModelCapabilityProfile } | { ok: false; profile: ModelCapabilityProfile; error: string }> {
-  const model = args.model || args.provider.defaultModel
-  const inferred = inferModelCapabilities(args.provider.id, model)
-  if (!args.provider.baseUrl || !model) {
-    const error = 'Missing baseUrl or model.'
-    return { ok: false, profile: { ...inferred, error }, error }
-  }
-  try {
-    const body = {
-      model,
-      messages: [
-        { role: 'system', content: 'You are a tool capability probe. If tools are available, call ava_capability_probe exactly once. Do not explain.' },
-        { role: 'user', content: 'Call the provided tool now.' },
-      ],
-      tools: [{
-        type: 'function',
-        function: {
-          name: 'ava_capability_probe',
-          description: 'Capability probe for Ava.',
-          parameters: {
-            type: 'object',
-            properties: { ok: { type: 'string' } },
-            required: ['ok'],
-          },
-        },
-      }],
-      tool_choice: 'auto',
-      max_tokens: 96,
-      temperature: 0,
-      enable_thinking: true,
-      chat_template_kwargs: { enable_thinking: true },
-    }
-    const res = await fetch(chatCompletionsUrl(args.provider.baseUrl), {
-      method: 'POST',
-      headers: providerHeaders(args.provider),
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const error = `HTTP ${res.status}`
-      return { ok: false, profile: { ...inferred, error }, error }
-    }
-    const json = await res.json() as unknown
-    const detected = detectToolFormatFromProbe(json)
-    return {
-      ok: true,
-      profile: {
-        ...inferred,
-        tools: detected.tools,
-        toolFormat: detected.toolFormat,
-        thinking: detected.thinking === 'unknown' ? inferred.thinking : detected.thinking,
-        source: 'probe',
-        checkedAt: Date.now(),
-      },
-    }
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err)
-    return { ok: false, profile: { ...inferred, error }, error }
-  }
-}
-
-function defaultProjectFileContent(fileName: string): string | null {
-  if (fileName === 'TASKS.md') {
-    return [
-      '# Tasks',
-      '',
-      '- [ ] Initial Research',
-      '- [ ] Brainstorming',
-      '- [ ] Draft Implementation',
-      '- [ ] Review & Refine',
-      '',
-    ].join('\n')
-  }
-  return null
-}
 
 let mainWindow: BrowserWindow | null = null
 let previewWindow: BrowserWindow | null = null
@@ -349,11 +177,12 @@ function registerIpc(): void {
   ipcMain.handle('ava:agent:getActiveTaskPlan', async (_e, request: unknown) => daemonRuntimeClient.getActiveTaskPlan(request))
   ipcMain.handle('ava:agent:setActiveTaskPlan', async (_e, request: unknown) => daemonRuntimeClient.setActiveTaskPlan(request))
   ipcMain.handle('ava:agent:clearActiveTaskPlan', async (_e, request: unknown) => daemonRuntimeClient.clearActiveTaskPlan(request))
+  ipcMain.handle('ava:agent:getProjectBrief', async (_e, request: unknown) => daemonRuntimeClient.getProjectBrief(request))
 
   // ── conversations persistence ───────────────
-  ipcMain.handle('ava:conversations:load', async () => loadConversations())
+  ipcMain.handle('ava:conversations:load', async () => daemonRuntimeClient.loadConversations())
   ipcMain.handle('ava:conversations:save', async (_e, data: unknown) => {
-    await saveConversations(data)
+    await daemonRuntimeClient.saveConversations(data)
     return true
   })
 
@@ -401,7 +230,10 @@ function registerIpc(): void {
   ipcMain.handle('ava:plugins:listCommands', async (_e, states: Record<string, PluginState> | undefined) =>
     daemonRuntimeClient.listPluginCommands(states ?? {}),
   )
-  ipcMain.handle('ava:plugins:installFolder', async () => {
+  ipcMain.handle('ava:plugins:installFolder', async (_e, path?: string) => {
+    if (typeof path === 'string' && path.trim()) {
+      return daemonRuntimeClient.installPluginFromFolder(path.trim())
+    }
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const result = win
       ? await dialog.showOpenDialog(win, {
@@ -415,7 +247,10 @@ function registerIpc(): void {
     if (result.canceled || result.filePaths.length === 0) return null
     return daemonRuntimeClient.installPluginFromFolder(result.filePaths[0])
   })
-  ipcMain.handle('ava:plugins:installZip', async () => {
+  ipcMain.handle('ava:plugins:installZip', async (_e, path?: string) => {
+    if (typeof path === 'string' && path.trim()) {
+      return daemonRuntimeClient.installPluginFromZip(path.trim())
+    }
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const result = win
       ? await dialog.showOpenDialog(win, {
@@ -461,56 +296,39 @@ function registerIpc(): void {
     return result.filePaths[0]
   })
 
-  ipcMain.handle('ava:shell:openPath', async (_e, path: string) => {
-    return shell.openPath(path)
+  ipcMain.handle('ava:environment:openPath', async (_e, path: string) => {
+    const result = await daemonRuntimeClient.openPath({ path }) as { opened?: string }
+    return result.opened ?? path
   })
 
-  ipcMain.handle('ava:fs:writeFile', async (_e, path: string, content: string) => {
-    await fs.writeFile(path, content, 'utf8')
+  ipcMain.handle('ava:workspace:writeText', async (_e, path: string, content: string) => {
+    await daemonRuntimeClient.writeWorkspaceText({ path, content })
     return true
   })
 
-  ipcMain.handle('ava:fs:createDir', async (_e, path: string) => {
-    await fs.mkdir(path, { recursive: true })
+  ipcMain.handle('ava:workspace:createDir', async (_e, path: string) => {
+    await daemonRuntimeClient.createWorkspaceDir({ path })
     return true
   })
 
-  ipcMain.handle('ava:fs:readFile', async (_e, path: string) => {
-    try {
-      return await fs.readFile(path, 'utf8')
-    } catch (err) {
-      const code = err && typeof err === 'object' && 'code' in err ? (err as { code?: unknown }).code : undefined
-      if (code === 'ENOENT') {
-        // Return default content WITHOUT writing it to disk. Auto-creating
-        // TASKS.md at the project root made `npm create vite@latest .` and
-        // similar scaffolders refuse to run because the directory was no
-        // longer empty. The caller still sees the default text via this
-        // return — it just isn't persisted.
-        const defaultContent = defaultProjectFileContent(basename(path))
-        if (defaultContent !== null) {
-          return defaultContent
-        }
-      }
-      throw err
-    }
+  ipcMain.handle('ava:workspace:readText', async (_e, path: string) => {
+    return daemonRuntimeClient.readWorkspaceText({ path })
   })
 
-  ipcMain.handle('ava:fs:listDir', async (_e, path: string) => {
-    const files = await fs.readdir(path, { withFileTypes: true })
-    return files.map(f => ({
-      name: f.name,
-      isDirectory: f.isDirectory(),
-      size: 0 // Simplification
-    }))
+  ipcMain.handle('ava:workspace:listDir', async (_e, path: string) => {
+    return daemonRuntimeClient.listWorkspaceDir({ path })
   })
 
-  ipcMain.handle('ava:shell:openInTerminal', async (_e, path: string) => {
-    // Windows: opens powershell at the specified path
-    return execAsync(`start powershell.exe -NoExit -WorkingDirectory "${path}"`)
+  ipcMain.handle('ava:environment:openTerminal', async (_e, path: string) => {
+    return daemonRuntimeClient.openTerminal({ path })
   })
 
-  ipcMain.handle('ava:shell:openInVSCode', async (_e, path: string) => {
-    return execAsync(`code "${path}"`)
+  ipcMain.handle('ava:environment:openVSCode', async (_e, path: string) => {
+    return daemonRuntimeClient.openVSCode({ path })
+  })
+
+  ipcMain.handle('ava:workspace:ensureProjectDocs', async (_e, request: unknown) => {
+    return daemonRuntimeClient.ensureProjectDocs(request)
   })
 
   // ── Window Management ──────────────────────
@@ -534,58 +352,7 @@ function registerIpc(): void {
   ipcMain.handle('ava:llm:probe', async (
     _e,
     args: { baseUrl: string; apiKey: string; providerId?: string },
-  ) => {
-    try {
-      const trimmed = args.baseUrl.replace(/\/+$/, '')
-      const url = /\/models$/i.test(trimmed)
-        ? trimmed
-        : /\/v1$/i.test(trimmed)
-          ? `${trimmed}/models`
-          : `${trimmed}/v1/models`
-
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (args.providerId === 'anthropic') {
-        if (args.apiKey) headers['x-api-key'] = args.apiKey
-        headers['anthropic-version'] = '2023-06-01'
-      } else {
-        if (args.apiKey) headers['Authorization'] = `Bearer ${args.apiKey}`
-      }
-
-      const res = await fetch(url, { headers })
-      if (!res.ok) {
-        return { ok: false as const, error: `HTTP ${res.status}` }
-      }
-      const json: unknown = await res.json()
-      const data = (json as {
-        data?: Array<{ id?: string; created?: number; created_at?: string }>
-      }).data
-      // Sort by release date desc. OpenAI uses `created` (Unix seconds),
-      // Anthropic uses `created_at` (ISO string). Models without a timestamp
-      // keep their original order and sink to the bottom.
-      const models = Array.isArray(data)
-        ? data
-            .filter((m): m is { id: string; created?: number; created_at?: string } =>
-              typeof m?.id === 'string',
-            )
-            .map((m, idx) => {
-              const ts = typeof m.created === 'number'
-                ? m.created * 1000
-                : typeof m.created_at === 'string'
-                  ? Date.parse(m.created_at)
-                  : NaN
-              return { id: m.id, ts: Number.isFinite(ts) ? ts : -1, idx }
-            })
-            .sort((a, b) => {
-              if (a.ts !== b.ts) return b.ts - a.ts  // newer first
-              return a.idx - b.idx                    // stable fallback
-            })
-            .map(m => m.id)
-        : []
-      return { ok: true as const, models }
-    } catch (err) {
-      return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
+  ) => daemonRuntimeClient.probeModels(args))
   ipcMain.handle('ava:llm:probeModelCapabilities', async (
     _e,
     args: {
@@ -599,7 +366,7 @@ function registerIpc(): void {
       }
       model: string
     },
-  ) => probeModelCapabilities(args))
+  ) => daemonRuntimeClient.probeModelCapabilities(args))
   ipcMain.handle('ava:app:version', () => app.getVersion())
   ipcMain.handle('ava:app:checkUpdates', async () => {
     try {

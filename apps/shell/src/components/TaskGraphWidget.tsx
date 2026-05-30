@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react'
 import { Check, Clock, AlertTriangle, Loader2, GitBranch, ArrowRight, XCircle } from 'lucide-react'
 import type { TaskExecutionPlan, TaskExecutionStep } from '../types'
-import { getNodesByLayer } from '../lib/agent/taskExecution'
+import { getNodesByLayer } from '../lib/agent/taskBasics'
 import { useStore } from '../store'
 
 interface Props {

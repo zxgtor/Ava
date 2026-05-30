@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { AvaClient } from '@ava/client-sdk'
+import type { AvaChatClientContext } from '@ava/contracts'
 
 /**
  * `window.ava` — renderer-facing API surface.
@@ -67,6 +68,7 @@ type AssistantRunPhase =
 interface StreamChatArgs {
   streamId: string
   conversationId?: string
+  clientContext?: AvaChatClientContext
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
@@ -390,6 +392,7 @@ function daemonRequest(args: StreamChatArgs) {
         activeStepToolLoopBudget: args.activeStepToolLoopBudget,
         finalReportReadBudget: args.finalReportReadBudget,
       },
+      clientContext: args.clientContext,
     },
   }
 }
@@ -539,6 +542,7 @@ const ava = {
     getActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:getActiveTaskPlan', request),
     setActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:setActiveTaskPlan', request),
     clearActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:clearActiveTaskPlan', request),
+    getProjectBrief: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:getProjectBrief', request),
   },
 
   conversations: {
@@ -604,10 +608,10 @@ const ava = {
       ipcRenderer.invoke('ava:plugins:list', states),
     listCommands: (states: Record<string, PluginState>): Promise<PluginCommand[]> =>
       ipcRenderer.invoke('ava:plugins:listCommands', states),
-    installFolder: (): Promise<DiscoveredPlugin | null> =>
-      ipcRenderer.invoke('ava:plugins:installFolder'),
-    installZip: (): Promise<DiscoveredPlugin | null> =>
-      ipcRenderer.invoke('ava:plugins:installZip'),
+    installFolder: (path?: string): Promise<DiscoveredPlugin | null> =>
+      ipcRenderer.invoke('ava:plugins:installFolder', path),
+    installZip: (path?: string): Promise<DiscoveredPlugin | null> =>
+      ipcRenderer.invoke('ava:plugins:installZip', path),
     installGit: (url: string): Promise<DiscoveredPlugin> =>
       ipcRenderer.invoke('ava:plugins:installGit', url),
     uninstall: (pluginId: string): Promise<boolean> =>
@@ -621,17 +625,17 @@ const ava = {
   dialog: {
     pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('ava:dialog:pickDirectory'),
   },
-  shell: {
-    openPath: (path: string): Promise<string> => ipcRenderer.invoke('ava:shell:openPath', path),
-    openInTerminal: (path: string): Promise<void> => ipcRenderer.invoke('ava:shell:openInTerminal', path),
-    openInVSCode: (path: string): Promise<void> => ipcRenderer.invoke('ava:shell:openInVSCode', path),
-  },
-  fs: {
-    writeFile: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('ava:fs:writeFile', path, content),
-    readFile: (path: string): Promise<string> => ipcRenderer.invoke('ava:fs:readFile', path),
-    createDir: (path: string): Promise<boolean> => ipcRenderer.invoke('ava:fs:createDir', path),
-    listDir: (path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>> => 
-      ipcRenderer.invoke('ava:fs:listDir', path),
+  workspace: {
+    ensureProjectDocs: (request: { folderPath: string; title: string; trait?: string }): Promise<{ folderPath: string; created: string[]; existing: string[] }> =>
+      ipcRenderer.invoke('ava:workspace:ensureProjectDocs', request),
+    writeText: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('ava:workspace:writeText', path, content),
+    readText: (path: string): Promise<string> => ipcRenderer.invoke('ava:workspace:readText', path),
+    createDir: (path: string): Promise<boolean> => ipcRenderer.invoke('ava:workspace:createDir', path),
+    listDir: (path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>> =>
+      ipcRenderer.invoke('ava:workspace:listDir', path),
+    openPath: (path: string): Promise<string> => ipcRenderer.invoke('ava:environment:openPath', path),
+    openInTerminal: (path: string): Promise<void> => ipcRenderer.invoke('ava:environment:openTerminal', path),
+    openInVSCode: (path: string): Promise<void> => ipcRenderer.invoke('ava:environment:openVSCode', path),
   },
   window: {
     openPreview: (theme?: string): Promise<void> => ipcRenderer.invoke('ava:window:openPreview', theme),

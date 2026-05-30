@@ -181,40 +181,10 @@ export function ConversationSidebar() {
     try {
       const path = await window.ava.dialog.pickDirectory()
       if (path) {
-        // 1. 更新状态
         dispatch({ type: 'SET_CONVERSATION_FOLDER', id, path })
-
-        // 2. 立即执行自动化初始化
         const trait = conv.traits?.[0] || 'chat'
-        
-        // 生成任务清单
-        const tasksContent = `# Tasks: ${conv.title}\n\n- [ ] Initial Research\n- [ ] Brainstorming\n- [ ] Draft Implementation\n- [ ] Review & Refine\n`
-        await window.ava.fs.writeFile(`${path}/TASKS.md`, tasksContent)
-
-        // 根据特性生成专属文档
-        let specFile = 'GOALS.md'
-        let specContent = `# Goals: ${conv.title}\n\nDescribe the main objectives here.`
-
-        if (trait === 'code') {
-          specFile = 'SPECS.md'
-          specContent = `# Technical Specs: ${conv.title}\n\n## Architecture\n- \n\n## Dependencies\n- \n`
-        } else if (trait === 'business') {
-          specFile = 'BUSINESS_PLAN.md'
-          specContent = `# Business Plan: ${conv.title}\n\n## Market Analysis\n- \n\n## Revenue Model\n- \n`
-        } else if (trait === 'video') {
-          specFile = 'SCRIPT.md'
-          specContent = `# Script/Storyboard: ${conv.title}\n\n## Scene 1\n- \n`
-        } else if (trait === 'design') {
-          specFile = 'DESIGN_SPEC.md'
-          specContent = `# Design Spec: ${conv.title}\n\n## Brand/Mood\n- \n\n## Color Palette\n- \n\n## Typography\n- \n`
-          // 额外生成一个资产清单
-          await window.ava.fs.writeFile(`${path}/ASSETS.md`, `# Design Assets: ${conv.title}\n\n- [ ] Logo\n- [ ] Icons\n- [ ] Mockups\n`)
-        }
-
-        await window.ava.fs.writeFile(`${path}/${specFile}`, specContent)
-        
-        // 3. 打开文件夹展示成果
-        window.ava.shell.openPath(path)
+        await window.ava.workspace.ensureProjectDocs({ folderPath: path, title: conv.title, trait })
+        window.ava.workspace.openPath(path)
       }
     } catch (err) {
       console.warn('Failed to link and init folder:', err)

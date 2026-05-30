@@ -336,6 +336,17 @@ async function routeRequest(req, res, runtime) {
     return
   }
 
+  if (url.pathname === '/conversations/load' && req.method === 'GET') {
+    await runtimeJsonResponse(res, runtime, 'loadConversations')
+    return
+  }
+
+  if (url.pathname === '/conversations/save' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'saveConversations', [Object.prototype.hasOwnProperty.call(body, 'data') ? body.data : body])
+    return
+  }
+
   if (url.pathname === '/input/classify' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'classifyInput', [body])
@@ -387,6 +398,72 @@ async function routeRequest(req, res, runtime) {
   if (url.pathname === '/tasks/active-plan/clear' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'clearActiveTaskPlan', [body])
+    return
+  }
+
+  if (url.pathname === '/models/probe' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'probeModels', [body])
+    return
+  }
+
+  if (url.pathname === '/models/probe-capabilities' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'probeModelCapabilities', [body])
+    return
+  }
+
+  if (url.pathname === '/project/brief' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'getProjectBrief', [body])
+    return
+  }
+
+  if (url.pathname === '/workspace/ensure-project-docs' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'ensureProjectDocs', [body])
+    return
+  }
+
+  if (url.pathname === '/workspace/read-text' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'readWorkspaceText', [body])
+    return
+  }
+
+  if (url.pathname === '/workspace/write-text' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'writeWorkspaceText', [body])
+    return
+  }
+
+  if (url.pathname === '/workspace/create-dir' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'createWorkspaceDir', [body])
+    return
+  }
+
+  if (url.pathname === '/workspace/list-dir' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'listWorkspaceDir', [body])
+    return
+  }
+
+  if (url.pathname === '/environment/open-path' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'openEnvironmentPath', [body])
+    return
+  }
+
+  if (url.pathname === '/environment/open-terminal' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'openEnvironmentTerminal', [body])
+    return
+  }
+
+  if (url.pathname === '/environment/open-vscode' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'openEnvironmentVSCode', [body])
     return
   }
 

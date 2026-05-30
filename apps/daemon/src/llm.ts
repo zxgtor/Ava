@@ -23,6 +23,7 @@ import { capabilityStats } from './services/capabilityStats'
 import { windowsEnvironmentDriver } from './services/windowsEnvironmentDriver'
 import type { RuntimeEventTarget } from './services/runtimeEventTarget'
 import type {
+  AvaChatClientContext,
   TaskExecutionPlan,
   TaskExecutionStep,
   TaskExecutionStepRole,
@@ -99,6 +100,7 @@ export interface ToolCallPart {
 export interface StreamChatArgs {
   streamId: string
   conversationId?: string
+  clientContext?: AvaChatClientContext
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string

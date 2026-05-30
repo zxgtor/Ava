@@ -2,9 +2,11 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import {
   builtInTools,
+  loadConversations,
   loadSettings,
   mcpSupervisor,
   pluginManager,
+  saveConversations,
   saveSettings,
   streamChat,
   toolAuditLog,
@@ -31,6 +33,19 @@ import { replyIntakeSession, startIntakeSession } from './agentIntakeSession'
 import { classifyInputWithFallback } from './agentInputRouter'
 import { dispatchInput } from './agentWorkflowDispatcher'
 import { clearActiveTaskPlan, getActiveTaskPlan, setActiveTaskPlan } from './agentTaskPlanRegistry'
+import { buildDaemonChatMessages, isAvaChatClientContext } from './chatContextBuilder'
+import { probeModelCapabilities, probeModels } from './services/modelCapabilityProbe'
+import { getProjectBrief } from './services/projectContext'
+import {
+  createWorkspaceDir,
+  ensureProjectDocs,
+  listWorkspaceDir,
+  openEnvironmentPath,
+  openEnvironmentTerminal,
+  openEnvironmentVSCode,
+  readWorkspaceText,
+  writeWorkspaceText,
+} from './services/workspaceEnvironment'
 
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
@@ -61,7 +76,32 @@ async function readRuntimeMcpServers(raw: unknown): Promise<McpServerConfig[] | 
 }
 
 async function streamChatArgsFromRequest(request: AvaChatStreamRequest): Promise<StreamChatArgs> {
-  const metadata = request.metadata as { streamChatArgs?: unknown } | undefined
+  const metadata = request.metadata as { clientContext?: unknown; streamChatArgs?: unknown } | undefined
+  const streamOptions = (request.metadata as { streamOptions?: unknown } | undefined)?.streamOptions as Partial<DaemonStreamOptions> | undefined
+  const streamId = typeof streamOptions?.streamId === 'string'
+    ? streamOptions.streamId
+    : typeof request.runId === 'string' && request.runId.trim()
+      ? request.runId
+      : `daemon_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+  if (isAvaChatClientContext(metadata?.clientContext)) {
+    const args = await resolveStreamChatArgsFromDaemonConfig([], {
+      ...(streamOptions ?? {}),
+      streamId,
+      conversationId: streamOptions?.conversationId ?? request.conversationId,
+    })
+    const settings = (await loadSettings() ?? {}) as Record<string, unknown>
+    return {
+      ...args,
+      messages: buildDaemonChatMessages({
+        context: metadata.clientContext,
+        settings,
+        providers: args.providers,
+        activeTaskPlan: args.activeTaskPlan,
+      }),
+    }
+  }
+
   const args = metadata?.streamChatArgs as StreamChatArgs | undefined
   if (args && Array.isArray(args.messages) && Array.isArray(args.providers)) {
     return {
@@ -69,13 +109,6 @@ async function streamChatArgsFromRequest(request: AvaChatStreamRequest): Promise
       conversationId: args.conversationId ?? request.conversationId,
     }
   }
-
-  const streamOptions = (request.metadata as { streamOptions?: unknown } | undefined)?.streamOptions as Partial<DaemonStreamOptions> | undefined
-  const streamId = typeof streamOptions?.streamId === 'string'
-    ? streamOptions.streamId
-    : typeof request.runId === 'string' && request.runId.trim()
-      ? request.runId
-      : `daemon_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
   return resolveStreamChatArgsFromDaemonConfig(request.messages as StreamChatArgs['messages'], {
     ...(streamOptions ?? {}),
@@ -275,6 +308,8 @@ export function createDaemonRuntimeServices() {
 
     loadSettings,
 
+    loadConversations,
+
     classifyInput: classifyInputWithFallback,
 
     dispatchInput,
@@ -284,6 +319,21 @@ export function createDaemonRuntimeServices() {
     replyIntakeSession,
 
     analyzeTask,
+
+    probeModels,
+
+    probeModelCapabilities,
+
+    getProjectBrief,
+
+    ensureProjectDocs,
+    readWorkspaceText,
+    writeWorkspaceText,
+    createWorkspaceDir,
+    listWorkspaceDir,
+    openEnvironmentPath,
+    openEnvironmentTerminal,
+    openEnvironmentVSCode,
 
     async planTask(request: Parameters<typeof planTask>[0]) {
       const result = await planTask(request)
@@ -305,6 +355,11 @@ export function createDaemonRuntimeServices() {
         if (!isBrokenPipeError(err)) throw err
         console.warn('[daemon:mcp] ignored EPIPE while applying settings; server process likely closed its stdio pipe.')
       }
+      return true
+    },
+
+    async saveConversations(data: unknown) {
+      await saveConversations(data)
       return true
     },
 

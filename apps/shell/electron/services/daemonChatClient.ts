@@ -57,6 +57,7 @@ function buildDaemonRequest(args: StreamChatArgs, provider: ModelProvider, model
     })),
     activeStepId: args.activeStepRequiredTools?.join(',') || undefined,
     metadata: {
+      clientContext: args.clientContext,
       activeTaskId: args.activeTaskId,
       activeFolderPath: args.activeFolderPath,
       activeStepRole: args.activeStepRole,

@@ -133,6 +133,24 @@ export interface AvaTaskPlanStateResult {
   plan?: TaskExecutionPlan
 }
 
+export interface AvaWorkspaceListEntry {
+  name: string
+  isDirectory: boolean
+  size: number
+}
+
+export interface AvaWorkspaceEnsureProjectDocsRequest {
+  folderPath: string
+  title: string
+  trait?: string
+}
+
+export interface AvaWorkspaceEnsureProjectDocsResult {
+  folderPath: string
+  created: string[]
+  existing: string[]
+}
+
 export type AvaTaskIntakeStage = 'clarifying' | 'awaiting_summary_confirm' | 'ready_to_plan' | 'canceled'
 
 export interface AvaTaskIntakeAnswer {
@@ -237,6 +255,22 @@ export type AvaChatStreamRequest = {
   activeTaskPlanId?: string
   activeStepId?: string
   metadata?: Record<string, unknown>
+}
+
+export interface AvaChatClientContext {
+  conversation: {
+    id: string
+    title?: string
+    traits?: string[]
+    folderPath?: string
+    messages: AvaChatMessage[]
+  }
+  projectBrief?: {
+    files: string[]
+    tasksDone: number
+    tasksTotal: number
+  }
+  folderPath?: string
 }
 
 export type AvaApiOk<T> = {
@@ -371,6 +405,14 @@ export type AvaDaemonApiPath =
   | '/tasks/active-plan/get'
   | '/tasks/active-plan/set'
   | '/tasks/active-plan/clear'
+  | '/workspace/ensure-project-docs'
+  | '/workspace/read-text'
+  | '/workspace/write-text'
+  | '/workspace/create-dir'
+  | '/workspace/list-dir'
+  | '/environment/open-path'
+  | '/environment/open-terminal'
+  | '/environment/open-vscode'
   | '/mcp/servers'
   | '/mcp/restart'
   | '/chat/stream'
@@ -394,6 +436,7 @@ export type AvaDaemonStreamOptions = {
 export type AvaDaemonChatRequest = Omit<AvaChatStreamRequest, 'metadata'> & {
   metadata?: {
     streamOptions?: AvaDaemonStreamOptions
+    clientContext?: AvaChatClientContext
     /** Compatibility only. New clients should let daemon load config/model routing. */
     streamChatArgs?: unknown
     [key: string]: unknown

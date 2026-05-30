@@ -1,4 +1,5 @@
 import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ModelProvider, ProjectBrief, Settings, TaskExecutionPlan } from '../../types'
+import type { AvaChatMessage } from '@ava/contracts'
 import { getEnabledProviders } from '../llm/providers'
 
 // ── Shared utilities ────────────────────────────────────────────────
@@ -477,14 +478,6 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     }
   }
 
-  const messages = conversationToLlmMessages(
-    options.conversation,
-    options.settings,
-    options.projectBrief,
-    options.folderPath,
-    options.activeTaskPlan,
-  )
-
   // Trait-based temperature
   const trait = options.conversation.traits?.[0] || 'chat'
   const temperature = TRAIT_TEMPERATURES[trait] ?? 0.4
@@ -556,7 +549,18 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     const reply = await window.ava.llm.stream({
       streamId: options.streamId,
       conversationId: options.conversation.id,
-      messages,
+      clientContext: {
+        conversation: {
+          id: options.conversation.id,
+          title: options.conversation.title,
+          traits: options.conversation.traits,
+          folderPath: options.conversation.folderPath,
+          messages: conversationMessagesForDaemon(options.conversation.messages),
+        },
+        projectBrief: options.projectBrief,
+        folderPath: options.folderPath,
+      },
+      messages: [],
       providers,
       activeTaskId: options.activeTaskId,
       activeTaskPlan: options.activeTaskPlan,
@@ -600,6 +604,21 @@ function latestCommandInvocation(conversation: Conversation): CommandInvocation 
     if (message.role === 'user') return message.commandInvocation
   }
   return undefined
+}
+
+function conversationMessagesForDaemon(messages: Message[]): AvaChatMessage[] {
+  return messages.map(message => ({
+    id: message.id,
+    role: message.role,
+    taskId: message.taskId,
+    toolCallId: message.toolCallId,
+    createdAt: new Date(message.createdAt).toISOString(),
+    content: message.content
+      .filter(part => part.type === 'text' || part.type === 'image_url')
+      .map(part => part.type === 'text'
+        ? { type: 'text' as const, text: part.text }
+        : { type: 'image_url' as const, image_url: { url: part.image_url.url } }),
+  }))
 }
 
 // ── Message factories ───────────────────────────────────────────────

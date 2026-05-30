@@ -18,6 +18,9 @@ import type {
   AvaTaskPlanGetRequest,
   AvaTaskPlanSetRequest,
   AvaTaskPlanStateResult,
+  AvaWorkspaceEnsureProjectDocsRequest,
+  AvaWorkspaceEnsureProjectDocsResult,
+  AvaWorkspaceListEntry,
 } from '@ava/contracts'
 
 export interface AvaClientOptions {
@@ -59,6 +62,14 @@ export class AvaClient {
     return this.postResult<boolean>('/settings/save', { data })
   }
 
+  async loadConversations<T = unknown>(): Promise<T> {
+    return this.getResult<T>('/conversations/load')
+  }
+
+  async saveConversations(data: unknown): Promise<boolean> {
+    return this.postResult<boolean>('/conversations/save', { data })
+  }
+
   async classifyInput(request: AvaInputClassifyRequest): Promise<AvaInputClassifyResult> {
     return this.postResult<AvaInputClassifyResult>('/input/classify', request)
   }
@@ -93,6 +104,50 @@ export class AvaClient {
 
   async clearActiveTaskPlan(request: AvaTaskPlanClearRequest): Promise<AvaTaskPlanStateResult> {
     return this.postResult<AvaTaskPlanStateResult>('/tasks/active-plan/clear', request)
+  }
+
+  async probeModels<T = unknown>(request: unknown): Promise<T> {
+    return this.postResult<T>('/models/probe', request)
+  }
+
+  async probeModelCapabilities<T = unknown>(request: unknown): Promise<T> {
+    return this.postResult<T>('/models/probe-capabilities', request)
+  }
+
+  async getProjectBrief<T = unknown>(request: unknown): Promise<T> {
+    return this.postResult<T>('/project/brief', request)
+  }
+
+  async ensureProjectDocs(request: AvaWorkspaceEnsureProjectDocsRequest): Promise<AvaWorkspaceEnsureProjectDocsResult> {
+    return this.postResult<AvaWorkspaceEnsureProjectDocsResult>('/workspace/ensure-project-docs', request)
+  }
+
+  async readWorkspaceText(request: { path: string }): Promise<string> {
+    return this.postResult<string>('/workspace/read-text', request)
+  }
+
+  async writeWorkspaceText(request: { path: string; content: string }): Promise<{ path: string; bytes: number }> {
+    return this.postResult<{ path: string; bytes: number }>('/workspace/write-text', request)
+  }
+
+  async createWorkspaceDir(request: { path: string }): Promise<{ path: string }> {
+    return this.postResult<{ path: string }>('/workspace/create-dir', request)
+  }
+
+  async listWorkspaceDir(request: { path: string }): Promise<AvaWorkspaceListEntry[]> {
+    return this.postResult<AvaWorkspaceListEntry[]>('/workspace/list-dir', request)
+  }
+
+  async openPath(request: { path: string }): Promise<{ opened: string }> {
+    return this.postResult<{ opened: string }>('/environment/open-path', request)
+  }
+
+  async openTerminal(request: { path: string }): Promise<{ opened: string }> {
+    return this.postResult<{ opened: string }>('/environment/open-terminal', request)
+  }
+
+  async openVSCode(request: { path: string }): Promise<{ opened: string }> {
+    return this.postResult<{ opened: string }>('/environment/open-vscode', request)
   }
 
   async listMcpServers<T = unknown>(): Promise<T> {

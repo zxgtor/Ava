@@ -23,7 +23,7 @@ import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
 import { extractWorkingDirectoryFromText, isCodingDesignBigTask } from '../lib/agent/taskBasics'
-import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, TaskExecutionPlan, ProjectAnalysis } from '../types'
+import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, ProjectBrief, TaskExecutionPlan, ProjectAnalysis } from '../types'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -592,6 +592,8 @@ function ChatSessionBar({
     setMenuOpen(false)
     const path = await window.ava.dialog.pickDirectory()
     if (path) {
+      const trait = conversation.traits?.[0] || 'chat'
+      await window.ava.workspace.ensureProjectDocs({ folderPath: path, title: conversation.title, trait })
       dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path })
     }
   }
@@ -738,7 +740,7 @@ function ChatSessionBar({
           <>
             <button
               type="button"
-              onClick={() => window.ava.shell.openPath(folderPath)}
+              onClick={() => window.ava.workspace.openPath(folderPath)}
               className="rounded-md p-1.5 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
               title={folderPath}
             >
@@ -746,7 +748,7 @@ function ChatSessionBar({
             </button>
             <button
               type="button"
-              onClick={() => window.ava.shell.openInVSCode(folderPath)}
+              onClick={() => window.ava.workspace.openInVSCode(folderPath)}
               className="rounded-md p-1.5 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
               title={t('chat.open_code', 'Open in VS Code')}
             >
@@ -754,7 +756,7 @@ function ChatSessionBar({
             </button>
             <button
               type="button"
-              onClick={() => window.ava.shell.openInTerminal(folderPath)}
+              onClick={() => window.ava.workspace.openInTerminal(folderPath)}
               className="rounded-md p-1.5 text-text-3 transition-colors hover:bg-white/[0.06] hover:text-text"
               title={t('chat.open_terminal', 'Open in Terminal')}
             >
@@ -864,23 +866,8 @@ export function ChatView() {
     }
     try {
       const folder = activeConversation.folderPath
-      const fileList = await window.ava.fs.listDir(folder)
-      const files = fileList.map(f => f.name)
-      
-      let tasksDone = 0
-      let tasksTotal = 0
-      try {
-        const tasksMd = await window.ava.fs.readFile(`${folder}/TASKS.md`)
-        const lines = tasksMd.split('\n')
-        lines.forEach(line => {
-          if (line.includes('[ ]') || line.includes('[x]')) {
-            tasksTotal++
-            if (line.includes('[x]')) tasksDone++
-          }
-        })
-      } catch { /* TASKS.md might not exist yet */ }
-
-      dispatch({ type: 'SET_PROJECT_BRIEF', conversationId: activeConversation.id, brief: { tasksDone, tasksTotal, files } })
+      const brief = await window.ava.agent.getProjectBrief({ folderPath: folder }) as ProjectBrief | null
+      dispatch({ type: 'SET_PROJECT_BRIEF', conversationId: activeConversation.id, brief })
     } catch (err) {
       console.warn('Project sync failed:', err)
       dispatch({ type: 'SET_PROJECT_BRIEF', conversationId: activeConversation.id, brief: null })
@@ -1473,11 +1460,6 @@ export function ChatView() {
           }
 
           if (workingDirectory && workingDirectory !== conversation.folderPath) {
-            try {
-              await window.ava.fs.createDir(workingDirectory)
-            } catch (err) {
-              console.warn('Failed to auto-create working directory:', err)
-            }
             dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path: workingDirectory })
           }
 
