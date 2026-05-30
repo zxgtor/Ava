@@ -1,7 +1,5 @@
-import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ModelProvider, ProjectBrief, Settings, TaskExecutionPlan, TaskExecutionStep } from '../../types'
+import type { AssistantRunPhase, CommandInvocation, ContentPart, Conversation, Message, ModelProvider, ProjectBrief, Settings, TaskExecutionPlan } from '../../types'
 import { getEnabledProviders } from '../llm/providers'
-import { buildExecutorSystemPrompt } from './roles/executor'
-import { finalReportReadBudgetForStep, toolLoopBudgetForStep } from './taskExecutionPolicy'
 
 // ── Shared utilities ────────────────────────────────────────────────
 
@@ -277,8 +275,6 @@ function conversationToLlmMessages(
   projectBrief?: ProjectBrief,
   folderPath?: string,
   taskPlan?: TaskExecutionPlan,
-  activeStep?: TaskExecutionStep,
-  finalReportAllowed?: boolean,
 ): LlmMessage[] {
   const latestUserIndex = (() => {
     for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
@@ -303,17 +299,6 @@ function conversationToLlmMessages(
 
   if (latestUserRequest) {
     mandatory.push({ role: 'system', content: buildCurrentTaskPrompt(latestUserRequest, activeTaskId) })
-  }
-
-  if (taskPlan && activeStep) {
-    const prompt = buildExecutorSystemPrompt({
-      plan: taskPlan,
-      step: activeStep,
-      memoryState: buildTaskMemoryState(taskPlan),
-      providers: [], // Providers are used elsewhere
-      settings
-    })
-    mandatory.push({ role: 'system', content: prompt })
   }
 
   // ── 2. Build the active-task messages (latest user + same-task messages after it) ──
@@ -464,8 +449,6 @@ export interface SendOptions {
   }) => void
   streamId: string
   activeTaskPlan?: TaskExecutionPlan
-  activeStep?: TaskExecutionStep
-  finalReportAllowed?: boolean
 }
 
 export interface SendResult {
@@ -500,8 +483,6 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     options.projectBrief,
     options.folderPath,
     options.activeTaskPlan,
-    options.activeTaskPlan ? undefined : options.activeStep,
-    options.activeTaskPlan ? undefined : options.finalReportAllowed,
   )
 
   // Trait-based temperature
@@ -574,6 +555,7 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
     const activeFolderPath = options.folderPath || taskPlanWorkingDirectory(options.activeTaskPlan)
     const reply = await window.ava.llm.stream({
       streamId: options.streamId,
+      conversationId: options.conversation.id,
       messages,
       providers,
       activeTaskId: options.activeTaskId,
@@ -584,10 +566,6 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
       temperature,
       toolFormatMap: options.settings.modelToolFormatMap,
       pluginStates: options.settings.pluginStates,
-      activeStepRequiredTools: options.activeStep?.requiredTools,
-      activeStepRole: activeStepRole(options.activeStep),
-      activeStepToolLoopBudget: toolLoopBudgetForStep(options.activeStep),
-      finalReportReadBudget: finalReportReadBudgetForStep(options.activeStep),
     })
 
     if (!reply.ok) {
@@ -608,19 +586,6 @@ export async function sendChat(options: SendOptions): Promise<SendResult | SendE
   } finally {
     cleanups.forEach(fn => fn())
   }
-}
-
-function activeStepRole(step?: TaskExecutionStep): TaskExecutionStep['role'] | undefined {
-  if (!step) return undefined
-  if (step.role) return step.role
-  const id = step.id.toLowerCase()
-  if (id.includes('validate') || id.includes('typecheck') || id.includes('build')) return 'validate'
-  if (id.includes('repair') || id.includes('fix')) return 'repair'
-  if (id.includes('preview') || id.includes('server')) return 'preview'
-  if (id.includes('console')) return 'console'
-  if (id.includes('screenshot')) return 'screenshot'
-  if (id.includes('final')) return 'final_report'
-  return undefined
 }
 
 function taskPlanWorkingDirectory(plan?: TaskExecutionPlan): string | undefined {

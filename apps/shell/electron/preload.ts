@@ -66,6 +66,7 @@ type AssistantRunPhase =
 
 interface StreamChatArgs {
   streamId: string
+  conversationId?: string
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string
@@ -365,6 +366,7 @@ function selectedModel(provider: ModelProvider): string {
 
 function daemonRequest(args: StreamChatArgs) {
   return {
+    conversationId: args.conversationId,
     runId: args.streamId,
     messages: args.messages.map(message => ({
       role: message.role,
@@ -376,6 +378,7 @@ function daemonRequest(args: StreamChatArgs) {
     metadata: {
       streamOptions: {
         streamId: args.streamId,
+        conversationId: args.conversationId,
         activeTaskId: args.activeTaskId,
         activeTaskPlan: args.activeTaskPlan,
         activeFolderPath: args.activeFolderPath,
@@ -529,8 +532,13 @@ const ava = {
   agent: {
     classifyInput: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:classifyInput', request),
     dispatchInput: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:dispatchInput', request),
+    startIntakeSession: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:startIntakeSession', request),
+    replyIntakeSession: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:replyIntakeSession', request),
     analyzeTask: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:analyzeTask', request),
     planTask: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:planTask', request),
+    getActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:getActiveTaskPlan', request),
+    setActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:setActiveTaskPlan', request),
+    clearActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:clearActiveTaskPlan', request),
   },
 
   conversations: {

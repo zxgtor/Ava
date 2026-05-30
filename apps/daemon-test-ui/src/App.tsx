@@ -160,7 +160,7 @@ interface DevDependencyNode {
 }
 
 interface DevNodeMetadata {
-  type: 'runtime-core' | 'desktop-client' | 'web-client' | 'dev-infra' | 'test-surface' | 'environment'
+  type: 'runtime-core' | 'desktop-client' | 'web-client' | 'dev-infra' | 'test-surface' | 'environment' | 'service'
   features: string[]
   dependencies: string[]
   dependsOn: string[]
@@ -174,12 +174,12 @@ const DEFAULT_NODE_POSITIONS: Record<string, NodePosition> = {
   daemon: { x: 50, y: 50 },
   'node-runtime': { x: 50, y: 8 },
   'localhost-ports': { x: 84, y: 8 },
+  'local-llm': { x: 21, y: 5 },
+  'speech-services': { x: 21, y: 102 },
   'ava-desktop': { x: 21, y: 25 },
   'web-ui': { x: 21, y: 72 },
   'dev-control-backend': { x: 79, y: 28 },
   'daemon-test-ui': { x: 79, y: 47 },
-  'unit-test': { x: 79, y: 70 },
-  'ava-brain': { x: 79, y: 116 },
 }
 const CANVAS_NODE_POSITION_MIN = -500
 const CANVAS_NODE_POSITION_MAX = 600
@@ -193,8 +193,8 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'MCP and skill context',
       'Process registry',
     ],
-    dependencies: ['Node runtime', 'Localhost ports', 'Local config', 'Provider runtime', 'Workspace filesystem', 'MCP servers'],
-    dependsOn: ['node-runtime', 'localhost-ports'],
+    dependencies: ['Node runtime', 'Localhost ports', 'Local config', 'Local LLM runtime', 'Speech services', 'Workspace filesystem', 'MCP servers'],
+    dependsOn: ['node-runtime', 'localhost-ports', 'local-llm', 'speech-services'],
   },
   'ava-desktop': {
     type: 'desktop-client',
@@ -224,6 +224,7 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'Feature orchestration canvas',
       'Daemon health monitor',
       'Unit test launcher',
+      'Ava Brain map',
       'Browser test surface',
     ],
     dependencies: ['Ava Dev Supervisor', 'Ava Daemon for tests', 'Node runtime', 'Localhost ports'],
@@ -263,39 +264,39 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
     dependencies: [],
     dependsOn: [],
   },
-  'unit-test': {
-    type: 'test-surface',
+  'local-llm': {
+    type: 'service',
     features: [
-      'Daemon API smoke tests',
-      'Built-in tool routing tests',
-      'MCP tool routing tests',
-      'Skill routing tests',
+      'OpenAI-compatible chat API',
+      'Model launch / warmup',
+      'Tool-capable provider profile',
+      'Reasoning mode profile',
     ],
-    dependencies: ['Ava Dev Control Panel route', 'Ava Daemon runtime API', 'LLM provider when routing tests run', 'Test workspace'],
-    dependsOn: ['daemon-test-ui', 'daemon'],
+    dependencies: ['Local LLM app', 'Model files', 'Localhost ports'],
+    dependsOn: ['localhost-ports'],
   },
-  'ava-brain': {
-    type: 'dev-infra',
+  'speech-services': {
+    type: 'service',
     features: [
-      'User input flow map',
-      'Desktop / daemon boundary',
-      'Task intake discussion surface',
-      'Draggable brain canvas',
+      'Speech-to-text endpoint',
+      'Text-to-speech endpoint',
+      'Audio device bridge',
+      'Voice session pipeline',
     ],
-    dependencies: ['Ava Dev Control Panel route'],
-    dependsOn: ['daemon-test-ui'],
+    dependencies: ['Speech model/runtime', 'Audio input/output devices', 'Localhost ports'],
+    dependsOn: ['localhost-ports'],
   },
 }
 const DEPENDENCY_PIN_COLORS: Record<string, string> = {
   daemon: '#56d6ff',
   'node-runtime': '#d7b36a',
   'localhost-ports': '#d7b36a',
+  'local-llm': '#c792ff',
+  'speech-services': '#ff9f7a',
   'ava-desktop': '#76e2a8',
   'web-ui': '#ff7aa7',
   'dev-control-backend': '#f4c95d',
   'daemon-test-ui': '#ffd36a',
-  'unit-test': '#a8ccff',
-  'ava-brain': '#a999ff',
 }
 const SVG_NODE_WIDTH = 285
 const SVG_NODE_BASE_HEIGHT = 148
@@ -395,6 +396,14 @@ function openExternalTab(url: string) {
 
 function avaBrainUrl(_devControlUrl: string) {
   return '/ava-brain/input-flow'
+}
+
+function isAvaBrainFeature(nodeId: string, featureName: string) {
+  return nodeId === 'daemon-test-ui' && /ava brain/i.test(featureName)
+}
+
+function isUnitTestFeature(nodeId: string, featureName: string) {
+  return nodeId === 'daemon-test-ui' && /unit test/i.test(featureName)
 }
 
 function displayDevStatus(node: DevDependencyNode, status: string, process?: DevProcess) {
@@ -1289,6 +1298,27 @@ export function App() {
         },
       },
       {
+        id: 'local-llm',
+        ...position('local-llm'),
+        metadata: DEV_NODE_METADATA['local-llm'],
+        feature: {
+          label: 'Local LLM Runtime',
+          description: 'Local model server used by Ava Daemon for chat, tool routing, and reasoning profiles.',
+          status: 'external',
+          url: 'http://127.0.0.1:1234/v1',
+        },
+      },
+      {
+        id: 'speech-services',
+        ...position('speech-services'),
+        metadata: DEV_NODE_METADATA['speech-services'],
+        feature: {
+          label: 'TTS / STT Services',
+          description: 'Optional local speech service layer for voice input and spoken responses.',
+          status: 'external',
+        },
+      },
+      {
         id: 'ava-desktop',
         ...position('ava-desktop'),
         metadata: DEV_NODE_METADATA['ava-desktop'],
@@ -1316,28 +1346,6 @@ export function App() {
         ...position('daemon-test-ui'),
         metadata: DEV_NODE_METADATA['daemon-test-ui'],
         process: get('daemon-test-ui'),
-      },
-      {
-        id: 'unit-test',
-        ...position('unit-test'),
-        metadata: DEV_NODE_METADATA['unit-test'],
-        feature: {
-          label: 'Unit Test',
-          description: 'Open daemon, built-in tool, MCP, and skill routing tests.',
-          status: 'available',
-          url: baseUrl,
-        },
-      },
-      {
-        id: 'ava-brain',
-        ...position('ava-brain'),
-        metadata: DEV_NODE_METADATA['ava-brain'],
-        feature: {
-          label: 'Ava Brain',
-          description: 'Open the interactive user input flow and desktop/daemon boundary map.',
-          status: 'available',
-          url: avaBrainUrl(devControlUrl),
-        },
       },
     ]
   }, [baseUrl, devControlStatus, devControlUrl, nodePositions, processById])
@@ -1406,25 +1414,13 @@ export function App() {
   )
 
   const testSummaryForFeature = (nodeId: string, featureName: string): TestSummary | null => {
-    if (nodeId !== 'unit-test') return null
-    if (/daemon/i.test(featureName)) return testSummariesByKind.daemon
-    if (/built-in/i.test(featureName)) return testSummariesByKind['built-in']
-    if (/mcp/i.test(featureName)) return testSummariesByKind.mcp
-    if (/skill/i.test(featureName)) return testSummariesByKind.skill
+    if (isUnitTestFeature(nodeId, featureName)) return allTestSummary
     return null
   }
 
   const renderNodeActions = (node: DevDependencyNode, process?: DevProcess) => (
     node.feature
-      ? node.id === 'unit-test'
-        ? [
-          { label: 'Open Unit Test', disabled: devBusyId === 'daemon', run: () => { void openUnitTestPage() } },
-        ]
-        : node.id === 'ava-brain'
-          ? [
-            { label: 'Open Ava Brain', disabled: false, run: () => { openExternalTab(avaBrainUrl(devControlUrl)) } },
-          ]
-        : []
+      ? []
       : [
         { label: 'Start', disabled: !process?.available || Boolean(process.running), run: () => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'start') } },
         { label: 'Stop', disabled: !process?.available || !process.running, run: () => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'stop') } },
@@ -1746,15 +1742,39 @@ export function App() {
                       <div className="node-feature-list">
                         {node.metadata.features.map(item => {
                           const featureSummary = testSummaryForFeature(node.id, item)
+                          const isBrainFeature = isAvaBrainFeature(node.id, item)
+                          const isTestFeature = isUnitTestFeature(node.id, item)
+                          const isActionFeature = isBrainFeature || isTestFeature
                           return (
-                          <div className="node-feature-row" key={item}>
-                            <span>{truncateText(item, featureSummary ? 25 : 34)}</span>
-                            {featureSummary && (
-                              <em className={`feature-test-chip ${featureSummary.status}`}>
-                                {featureSummary.label}
-                              </em>
-                            )}
-                          </div>
+                            <div className={`node-feature-row ${isActionFeature ? 'actionable' : ''}`} key={item}>
+                              {isActionFeature ? (
+                                <button
+                                  type="button"
+                                  className="node-feature-button"
+                                  title={isBrainFeature ? 'Open Ava Brain' : 'Open Unit Test'}
+                                  disabled={isTestFeature && devBusyId === 'daemon'}
+                                  onPointerDown={event => event.stopPropagation()}
+                                  onClick={event => {
+                                    event.preventDefault()
+                                    event.stopPropagation()
+                                    if (isBrainFeature) {
+                                      openExternalTab(avaBrainUrl(devControlUrl))
+                                    } else {
+                                      void openUnitTestPage()
+                                    }
+                                  }}
+                                >
+                                  {truncateText(item, featureSummary ? 25 : 34)}
+                                </button>
+                              ) : (
+                                <span>{truncateText(item, featureSummary ? 25 : 34)}</span>
+                              )}
+                              {featureSummary && (
+                                <em className={`feature-test-chip ${featureSummary.status}`}>
+                                  {featureSummary.label}
+                                </em>
+                              )}
+                            </div>
                           )
                         })}
                       </div>
@@ -1804,7 +1824,7 @@ export function App() {
                     </section>
                   </div>
 
-                  {selectedDevNode.id === 'unit-test' && (
+                  {selectedDevNode.id === 'daemon-test-ui' && (
                     <section className="dev-detail-section dev-test-summary">
                       <h3>Test result</h3>
                       <div className="test-summary-grid">
@@ -1889,13 +1909,9 @@ export function App() {
                     )
                   )}
 
-                  {selectedDevNode.id === 'unit-test' && (
+                  {selectedDevNode.id === 'daemon-test-ui' && (
                     <div className="dev-actions">
                       <button className="primary" disabled={devBusyId === 'daemon'} onClick={() => { setSelectedDevNodeId(null); void openUnitTestPage() }}>Open Unit Test</button>
-                    </div>
-                  )}
-                  {selectedDevNode.id === 'ava-brain' && (
-                    <div className="dev-actions">
                       <button className="primary" onClick={() => { setSelectedDevNodeId(null); openExternalTab(avaBrainUrl(devControlUrl)) }}>Open Ava Brain</button>
                     </div>
                   )}

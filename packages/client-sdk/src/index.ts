@@ -7,10 +7,17 @@ import type {
   AvaInputClassifyResult,
   AvaInputDispatchRequest,
   AvaInputDispatchResult,
+  AvaTaskIntakeReplyRequest,
+  AvaTaskIntakeResult,
+  AvaTaskIntakeStartRequest,
   AvaTaskAnalyzeRequest,
   AvaTaskAnalyzeResult,
   AvaTaskPlanRequest,
   AvaTaskPlanResult,
+  AvaTaskPlanClearRequest,
+  AvaTaskPlanGetRequest,
+  AvaTaskPlanSetRequest,
+  AvaTaskPlanStateResult,
 } from '@ava/contracts'
 
 export interface AvaClientOptions {
@@ -60,12 +67,32 @@ export class AvaClient {
     return this.postResult<AvaInputDispatchResult>('/input/dispatch', request)
   }
 
+  async startIntakeSession(request: AvaTaskIntakeStartRequest): Promise<AvaTaskIntakeResult> {
+    return this.postResult<AvaTaskIntakeResult>('/intake/start', request)
+  }
+
+  async replyIntakeSession(request: AvaTaskIntakeReplyRequest): Promise<AvaTaskIntakeResult> {
+    return this.postResult<AvaTaskIntakeResult>('/intake/reply', request)
+  }
+
   async analyzeTask(request: AvaTaskAnalyzeRequest): Promise<AvaTaskAnalyzeResult> {
     return this.postResult<AvaTaskAnalyzeResult>('/tasks/analyze', request)
   }
 
   async planTask(request: AvaTaskPlanRequest): Promise<AvaTaskPlanResult> {
     return this.postResult<AvaTaskPlanResult>('/tasks/plan', request)
+  }
+
+  async getActiveTaskPlan(request: AvaTaskPlanGetRequest): Promise<AvaTaskPlanStateResult> {
+    return this.postResult<AvaTaskPlanStateResult>('/tasks/active-plan/get', request)
+  }
+
+  async setActiveTaskPlan(request: AvaTaskPlanSetRequest): Promise<AvaTaskPlanStateResult> {
+    return this.postResult<AvaTaskPlanStateResult>('/tasks/active-plan/set', request)
+  }
+
+  async clearActiveTaskPlan(request: AvaTaskPlanClearRequest): Promise<AvaTaskPlanStateResult> {
+    return this.postResult<AvaTaskPlanStateResult>('/tasks/active-plan/clear', request)
   }
 
   async listMcpServers<T = unknown>(): Promise<T> {

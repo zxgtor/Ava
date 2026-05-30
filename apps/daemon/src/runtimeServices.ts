@@ -14,13 +14,23 @@ import {
   type RuntimeStreamEvent,
   type StreamChatArgs,
 } from './index'
-import type { AvaChatStreamEvent, AvaChatStreamRequest } from '@ava/contracts'
+import type {
+  AvaChatStreamEvent,
+  AvaChatStreamRequest,
+  AvaTaskPlanClearRequest,
+  AvaTaskPlanGetRequest,
+  AvaTaskPlanSetRequest,
+  AvaTaskPlanStateResult,
+  TaskExecutionPlan,
+} from '@ava/contracts'
 import { runtimePaths } from './services/runtimePaths'
 import { resolveStreamChatArgsFromDaemonConfig, type DaemonStreamOptions } from './services/modelRouter'
 import { streamTaskExecutionPlan } from './agentTaskLoop'
 import { analyzeTask, planTask } from './agentPlanner'
-import { classifyInput } from './agentInputRouter'
+import { replyIntakeSession, startIntakeSession } from './agentIntakeSession'
+import { classifyInputWithFallback } from './agentInputRouter'
 import { dispatchInput } from './agentWorkflowDispatcher'
+import { clearActiveTaskPlan, getActiveTaskPlan, setActiveTaskPlan } from './agentTaskPlanRegistry'
 
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
@@ -54,7 +64,10 @@ async function streamChatArgsFromRequest(request: AvaChatStreamRequest): Promise
   const metadata = request.metadata as { streamChatArgs?: unknown } | undefined
   const args = metadata?.streamChatArgs as StreamChatArgs | undefined
   if (args && Array.isArray(args.messages) && Array.isArray(args.providers)) {
-    return args
+    return {
+      ...args,
+      conversationId: args.conversationId ?? request.conversationId,
+    }
   }
 
   const streamOptions = (request.metadata as { streamOptions?: unknown } | undefined)?.streamOptions as Partial<DaemonStreamOptions> | undefined
@@ -67,6 +80,7 @@ async function streamChatArgsFromRequest(request: AvaChatStreamRequest): Promise
   return resolveStreamChatArgsFromDaemonConfig(request.messages as StreamChatArgs['messages'], {
     ...(streamOptions ?? {}),
     streamId,
+    conversationId: streamOptions?.conversationId ?? request.conversationId,
   })
 }
 
@@ -116,9 +130,28 @@ function createRuntimeEventTarget(args: StreamChatArgs, emit: EmitDaemonEvent): 
         channel,
         payload,
       })
-      if (channel === 'ava:llm:event') sendRuntimeEvent(payload as RuntimeStreamEvent)
+      if (channel === 'ava:llm:event') {
+        const event = payload as RuntimeStreamEvent & { type?: string; plan?: unknown }
+        if (event.type === 'task_plan_update' && args.conversationId && event.plan && typeof event.plan === 'object') {
+          setActiveTaskPlan(args.conversationId, event.plan as TaskExecutionPlan)
+        }
+        sendRuntimeEvent(payload as RuntimeStreamEvent)
+      }
     },
   }
+}
+
+function getActiveTaskPlanState(request: AvaTaskPlanGetRequest): AvaTaskPlanStateResult {
+  return { conversationId: request.conversationId, plan: getActiveTaskPlan(request.conversationId) }
+}
+
+function setActiveTaskPlanState(request: AvaTaskPlanSetRequest): AvaTaskPlanStateResult {
+  return { conversationId: request.conversationId, plan: setActiveTaskPlan(request.conversationId, request.plan) }
+}
+
+function clearActiveTaskPlanState(request: AvaTaskPlanClearRequest): AvaTaskPlanStateResult {
+  clearActiveTaskPlan(request.conversationId)
+  return { conversationId: request.conversationId }
 }
 
 async function ensureUnitTestWorkspace(): Promise<string> {
@@ -216,14 +249,16 @@ export function createDaemonRuntimeServices() {
   return {
     async streamChat(request: AvaChatStreamRequest, emit: EmitDaemonEvent) {
       const args = await streamChatArgsFromRequest(request)
+      const storedPlan = args.activeTaskPlan ? undefined : (args.conversationId ? getActiveTaskPlan(args.conversationId) : undefined)
+      const streamArgs = storedPlan ? { ...args, activeTaskPlan: storedPlan } : args
       const eventTarget = createRuntimeEventTarget(args, emit)
-      const result = args.activeTaskPlan
-        ? await streamTaskExecutionPlan(eventTarget, args)
-        : await streamChat(eventTarget as never, args)
+      const result = streamArgs.activeTaskPlan
+        ? await streamTaskExecutionPlan(eventTarget, streamArgs)
+        : await streamChat(eventTarget as never, streamArgs)
 
       emit({
         type: 'chat.message.completed',
-        runId: args.streamId,
+        runId: streamArgs.streamId,
         message: {
           role: 'assistant',
           content: result.fullContent,
@@ -232,7 +267,7 @@ export function createDaemonRuntimeServices() {
       })
       emit({
         type: 'chat.run.completed',
-        runId: args.streamId,
+        runId: streamArgs.streamId,
         phase: 'completed',
         timestamp: new Date().toISOString(),
       })
@@ -240,13 +275,25 @@ export function createDaemonRuntimeServices() {
 
     loadSettings,
 
-    classifyInput,
+    classifyInput: classifyInputWithFallback,
 
     dispatchInput,
 
+    startIntakeSession,
+
+    replyIntakeSession,
+
     analyzeTask,
 
-    planTask,
+    async planTask(request: Parameters<typeof planTask>[0]) {
+      const result = await planTask(request)
+      if (request.conversationId) setActiveTaskPlan(request.conversationId, result.plan)
+      return result
+    },
+
+    getActiveTaskPlan: getActiveTaskPlanState,
+    setActiveTaskPlan: setActiveTaskPlanState,
+    clearActiveTaskPlan: clearActiveTaskPlanState,
 
     async saveSettings(data: unknown) {
       await saveSettings(data)

@@ -98,6 +98,7 @@ export interface ToolCallPart {
 
 export interface StreamChatArgs {
   streamId: string
+  conversationId?: string
   messages: LlmMessage[]
   providers: ModelProvider[]
   activeTaskId?: string

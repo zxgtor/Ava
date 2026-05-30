@@ -97,6 +97,7 @@ export interface AvaTaskAnalyzeRequest {
 }
 
 export interface AvaTaskPlanRequest {
+  conversationId?: string
   taskId: string
   goal: string
   workingDirectory?: string
@@ -112,6 +113,74 @@ export interface AvaTaskAnalyzeResult {
 export interface AvaTaskPlanResult {
   plan: TaskExecutionPlan
   fallbackUsed: boolean
+}
+
+export interface AvaTaskPlanGetRequest {
+  conversationId: string
+}
+
+export interface AvaTaskPlanSetRequest {
+  conversationId: string
+  plan: TaskExecutionPlan
+}
+
+export interface AvaTaskPlanClearRequest {
+  conversationId: string
+}
+
+export interface AvaTaskPlanStateResult {
+  conversationId: string
+  plan?: TaskExecutionPlan
+}
+
+export type AvaTaskIntakeStage = 'clarifying' | 'awaiting_summary_confirm' | 'ready_to_plan' | 'canceled'
+
+export interface AvaTaskIntakeAnswer {
+  question: string
+  answer: string
+}
+
+export interface AvaTaskIntakeSession {
+  sessionId: string
+  conversationId: string
+  taskId: string
+  content: string
+  workingDirectory?: string
+  analysis?: ProjectAnalysis
+  clarificationAnswers: AvaTaskIntakeAnswer[]
+  stage: AvaTaskIntakeStage
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AvaTaskIntakeStartRequest {
+  conversationId: string
+  taskId: string
+  content: string
+  workingDirectory?: string
+  messages?: AvaChatMessage[]
+  traits?: string[]
+  attachments?: AvaInputAttachment[]
+  hasCommandInvocation?: boolean
+}
+
+export interface AvaTaskIntakeReplyRequest {
+  sessionId: string
+  conversationId: string
+  content: string
+  workingDirectory?: string
+  messages?: AvaChatMessage[]
+  traits?: string[]
+}
+
+export interface AvaTaskIntakeResult {
+  session: AvaTaskIntakeSession
+  messageText: string
+  readyToPlan: boolean
+  canceled?: boolean
+  finalGoal?: string
+  workingDirectory?: string
+  analysis?: ProjectAnalysis | null
 }
 
 export type AvaChatRole = 'system' | 'user' | 'assistant' | 'tool'
@@ -196,6 +265,7 @@ export type AvaInputRoute =
   | 'small_task'
   | 'file_or_attachment_input'
   | 'url_input'
+  | 'agent_delegation'
   | 'preference_or_setting'
   | 'unknown_or_ambiguous'
 
@@ -210,10 +280,11 @@ export type AvaInputWorkflow =
   | 'direct_tool'
   | 'file_media'
   | 'browser'
+  | 'delegation'
   | 'settings'
   | 'clarify'
 
-export type AvaInputClassifySource = 'rule' | 'fallback'
+export type AvaInputClassifySource = 'rule' | 'llm' | 'fallback'
 
 export type AvaInputAttachment = {
   kind?: 'image' | 'video' | 'audio' | 'document' | 'archive' | 'code' | 'url' | 'unknown'
@@ -256,6 +327,7 @@ export type AvaWorkflowAction =
   | 'run_direct_tool'
   | 'handle_file_media'
   | 'handle_url'
+  | 'delegate_to_code_agent'
   | 'update_preference'
   | 'ask_clarifying_question'
 
@@ -292,8 +364,13 @@ export type AvaDaemonApiPath =
   | '/settings/save'
   | '/input/classify'
   | '/input/dispatch'
+  | '/intake/start'
+  | '/intake/reply'
   | '/tasks/analyze'
   | '/tasks/plan'
+  | '/tasks/active-plan/get'
+  | '/tasks/active-plan/set'
+  | '/tasks/active-plan/clear'
   | '/mcp/servers'
   | '/mcp/restart'
   | '/chat/stream'
@@ -301,6 +378,7 @@ export type AvaDaemonApiPath =
 
 export type AvaDaemonStreamOptions = {
   streamId: string
+  conversationId?: string
   activeTaskId?: string
   activeTaskPlan?: unknown
   activeFolderPath?: string

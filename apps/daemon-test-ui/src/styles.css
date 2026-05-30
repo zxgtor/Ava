@@ -576,6 +576,10 @@ button:disabled {
   fill: rgba(18, 28, 48, 0.94);
 }
 
+.svg-node.type-service .svg-node-bg {
+  fill: rgba(34, 23, 44, 0.92);
+}
+
 .svg-node.managed .svg-node-bg {
   stroke: rgba(121, 226, 168, 0.34);
 }
@@ -848,6 +852,10 @@ button:disabled {
   background: rgba(18, 28, 48, 0.94);
 }
 
+.canvas-node.type-service {
+  background: rgba(34, 23, 44, 0.92);
+}
+
 .canvas-node.feature {
   border-color: rgba(99, 164, 255, 0.46);
   background:
@@ -932,6 +940,38 @@ button:disabled {
   color: var(--text-2);
   font-size: calc(10px * var(--node-scale));
   font-weight: 750;
+}
+
+.node-feature-row.actionable {
+  border-color: rgba(99, 164, 255, 0.28);
+  background: rgba(99, 164, 255, 0.08);
+}
+
+.node-feature-button {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: calc(10px * var(--node-scale));
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.node-feature-button:hover {
+  color: var(--accent-2);
+}
+
+.node-feature-button:disabled {
+  color: var(--muted);
+  cursor: wait;
 }
 
 .feature-test-chip {

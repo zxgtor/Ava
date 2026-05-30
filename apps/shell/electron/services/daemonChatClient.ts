@@ -45,6 +45,7 @@ function selectedModel(provider: ModelProvider): string {
 
 function buildDaemonRequest(args: StreamChatArgs, provider: ModelProvider, model: string): AvaDaemonChatRequest {
   return {
+    conversationId: args.conversationId,
     runId: args.streamId,
     providerId: provider.id,
     model,

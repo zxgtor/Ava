@@ -20,32 +20,10 @@ import {
   sendChat,
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
-import { shouldBlockLargeTaskWithoutPlan, taskEngineRoundBudget } from '../lib/agent/taskExecutionPolicy'
 import { STTClient } from '../lib/voiceClient'
 import { detectTraitsFromText } from '../lib/agent/traits'
-import {
-  blockPlan,
-  completePlan,
-  createCodingDesignTaskPlan,
-  evaluateStepCompletion,
-  extractWorkingDirectoryFromText,
-  finalValidationGateSatisfied,
-  isCodingDesignBigTask,
-  markStepDone,
-  markStepRunning,
-  markStepSkipped,
-  nextTaskStep,
-  recoverStepFromRound,
-  updatePlanValidation,
-  updateValidationProgressState,
-  withValidation,
-} from '../lib/agent/taskExecution'
-import {
-  shouldContinueAfterToolLimit,
-  toolProgressContinuationText,
-} from '../lib/agent/runtime/agentRuntime'
+import { extractWorkingDirectoryFromText, isCodingDesignBigTask } from '../lib/agent/taskBasics'
 import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, TaskExecutionPlan, ProjectAnalysis } from '../types'
-import type { ValidationProgressState } from '../lib/agent/taskExecution'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
   const message = conversation.messages.find(m => m.id === messageId)
@@ -65,6 +43,7 @@ function lastStreamingAssistant(conversation: Conversation): string | null {
 interface PendingTaskIntake {
   conversationId: string
   taskId: string
+  sessionId?: string
   content: string
   attachments: string[]
   commandInvocation?: CommandInvocation
@@ -78,54 +57,6 @@ const LARGE_TASK_INTENT_RE = /\b(3d|three\.?js|animation|animated|site|website|l
 const ENGLISH_CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run)\b/i
 const CHINESE_CONFIRM_TASK_RE = /^(执行|开始|继续|确认|可以|好的|好|没问题|就这样)$/i
 const FEATURE_TEST_RE = /^\s*\[AVA-FEATURE-TEST:([A-Za-z0-9_.-]+)\]/i
-const MAX_AUTO_CONTINUE_ROUNDS = 3
-
-function latestUserTextForTask(conversation: Conversation, taskId: string): string {
-  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
-    const message = conversation.messages[i]
-    if (message.role === 'system' && message.taskId === taskId) {
-      const match = partsToText(message.content).match(/^Task:\s*([\s\S]*?)(?:\nWorking directory:|\nIf interrupted,|$)/m)
-      if (match?.[1]?.trim()) return match[1].trim()
-    }
-  }
-  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
-    const message = conversation.messages[i]
-    if (message.role === 'user' && (!message.taskId || message.taskId === taskId)) {
-      return partsToText(message.content)
-    }
-  }
-  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
-    const message = conversation.messages[i]
-    if (message.role === 'user') return partsToText(message.content)
-  }
-  return ''
-}
-
-function canRebindTaskPlan(plan: TaskExecutionPlan, taskId: string, goal: string, workingDirectory?: string): boolean {
-  if (plan.taskId === taskId) return true
-  if (plan.status === 'completed' || plan.status === 'aborted') return false
-  if (workingDirectory && plan.workingDirectory !== workingDirectory) return false
-  return isCodingDesignBigTask(goal) && plan.kind === 'coding-design'
-}
-
-function retryableTaskPlan(plan: TaskExecutionPlan | undefined, taskId: string): TaskExecutionPlan | undefined {
-  if (!plan || plan.taskId !== taskId || plan.status !== 'blocked') return plan
-  const failedStep = plan.steps.find(step => step.status === 'failed' || step.status === 'running')
-  if (!failedStep) return { ...plan, status: 'running', updatedAt: Date.now() }
-
-  return {
-    ...plan,
-    status: 'running',
-    currentStepId: failedStep.id,
-    steps: plan.steps.map(step =>
-      step.id === failedStep.id
-        ? { ...step, status: 'pending', lastError: undefined }
-        : step
-    ),
-    updatedAt: Date.now(),
-  }
-}
-
 function localShouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
   if (commandInvocation) return true
   return TASK_INTAKE_INTENT_RE.test(content)
@@ -290,6 +221,25 @@ type InputDispatchResult = {
   reason?: string
 }
 
+type IntakeSessionResult = {
+  session?: {
+    sessionId: string
+    conversationId: string
+    taskId: string
+    content: string
+    workingDirectory?: string
+    analysis?: ProjectAnalysis
+    clarificationAnswers?: Array<{ question: string; answer: string }>
+    stage?: 'clarifying' | 'awaiting_summary_confirm' | 'ready_to_plan' | 'canceled'
+  }
+  messageText?: string
+  readyToPlan?: boolean
+  canceled?: boolean
+  finalGoal?: string
+  workingDirectory?: string
+  analysis?: ProjectAnalysis | null
+}
+
 function attachmentInputs(attachments?: string[]) {
   return (attachments ?? []).map(path => ({ path, name: path.split(/[\\/]/).pop() || path }))
 }
@@ -336,6 +286,42 @@ async function dispatchInputViaDaemon(input: {
   }
 }
 
+async function startIntakeViaDaemon(input: {
+  conversationId: string
+  taskId: string
+  content: string
+  conversation: Conversation
+  attachments?: string[]
+  commandInvocation?: CommandInvocation
+}): Promise<IntakeSessionResult> {
+  return window.ava.agent.startIntakeSession({
+    conversationId: input.conversationId,
+    taskId: input.taskId,
+    content: input.content,
+    hasCommandInvocation: Boolean(input.commandInvocation),
+    workingDirectory: input.conversation.folderPath || extractWorkingDirectoryFromText(input.content),
+    messages: input.conversation.messages,
+    traits: planningTraitsFor(input.content, input.conversation),
+    attachments: attachmentInputs(input.attachments),
+  }) as Promise<IntakeSessionResult>
+}
+
+async function replyIntakeViaDaemon(input: {
+  pending: PendingTaskIntake
+  content: string
+  conversation: Conversation
+}): Promise<IntakeSessionResult> {
+  if (!input.pending.sessionId) throw new Error('Missing daemon intake session id.')
+  return window.ava.agent.replyIntakeSession({
+    sessionId: input.pending.sessionId,
+    conversationId: input.pending.conversationId,
+    content: input.content,
+    workingDirectory: input.conversation.folderPath || extractWorkingDirectoryFromText(input.content),
+    messages: input.conversation.messages,
+    traits: planningTraitsFor(input.content, input.conversation),
+  }) as Promise<IntakeSessionResult>
+}
+
 function workflowSystemMessage(taskId: string, text: string): Message {
   return {
     id: `ctx_${taskId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -376,6 +362,7 @@ async function runDaemonAnalyzePhase(input: {
 }
 
 async function generateDaemonTaskPlan(input: {
+  conversationId: string
   taskId: string
   goal: string
   workingDirectory?: string
@@ -384,6 +371,7 @@ async function generateDaemonTaskPlan(input: {
   traits: string[]
 }): Promise<TaskExecutionPlan> {
   const result = await window.ava.agent.planTask({
+    conversationId: input.conversationId,
     taskId: input.taskId,
     goal: input.goal,
     workingDirectory: input.workingDirectory,
@@ -395,6 +383,19 @@ async function generateDaemonTaskPlan(input: {
     throw new Error('Daemon did not return a TaskExecutionPlan.')
   }
   return result.plan
+}
+
+async function getDaemonActiveTaskPlan(conversationId: string): Promise<TaskExecutionPlan | undefined> {
+  const result = await window.ava.agent.getActiveTaskPlan({ conversationId }) as { plan?: TaskExecutionPlan }
+  return result.plan
+}
+
+async function setDaemonActiveTaskPlan(conversationId: string, plan: TaskExecutionPlan): Promise<void> {
+  await window.ava.agent.setActiveTaskPlan({ conversationId, plan })
+}
+
+async function clearDaemonActiveTaskPlan(conversationId: string): Promise<void> {
+  await window.ava.agent.clearActiveTaskPlan({ conversationId })
 }
 
 function messagesForDaemon(messages: Message[]) {
@@ -481,220 +482,6 @@ function mergeAuthoritativeParts(existing: ContentPart[], authoritative: Content
       : part.type !== 'text' || !part.text || !existingText.includes(part.text),
   )
   return missing.length > 0 ? [...merged, ...missing] : merged
-}
-
-function makeContinuationMessages(taskId: string, parts: ContentPart[], stopReason: string, round: number): Message[] {
-  const assistant: Message = {
-    id: makeMessageId(),
-    taskId,
-    role: 'assistant',
-    content: parts,
-    createdAt: Date.now(),
-  }
-  const instruction: Message = {
-    id: makeMessageId(),
-    taskId,
-    role: 'system',
-    content: [{
-      type: 'text',
-      text: [
-        `Automatic continuation round ${round}.`,
-        `Previous attempt stopped because: ${stopReason}.`,
-        'Continue the same task from the existing project/file state.',
-        'Do not restart from scratch and do not repeat completed work.',
-        'Inspect files or run project.detect/search.ripgrep if needed, then complete the next smallest remaining step.',
-        'Before final reporting on a coding/design task, validate with project.validate or an equivalent command when available.',
-        'Final report must state changed files, validation result, and any unverified risk. If validation was not possible, say why.',
-      ].join('\n'),
-    }],
-    createdAt: Date.now(),
-  }
-  return [assistant, instruction]
-}
-
-function stopReasonText(stopReason: string): string {
-  if (stopReason === 'output_limit') return 'output token limit reached'
-  if (stopReason === 'server_disconnected') return 'model server disconnected'
-  if (stopReason === 'tool_loop_limit') return 'tool loop limit reached'
-  if (stopReason === 'raw_command_no_tool') return 'model output raw command instead of tool call'
-  return stopReason
-}
-
-function recentToolSummary(parts: ContentPart[], count = 5): string {
-  return parts
-    .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
-    .slice(-count)
-    .map(part => {
-      const args = JSON.stringify(part.args).slice(0, 180)
-      const result = part.status === 'ok'
-        ? `ok: ${JSON.stringify(part.result).slice(0, 220)}`
-        : part.error ?? part.status
-      return `- ${part.name}(${args}): ${result}`
-    })
-    .join('\n')
-}
-
-function toolProgressContinuationMessage(taskId: string, stepTitle: string, parts: ContentPart[]): Message {
-  return {
-    id: makeMessageId(),
-    taskId,
-    role: 'system',
-    content: [{ type: 'text', text: toolProgressContinuationText(stepTitle, parts) }],
-    createdAt: Date.now(),
-  }
-}
-
-function toolLoopUserMessage(parts: ContentPart[], taskStepTitle?: string): string {
-  const recent = recentToolSummary(parts)
-  return [
-    'Stopped: tool loop limit exceeded.',
-    taskStepTitle ? `Current step: ${taskStepTitle}` : '',
-    '',
-    'Ava stopped because the model kept using tools without reaching a stable next state. I did not keep executing commands to avoid an infinite loop or repeated filesystem changes.',
-    '',
-    recent ? `Recent tool calls:\n${recent}` : 'Recent tool calls: none recorded.',
-    '',
-    'What you can try:',
-    '1. Click 「Inspect project state」 so Ava reads the current files before trying more changes.',
-    '2. Click 「Retry with smaller step」 to ask Ava to do only the current missing action.',
-    '3. If a command or dev server is stuck, stop the dev server and retry.',
-    '4. If the same tool keeps failing, switch to a model with better tool-call support.',
-    '',
-    'Options: 「Inspect project state」 「Retry with smaller step」 「Stop task」',
-  ].filter(Boolean).join('\n')
-}
-
-function taskRoundSummary(stepTitle: string, parts: ContentPart[]): string {
-  const toolSummaries = parts
-    .filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
-    .map(part => {
-      const payload = part.status === 'ok'
-        ? JSON.stringify(part.result).slice(0, 1800)
-        : part.error ?? part.status
-      return `- ${part.name}: ${part.status}${payload ? `\n  ${payload}` : ''}`
-    })
-  const text = partsToText(parts).trim()
-  return [
-    `Completed execution round for step: ${stepTitle}`,
-    text ? `Visible assistant text:\n${text.slice(0, 1200)}` : '',
-    toolSummaries.length > 0 ? `Tool results:\n${toolSummaries.join('\n')}` : 'No tool result was produced.',
-  ].filter(Boolean).join('\n\n')
-}
-
-function finalReportRetryPrompt(parts: ContentPart[]): string {
-  return [
-    'The previous response did not complete the final report.',
-    'Write the final visible report now. Do not call tools unless a required fact is missing. Do not explain what you will do next.',
-    'Required sections: Changed files, Validation result, Preview result, Remaining risks.',
-    taskRoundSummary('Final Report', parts),
-  ].join('\n\n')
-}
-
-function roundHasFileEdit(parts: ContentPart[]): boolean {
-  return parts.some(part =>
-    part.type === 'tool_call' &&
-    part.status === 'ok' &&
-    (part.name === 'file.write_text' || part.name === 'file.patch')
-  )
-}
-
-function roundHasSuccessfulTool(parts: ContentPart[]): boolean {
-  return parts.some(part =>
-    part.type === 'tool_call' &&
-    part.status === 'ok' &&
-    !(part.result && typeof part.result === 'object' && (part.result as Record<string, unknown>).ignored === true)
-  )
-}
-
-function roundHasValidationAttempt(parts: ContentPart[]): boolean {
-  return parts.some(part =>
-    part.type === 'tool_call' &&
-    (part.name === 'project.validate' ||
-      (part.name === 'shell.run_command' && /build|test|typecheck|tsc|lint/i.test(`${part.args.command ?? ''} ${JSON.stringify(part.args.args ?? [])}`)))
-  )
-}
-
-function roundMadeTaskProgress(
-  step: NonNullable<TaskExecutionPlan['steps'][number]>,
-  parts: ContentPart[],
-  evaluation?: { complete: boolean; needsRepair?: string; blocked?: string },
-): boolean {
-  if (evaluation?.complete || evaluation?.needsRepair) return true
-  if (step.role === 'feature' || step.role === 'repair') return roundHasFileEdit(parts) || roundHasValidationAttempt(parts)
-  if (step.role === 'validate') return roundHasValidationAttempt(parts)
-  return roundHasSuccessfulTool(parts)
-}
-
-function featureStepRetryPrompt(stepTitle: string, parts: ContentPart[]): string {
-  return [
-    `The previous response did not implement feature step: ${stepTitle}.`,
-    'This step requires a file edit. Reading or detecting the project is not enough.',
-    'Call file.write_text or file.patch now. If you cannot edit, explain the exact blocker visibly instead of calling more inspection tools.',
-    taskRoundSummary(stepTitle, parts),
-  ].join('\n\n')
-}
-
-function repairStepRetryPrompt(step: NonNullable<TaskExecutionPlan['steps'][number]>, parts: ContentPart[]): string {
-  return [
-    `The previous response did not repair step: ${step.title}.`,
-    step.lastError ? `Original error to fix:\n${step.lastError}` : '',
-    'This repair step requires file.patch, file.write_text, or a repair build command. Reading/listing files alone is not a repair.',
-    'Use the original error to identify the failing file. If the error includes a file path, inspect or patch that file before touching unrelated files.',
-    'If you already inspected the file, patch the offending code now. Do not repeat the same read-only tool call.',
-    taskRoundSummary(step.title, parts),
-  ].filter(Boolean).join('\n\n')
-}
-
-function taskFinalReportText(plan: TaskExecutionPlan, parts: ContentPart[]): string {
-  const tools = parts.filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
-  const changedFiles = Array.from(new Set(tools
-    .filter(part => part.status === 'ok' && (part.name === 'file.write_text' || part.name === 'file.patch'))
-    .map(part => typeof part.args.path === 'string' ? part.args.path : undefined)
-    .filter((path): path is string => Boolean(path))))
-  const validationTools = tools.filter(part =>
-    part.status === 'ok' &&
-    (part.name === 'project.validate' ||
-      (part.name === 'shell.run_command' && /build|test|typecheck|tsc|lint/i.test(`${part.args.command ?? ''} ${JSON.stringify(part.args.args ?? [])}`)))
-  )
-  const previewTools = tools.filter(part =>
-    part.status === 'ok' &&
-    (part.name === 'devserver.start' || part.name === 'preview.console' || part.name === 'preview.screenshot')
-  )
-  const previewUrls = Array.from(new Set(previewTools
-    .map(part => {
-      const result = part.result && typeof part.result === 'object' ? part.result as Record<string, unknown> : {}
-      return typeof result.url === 'string' ? result.url : undefined
-    })
-    .filter((url): url is string => Boolean(url))))
-
-  return [
-    'Changed files:',
-    changedFiles.length > 0 ? changedFiles.map(path => `- ${path}`).join('\n') : '- No changed file paths were captured from tool results.',
-    '',
-    'Validation result:',
-    plan.validation.buildChecked
-      ? `- Build/validation passed${validationTools.length > 0 ? ` (${validationTools.map(part => part.name).join(', ')})` : ''}.`
-      : '- Build/validation was not confirmed.',
-    '',
-    'Preview result:',
-    [
-      plan.validation.devServerChecked ? '- Development server started.' : '- Development server was not confirmed.',
-      plan.validation.consoleChecked ? '- Browser console check passed.' : '- Browser console check was not confirmed.',
-      plan.validation.screenshotChecked ? '- Screenshot check passed.' : '- Screenshot check was not confirmed.',
-      previewUrls.length > 0 ? `- Preview URL: ${previewUrls.join(', ')}` : undefined,
-    ].filter(Boolean).join('\n'),
-    '',
-    'Remaining risks:',
-    '- Please test with a real GLB file, including a large model, because automated checks cannot prove every model import and camera-fit edge case.',
-  ].join('\n')
-}
-
-function taskFinalReportContent(plan: TaskExecutionPlan, parts: ContentPart[]): ContentPart[] {
-  const toolParts = parts.filter((part): part is Extract<ContentPart, { type: 'tool_call' }> => part.type === 'tool_call')
-  return [
-    ...toolParts,
-    { type: 'text', text: taskFinalReportText(plan, parts) },
-  ]
 }
 
 function featureTestIdFromText(text: string): string | null {
@@ -1048,6 +835,20 @@ export function ChatView() {
     setPendingTaskIntake(null)
   }, [activeConversation?.id])
 
+  useEffect(() => {
+    if (!activeConversation?.id) return
+    let alive = true
+    getDaemonActiveTaskPlan(activeConversation.id)
+      .then(plan => {
+        if (!alive || !plan) return
+        dispatch({ type: 'START_TASK_PLAN', conversationId: activeConversation.id, plan })
+      })
+      .catch(err => console.warn('[task-plan] failed to sync daemon plan:', err))
+    return () => {
+      alive = false
+    }
+  }, [activeConversation?.id, dispatch])
+
   // Auto-scroll on new messages / streaming
   useEffect(() => {
     const el = scrollRef.current
@@ -1160,8 +961,8 @@ export function ChatView() {
     }
   }, [isStreaming, sttClient])
 
-  // Shared streaming driver. `conversationSnapshot.messages` is the full history
-  // that should be sent to the LLM (NOT including the placeholder).
+  // Shared streaming driver. Desktop only owns UI state here.
+  // Task step execution, validation gates, repair, and auto-continuation are owned by the daemon.
   const driveStream = useCallback(
     async (
       conversationSnapshot: Conversation,
@@ -1172,58 +973,28 @@ export function ChatView() {
     ) => {
       const id = makeStreamId()
       setIsStreaming(true)
-      let currentSnapshot = conversationSnapshot
+      setStreamId(id)
+
       let accumulatedParts: ContentPart[] = []
-      let continuationRound = 0
-      let taskPlan = initialTaskPlan ?? conversationSnapshot.activeTaskPlan
-      const latestTaskText = latestUserTextForTask(conversationSnapshot, activeTaskId)
-      const isLargeTaskRun = isCodingDesignBigTask(latestTaskText)
-      const workingDirectory = conversationSnapshot.folderPath || extractWorkingDirectoryFromText(latestTaskText)
-      if (taskPlan?.taskId !== activeTaskId) {
-        taskPlan = taskPlan && canRebindTaskPlan(taskPlan, activeTaskId, latestTaskText, workingDirectory)
-          ? { ...taskPlan, taskId: activeTaskId, goal: latestTaskText || taskPlan.goal, updatedAt: Date.now() }
-          : undefined
-      }
-      if (isLargeTaskRun && !taskPlan && workingDirectory) {
-        taskPlan = createCodingDesignTaskPlan({
-          taskId: activeTaskId,
-          goal: latestTaskText,
-          workingDirectory,
+      let latestPlan = initialTaskPlan ?? conversationSnapshot.activeTaskPlan
+      if (!latestPlan) {
+        try {
+          latestPlan = await getDaemonActiveTaskPlan(conversationId)
+          if (latestPlan) dispatch({ type: 'START_TASK_PLAN', conversationId, plan: latestPlan })
+        } catch (err) {
+          console.warn('[task-plan] failed to load daemon active plan:', err)
+        }
+      } else if (initialTaskPlan) {
+        void setDaemonActiveTaskPlan(conversationId, initialTaskPlan).catch(err => {
+          console.warn('[task-plan] failed to mirror initial plan to daemon:', err)
         })
-        dispatch({ type: 'START_TASK_PLAN', conversationId, plan: taskPlan })
       }
-      if (taskPlan?.status === 'blocked') {
-        const error = `Task plan is blocked: ${taskPlan.steps.find(step => step.status === 'failed')?.lastError ?? 'no recovery step is available.'}`
-        dispatch({
-          type: 'UPDATE_MESSAGE',
-          conversationId,
-          messageId: placeholderId,
-          patch: { streaming: false, error, runPhase: 'error' },
-        })
-        setIsStreaming(false)
-        return
-      }
-      const planDecision = shouldBlockLargeTaskWithoutPlan({
-        isLargeTask: isLargeTaskRun,
-        hasTaskPlan: Boolean(taskPlan),
-        hasActiveStep: Boolean(taskPlan ? nextTaskStep(taskPlan) : null),
-      })
-      if (planDecision.block) {
-        const error = planDecision.reason ?? 'Large task execution requires an active task plan.'
-        dispatch({
-          type: 'UPDATE_MESSAGE',
-          conversationId,
-          messageId: placeholderId,
-          patch: { streaming: false, error, runPhase: 'error' },
-        })
-        setIsStreaming(false)
-        return
-      }
-      let taskEngineRound = 0
-      let taskEngineProductiveRounds = 0
-      let validationProgressState: ValidationProgressState = {
-        repairEvidenceSinceLastValidation: [],
-      }
+      let daemonCompleted = latestPlan?.status === 'completed'
+      let daemonBlockedError: string | undefined
+      const initialStep = latestPlan?.currentStepId
+        ? latestPlan.steps.find(step => step.id === latestPlan?.currentStepId)
+        : undefined
+
       const featureTestRequest = (() => {
         for (let i = conversationSnapshot.messages.length - 1; i >= 0; i -= 1) {
           const message = conversationSnapshot.messages[i]
@@ -1260,160 +1031,98 @@ export function ChatView() {
         }
       }
 
+      if (initialStep) {
+        dispatch({
+          type: 'UPDATE_MESSAGE',
+          conversationId,
+          messageId: placeholderId,
+          patch: { taskStepTitle: initialStep.title },
+        })
+      }
+
       try {
-        if (taskPlan) {
-          let latestPlan = taskPlan
-          let daemonCompleted = false
-          let daemonBlockedError: string | undefined
-          const activeStep = nextTaskStep(taskPlan)
-          if (activeStep) {
+        const result = await sendChat({
+          conversation: conversationSnapshot,
+          settings: state.settings,
+          projectBrief,
+          folderPath: conversationSnapshot.folderPath,
+          streamId: id,
+          activeTaskId,
+          activeTaskPlan: latestPlan,
+          onStatus: ({ taskId, phase }) => {
+            if (taskId && taskId !== activeTaskId) return
             dispatch({
               type: 'UPDATE_MESSAGE',
               conversationId,
               messageId: placeholderId,
-              patch: { taskStepTitle: activeStep.title },
+              patch: { runPhase: phase },
             })
-          }
-          setStreamId(id)
-          const result = await sendChat({
-            conversation: currentSnapshot,
-            settings: state.settings,
-            projectBrief,
-            folderPath: currentSnapshot.folderPath,
-            streamId: id,
-            activeTaskId,
-            activeTaskPlan: taskPlan,
-            activeStep: activeStep ?? undefined,
-            finalReportAllowed: activeStep && (activeStep.role === 'final_report' || activeStep.id === 'final_report')
-              ? finalValidationGateSatisfied(taskPlan.validation, taskPlan)
-              : false,
-            onStatus: ({ taskId, phase }) => {
-              if (taskId && taskId !== activeTaskId) return
+          },
+          onDelta: delta => {
+            accumulatedParts = appendLocalDelta(accumulatedParts, delta)
+            dispatch({
+              type: 'APPEND_DELTA',
+              conversationId,
+              messageId: placeholderId,
+              delta,
+            })
+          },
+          onReasoningDelta: delta => {
+            dispatch({
+              type: 'APPEND_REASONING_DELTA',
+              conversationId,
+              messageId: placeholderId,
+              delta,
+            })
+          },
+          onPart: ({ taskId, part }) => {
+            if (taskId && taskId !== activeTaskId) return
+            const nextPart = part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? activeTaskId } : part
+            accumulatedParts = [...accumulatedParts, nextPart]
+            dispatch({
+              type: 'ADD_PART',
+              conversationId,
+              messageId: placeholderId,
+              part: nextPart,
+            })
+          },
+          onPartUpdate: ({ taskId, partIndex, partId, patch }) => {
+            if (taskId && taskId !== activeTaskId) return
+            accumulatedParts = updateLocalToolPart(accumulatedParts, partIndex, partId, patch)
+            dispatch({
+              type: 'UPDATE_PART',
+              conversationId,
+              messageId: placeholderId,
+              partIndex,
+              partId,
+              patch,
+            })
+          },
+          onTaskPlanUpdate: ({ taskId, phase, plan, validation, stepTitle, error }) => {
+            if (taskId && taskId !== activeTaskId) return
+            latestPlan = plan
+            daemonCompleted = phase === 'completed' || plan.status === 'completed'
+            if (phase === 'blocked') {
+              daemonBlockedError = error ?? 'Task plan blocked in daemon.'
+              dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan })
+            } else if (phase === 'completed') {
+              dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan })
+            } else {
+              dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan })
+            }
+            if (validation) dispatch({ type: 'UPDATE_TASK_VALIDATION', conversationId, validation })
+            if (stepTitle || phase === 'completed' || phase === 'blocked') {
               dispatch({
                 type: 'UPDATE_MESSAGE',
                 conversationId,
                 messageId: placeholderId,
-                patch: { runPhase: phase },
+                patch: { taskStepTitle: phase === 'completed' || phase === 'blocked' ? undefined : stepTitle },
               })
-            },
-            onDelta: delta => {
-              accumulatedParts = appendLocalDelta(accumulatedParts, delta)
-              dispatch({
-                type: 'APPEND_DELTA',
-                conversationId,
-                messageId: placeholderId,
-                delta,
-              })
-            },
-            onReasoningDelta: delta => {
-              dispatch({
-                type: 'APPEND_REASONING_DELTA',
-                conversationId,
-                messageId: placeholderId,
-                delta,
-              })
-            },
-            onPart: ({ taskId, part }) => {
-              if (taskId && taskId !== activeTaskId) return
-              const nextPart = part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? activeTaskId } : part
-              accumulatedParts = [...accumulatedParts, nextPart]
-              dispatch({
-                type: 'ADD_PART',
-                conversationId,
-                messageId: placeholderId,
-                part: nextPart,
-              })
-            },
-            onPartUpdate: ({ taskId, partIndex, partId, patch }) => {
-              if (taskId && taskId !== activeTaskId) return
-              accumulatedParts = updateLocalToolPart(accumulatedParts, partIndex, partId, patch)
-              dispatch({
-                type: 'UPDATE_PART',
-                conversationId,
-                messageId: placeholderId,
-                partIndex,
-                partId,
-                patch,
-              })
-            },
-            onTaskPlanUpdate: ({ taskId, phase, plan, validation, stepTitle, error }) => {
-              if (taskId && taskId !== activeTaskId) return
-              latestPlan = plan
-              if (phase === 'blocked') {
-                daemonBlockedError = error ?? 'Task plan blocked in daemon.'
-                dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan })
-              } else if (phase === 'completed') {
-                daemonCompleted = true
-                dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan })
-              } else {
-                dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan })
-              }
-              if (validation) dispatch({ type: 'UPDATE_TASK_VALIDATION', conversationId, validation })
-              if (stepTitle || phase === 'completed' || phase === 'blocked') {
-                dispatch({
-                  type: 'UPDATE_MESSAGE',
-                  conversationId,
-                  messageId: placeholderId,
-                  patch: { taskStepTitle: phase === 'completed' || phase === 'blocked' ? undefined : stepTitle },
-                })
-              }
-            },
-          })
+            }
+          },
+        })
 
-          if (result.ok) {
-            accumulatedParts = mergeAuthoritativeParts(accumulatedParts, result.parts, activeTaskId)
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { content: accumulatedParts },
-            })
-            if (result.detectedToolFormat !== 'none') {
-              const key = `${result.providerId}:${result.model}`
-              dispatch({
-                type: 'UPDATE_SETTINGS',
-                settings: {
-                  ...state.settings,
-                  modelToolFormatMap: {
-                    ...state.settings.modelToolFormatMap,
-                    [key]: result.detectedToolFormat,
-                  },
-                },
-              })
-            }
-            if (daemonBlockedError) {
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { streaming: false, error: daemonBlockedError, runPhase: 'error' },
-              })
-              await logFeatureTest({ status: 'failed', message: daemonBlockedError, fullContent: result.fullContent })
-              return
-            }
-            if (daemonCompleted || latestPlan.status === 'completed') {
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { streaming: false, runPhase: 'completed', taskStepTitle: undefined },
-              })
-              await logFeatureTest({ status: 'passed', fullContent: result.fullContent })
-              return
-            }
-            const error = result.stopReason
-              ? `Daemon task loop stopped with ${result.stopReason}.`
-              : 'Daemon task loop ended before completing or blocking the active task plan.'
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { streaming: false, error, runPhase: 'error' },
-            })
-            await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
-            return
-          }
-
+        if (!result.ok) {
           if (result.error === 'aborted') {
             dispatch({
               type: 'UPDATE_MESSAGE',
@@ -1424,7 +1133,6 @@ export function ChatView() {
             await logFeatureTest({ status: 'failed', message: 'aborted' })
             return
           }
-
           dispatch({
             type: 'UPDATE_MESSAGE',
             conversationId,
@@ -1435,538 +1143,61 @@ export function ChatView() {
           return
         }
 
-        while (true) {
-          const activeStep: TaskExecutionPlan['steps'][number] | null = taskPlan ? nextTaskStep(taskPlan) : null
-          if (taskPlan && !activeStep) {
-            taskPlan = completePlan(taskPlan)
-            dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { streaming: false, runPhase: 'completed', taskStepTitle: undefined },
-            })
-            break
-          }
-          if (taskPlan && activeStep) {
-            taskPlan = markStepRunning(taskPlan, activeStep.id)
-            dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { taskStepTitle: activeStep.title },
-            })
-          }
-          const streamId = continuationRound === 0 ? id : makeStreamId()
-          const roundStartPartIndex = accumulatedParts.length
-          setStreamId(streamId)
-          const result = await sendChat({
-            conversation: currentSnapshot,
-            settings: state.settings,
-            projectBrief,
-            folderPath: currentSnapshot.folderPath,
-            streamId,
-            activeTaskId,
-            activeTaskPlan: taskPlan,
-            activeStep: activeStep ?? undefined,
-            finalReportAllowed: activeStep && taskPlan && (activeStep.role === 'final_report' || activeStep.id === 'final_report')
-              ? finalValidationGateSatisfied(taskPlan.validation, taskPlan)
-              : false,
-            onStatus: ({ taskId, phase }) => {
-              if (taskId && taskId !== activeTaskId) return
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { runPhase: phase },
-              })
-            },
-            onDelta: delta => {
-              accumulatedParts = appendLocalDelta(accumulatedParts, delta)
-              dispatch({
-                type: 'APPEND_DELTA',
-                conversationId,
-                messageId: placeholderId,
-                delta,
-              })
-            },
-            onReasoningDelta: delta => {
-              dispatch({
-                type: 'APPEND_REASONING_DELTA',
-                conversationId,
-                messageId: placeholderId,
-                delta,
-              })
-            },
-            onPart: ({ taskId, part }) => {
-              if (taskId && taskId !== activeTaskId) return
-              const nextPart = part.type === 'tool_call' ? { ...part, taskId: part.taskId ?? activeTaskId } : part
-              accumulatedParts = [...accumulatedParts, nextPart]
-              dispatch({
-                type: 'ADD_PART',
-                conversationId,
-                messageId: placeholderId,
-                part: nextPart,
-              })
-            },
-            onPartUpdate: ({ taskId, partIndex, partId, patch }) => {
-              if (taskId && taskId !== activeTaskId) return
-              accumulatedParts = updateLocalToolPart(accumulatedParts, partIndex, partId, patch)
-              dispatch({
-                type: 'UPDATE_PART',
-                conversationId,
-                messageId: placeholderId,
-                partIndex,
-                partId,
-                patch,
-              })
-            },
-          })
-
-          if (result.ok) {
-            accumulatedParts = mergeAuthoritativeParts(accumulatedParts, result.parts, activeTaskId)
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { content: accumulatedParts },
-            })
-          }
-          const currentRoundParts = result.ok ? accumulatedParts.slice(roundStartPartIndex) : []
-
-          if (taskPlan && activeStep && result.ok) {
-            const roundParts = currentRoundParts
-            taskPlan = recoverStepFromRound(taskPlan, activeStep.id, roundParts, result.fullContent)
-            taskPlan = withValidation(taskPlan, updatePlanValidation(taskPlan, roundParts, activeStep))
-            dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
-            dispatch({ type: 'UPDATE_TASK_VALIDATION', conversationId, validation: taskPlan.validation })
-            const evaluation = evaluateStepCompletion({
-              plan: taskPlan,
-              step: activeStep,
-              parts: roundParts,
-              fullContent: result.fullContent,
-            })
-            const validationProgress = updateValidationProgressState({
-              state: validationProgressState,
-              plan: taskPlan,
-              parts: roundParts,
-            })
-            validationProgressState = validationProgress.state
-            if (roundMadeTaskProgress(activeStep, roundParts, evaluation)) {
-              taskEngineProductiveRounds += 1
-            }
-            const taskEngineBudget = taskEngineRoundBudget(taskPlan, taskEngineProductiveRounds)
-            const canContinueTaskEngine = taskEngineRound < taskEngineBudget
-            if (evaluation.complete) {
-              taskPlan = markStepDone(taskPlan, activeStep.id)
-              dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
-              if (activeStep.id === 'final_report') {
-                const finalContent = taskFinalReportContent(taskPlan, accumulatedParts)
-                dispatch({
-                  type: 'UPDATE_MESSAGE',
-                  conversationId,
-                  messageId: placeholderId,
-                  patch: { content: finalContent, streaming: false, error: undefined, runPhase: 'completed' },
-                })
-                taskPlan = completePlan(taskPlan)
-                dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
-              } else if (canContinueTaskEngine) {
-                taskEngineRound += 1
-                currentSnapshot = {
-                  ...conversationSnapshot,
-                  activeTaskPlan: taskPlan,
-                  messages: [
-                    ...currentSnapshot.messages,
-                    {
-                      id: makeMessageId(),
-                      taskId: activeTaskId,
-                      role: 'system',
-                      content: [{ type: 'text', text: taskRoundSummary(activeStep.title, roundParts) }],
-                      createdAt: Date.now(),
-                    },
-                  ],
-                }
-                continue
-              }
-            } else if (evaluation.blocked) {
-              if (
-                (activeStep.id === 'final_report' || activeStep.role === 'final_report') &&
-                finalValidationGateSatisfied(taskPlan.validation, taskPlan)
-              ) {
-                const finalContent = taskFinalReportContent(taskPlan, accumulatedParts)
-                taskPlan = markStepDone(taskPlan, activeStep.id)
-                dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
-                dispatch({
-                  type: 'UPDATE_MESSAGE',
-                  conversationId,
-                  messageId: placeholderId,
-                  patch: { content: finalContent, streaming: false, error: undefined, runPhase: 'completed' },
-                })
-                taskPlan = completePlan(taskPlan)
-                dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
-                await logFeatureTest({ status: 'passed', message: taskFinalReportText(taskPlan, accumulatedParts), fullContent: result.fullContent })
-                return
-              }
-              taskPlan = blockPlan(taskPlan, activeStep.id, evaluation.blocked)
-              dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { streaming: false, error: evaluation.blocked, runPhase: 'error' },
-              })
-              await logFeatureTest({ status: 'failed', message: evaluation.blocked, fullContent: result.fullContent })
-              return
-            } else if (evaluation.needsRepair && validationProgress.noProgressReason) {
-              const error = [
-                validationProgress.noProgressReason,
-                evaluation.needsRepair,
-                'Ava stopped because validation is not changing after repair evidence. Change the repair approach or inspect the failing files before retrying.',
-              ].join('\n\n')
-              taskPlan = blockPlan(taskPlan, activeStep.id, error)
-              dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { streaming: false, error, runPhase: 'error' },
-              })
-              await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
-              return
-            } else if (evaluation.needsRepair && canContinueTaskEngine) {
-              // Validation/tool/step execution failed in a recoverable way:
-              // route through a repair step instead of blocking the whole task.
-              taskEngineRound += 1
-              const repairStep = {
-                id: 'repair',
-                title: 'Repair validation or tool execution errors',
-                status: 'pending' as const,
-                requiredTools: ['file.patch', 'file.write_text', 'shell.run_command', 'project.map', 'file.read_text', 'file.list_dir', 'file.stat'],
-                completionSignals: ['errors repaired'],
-                attempts: 0,
-                role: 'repair' as const,
-                workflowType: 'debug' as const,
-                lastError: evaluation.needsRepair,
-                lastToolSummary: evaluation.needsRepair,
-              }
-              const hasRepairStep = taskPlan.steps.some(s => s.id === 'repair')
-              taskPlan = {
-                ...taskPlan,
-                steps: hasRepairStep
-                  ? taskPlan.steps.map(s =>
-                    s.id === 'repair'
-                      ? {
-                          ...s,
-                          status: 'pending',
-                          attempts: 0,
-                          requiredTools: ['file.patch', 'file.write_text', 'shell.run_command', 'project.map', 'file.read_text', 'file.list_dir', 'file.stat'],
-                          lastError: evaluation.needsRepair,
-                          lastToolSummary: evaluation.needsRepair,
-                        }
-                      : s
-                  )
-                  : [
-                    ...taskPlan.steps.slice(0, taskPlan.steps.findIndex(s => s.id === activeStep.id)),
-                    repairStep,
-                    ...taskPlan.steps.slice(taskPlan.steps.findIndex(s => s.id === activeStep.id)),
-                  ],
-                currentStepId: 'repair',
-                updatedAt: Date.now(),
-              }
-              dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
-              currentSnapshot = {
-                ...conversationSnapshot,
-                activeTaskPlan: taskPlan,
-                messages: [
-                  ...currentSnapshot.messages,
-                  {
-                    id: makeMessageId(),
-                    taskId: activeTaskId,
-                    role: 'system',
-                    content: [{ type: 'text', text: [
-                      '🔧 Current step needs repair. Routing to repair step.',
-                      evaluation.needsRepair,
-                      'Apply the required fix, then Ava will continue the task automatically.',
-                    ].join('\n\n') }],
-                    createdAt: Date.now(),
-                  },
-                ],
-              }
-              continue
-            } else if (
-              (activeStep.id === 'final_report' || activeStep.role === 'final_report') &&
-              finalValidationGateSatisfied(taskPlan.validation, taskPlan)
-            ) {
-              const finalContent = taskFinalReportContent(taskPlan, accumulatedParts)
-              taskPlan = markStepDone(taskPlan, activeStep.id)
-              dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { content: finalContent, streaming: false, error: undefined, runPhase: 'completed' },
-              })
-              taskPlan = completePlan(taskPlan)
-              dispatch({ type: 'COMPLETE_TASK_PLAN', conversationId, plan: taskPlan })
-              await logFeatureTest({ status: 'passed', message: taskFinalReportText(taskPlan, accumulatedParts), fullContent: result.fullContent })
-              return
-            } else if (canContinueTaskEngine) {
-              taskEngineRound += 1
-              const retryText = activeStep.id === 'final_report' || activeStep.role === 'final_report'
-                ? finalReportRetryPrompt(roundParts)
-                : activeStep.role === 'repair' && !roundHasFileEdit(roundParts)
-                  ? repairStepRetryPrompt(activeStep, roundParts)
-                : activeStep.role === 'feature' && !roundHasFileEdit(roundParts)
-                  ? featureStepRetryPrompt(activeStep.title, roundParts)
-                : taskRoundSummary(activeStep.title, roundParts)
-              currentSnapshot = {
-                ...conversationSnapshot,
-                activeTaskPlan: taskPlan,
-                messages: [
-                  ...currentSnapshot.messages,
-                  {
-                    id: makeMessageId(),
-                    taskId: activeTaskId,
-                    role: 'system',
-                    content: [{ type: 'text', text: retryText }],
-                    createdAt: Date.now(),
-                  },
-                ],
-              }
-              continue
-            } else {
-              const error = `Task execution stopped after ${taskEngineBudget} dynamic automatic step round(s). Current step did not complete: ${activeStep.title}. Ava only stops here when the dynamic progress budget is exhausted.`
-              taskPlan = blockPlan(taskPlan, activeStep.id, error)
-              dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { streaming: false, error, runPhase: 'error' },
-              })
-              await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
-              return
-            }
-          }
-
-          if (result.ok) {
-            if (result.detectedToolFormat !== 'none') {
-              const key = `${result.providerId}:${result.model}`
-              dispatch({
-                type: 'UPDATE_SETTINGS',
-                settings: {
-                  ...state.settings,
-                  modelToolFormatMap: {
-                    ...state.settings.modelToolFormatMap,
-                    [key]: result.detectedToolFormat,
-                  },
-                },
-              })
-            }
-            if (result.stopReason) {
-              if (
-                result.stopReason === 'tool_loop_limit' &&
-                shouldContinueAfterToolLimit(currentRoundParts, activeStep ?? undefined) &&
-                taskEngineRound < taskEngineRoundBudget(taskPlan, taskEngineProductiveRounds)
-              ) {
-                taskEngineProductiveRounds += 1
-                taskEngineRound += 1
-                currentSnapshot = {
-                  ...conversationSnapshot,
-                  activeTaskPlan: taskPlan,
-                  messages: [
-                    ...currentSnapshot.messages,
-                    { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
-                    toolProgressContinuationMessage(activeTaskId, activeStep?.title ?? 'current task', currentRoundParts),
-                  ],
-                }
-                continue
-              }
-
-              // ── Tool loop: inject a "break the loop" message and give the model one more chance ──
-              if (result.stopReason === 'tool_loop_limit' && !(taskPlan && activeStep) && continuationRound < 1) {
-                continuationRound += 1
-                // Summarise the last few tool calls so the model can see what it was repeating
-                const recentToolCalls = recentToolSummary(accumulatedParts, 4)
-
-                const loopBreakMsg: Message = {
-                  id: makeMessageId(),
-                  taskId: activeTaskId,
-                  role: 'system',
-                  content: [{ type: 'text', text: [
-                    '⚠️ TOOL LOOP DETECTED. You have been calling the same tool(s) repeatedly and reaching the same error.',
-                    'Recent repeated tool calls:',
-                    recentToolCalls || '(no tool calls recorded)',
-                    '',
-                    'Instructions:',
-                    '1. Do NOT call the same tool with the same arguments again.',
-                    '2. Diagnose the root cause from the error output above.',
-                    '3. Try a fundamentally different approach (e.g. check if the resource exists first, use a different tool, or read files before writing).',
-                    '4. If you cannot resolve this, output a visible explanation with options for the user instead of calling another tool.',
-                  ].join('\n') }],
-                  createdAt: Date.now(),
-                }
-                currentSnapshot = {
-                  ...conversationSnapshot,
-                  messages: [
-                    ...currentSnapshot.messages,
-                    { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
-                    loopBreakMsg,
-                  ],
-                }
-                continue
-              }
-
-              // ── output_limit / server_disconnected: standard continuation ──
-              if (
-                (result.stopReason === 'output_limit' || result.stopReason === 'server_disconnected') &&
-                continuationRound < MAX_AUTO_CONTINUE_ROUNDS
-              ) {
-                continuationRound += 1
-                currentSnapshot = {
-                  ...conversationSnapshot,
-                  messages: [
-                    ...currentSnapshot.messages,
-                    ...makeContinuationMessages(activeTaskId, accumulatedParts, stopReasonText(result.stopReason), continuationRound),
-                  ],
-                }
-                continue
-              }
-
-              // ── Tool loop inside a task step: skip the stuck step and recover ──
-              // The step likely partially succeeded (e.g. directory was created on run 1,
-              // so every retry fails with "already exists"). Skip it and tell the next
-              // step to inspect the actual filesystem state before acting.
-              if (result.stopReason === 'tool_loop_limit' && taskPlan && activeStep) {
-                if (
-                  shouldContinueAfterToolLimit(currentRoundParts, activeStep) &&
-                  taskEngineRound < taskEngineRoundBudget(taskPlan, taskEngineProductiveRounds)
-                ) {
-                  taskEngineProductiveRounds += 1
-                  taskEngineRound += 1
-                  currentSnapshot = {
-                    ...conversationSnapshot,
-                    activeTaskPlan: taskPlan,
-                    messages: [
-                      ...currentSnapshot.messages,
-                      { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
-                      toolProgressContinuationMessage(activeTaskId, activeStep.title, currentRoundParts),
-                    ],
-                  }
-                  continue
-                }
-
-                taskEngineRound += 1
-                const recentLoopedTools = recentToolSummary(currentRoundParts, 4)
-
-                if (activeStep.role === 'feature' && !roundHasFileEdit(currentRoundParts)) {
-                  const error = [
-                    `Step "${activeStep.title}" is stuck before implementation.`,
-                    'The model only used read/inspect tools and did not edit files with file.write_text or file.patch.',
-                    recentLoopedTools ? `Recent tools:\n${recentLoopedTools}` : '',
-                    'Ava stopped instead of skipping this feature step because skipping would falsely mark unfinished work as complete.',
-                  ].filter(Boolean).join('\n\n')
-                  taskPlan = blockPlan(taskPlan, activeStep.id, error)
-                  dispatch({ type: 'BLOCK_TASK_PLAN', conversationId, plan: taskPlan })
-                  dispatch({
-                    type: 'UPDATE_MESSAGE',
-                    conversationId,
-                    messageId: placeholderId,
-                    patch: { streaming: false, error, runPhase: 'error' },
-                  })
-                  await logFeatureTest({ status: 'failed', message: error, fullContent: result.fullContent })
-                  return
-                }
-
-                // Mark the stuck step as skipped (not failed) — partial success is assumed
-                taskPlan = markStepSkipped(taskPlan, activeStep.id)
-                dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: taskPlan })
-                currentSnapshot = {
-                  ...conversationSnapshot,
-                  activeTaskPlan: taskPlan,
-                  messages: [
-                    ...currentSnapshot.messages,
-                    { id: makeMessageId(), taskId: activeTaskId, role: 'assistant', content: accumulatedParts, createdAt: Date.now() },
-                    {
-                      id: makeMessageId(),
-                      taskId: activeTaskId,
-                      role: 'system',
-                      content: [{ type: 'text', text: [
-                        `⚠️ Step "${activeStep.title}" was stuck in a tool loop and has been skipped.`,
-                        `Repeated tools:\n${recentLoopedTools || '(none recorded)'}`,
-                        '',
-                        'IMPORTANT: Before doing anything in the next step, first READ the actual filesystem state:',
-                        `- Run file.list_dir or project.map on: ${taskPlan.workingDirectory}`,
-                        '- Check what already exists before creating or installing anything.',
-                        '- Do not repeat the same command that was looping.',
-                      ].join('\n') }],
-                      createdAt: Date.now(),
-                    },
-                  ],
-                }
-                continue
-              }
-
-              // ── All other cases: hard stop with a clear error ──
-              const error =
-                result.stopReason === 'output_limit'
-                  ? `Stopped: output token limit reached after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s). Ava preserved current file state but could not safely finish.`
-                  : result.stopReason === 'server_disconnected'
-                    ? `Stopped: model server disconnected after ${MAX_AUTO_CONTINUE_ROUNDS} automatic continuation round(s).`
-                    : result.stopReason === 'raw_command_no_tool'
-                      ? 'Stopped: model output a raw command instead of calling a tool. Ava did not execute the plain text command; please retry or switch to a model/profile that follows tool-call format.'
-                      : result.stopReason === 'tool_loop_limit'
-                      ? [
-                          toolLoopUserMessage(currentRoundParts, activeStep?.title),
-                        ].join('\n')
-                        : `Stopped: ${stopReasonText(result.stopReason)}.`
-              dispatch({
-                type: 'UPDATE_MESSAGE',
-                conversationId,
-                messageId: placeholderId,
-                patch: { streaming: false, error, runPhase: 'error' },
-              })
-              await logFeatureTest({
-                status: 'failed',
-                message: error,
-                stopReason: result.stopReason,
-                fullContent: result.fullContent,
-              })
-              return
-            }
-
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { streaming: false, runPhase: 'completed' },
-            })
-            await logFeatureTest({ status: 'passed', fullContent: result.fullContent })
-          } else if (result.error === 'aborted') {
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { streaming: false, aborted: true, runPhase: 'aborted' },
-            })
-            await logFeatureTest({ status: 'failed', message: 'aborted' })
-          } else {
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { streaming: false, error: result.error, runPhase: 'error' },
-            })
-            await logFeatureTest({ status: 'failed', message: result.error })
-          }
-          break
+        accumulatedParts = mergeAuthoritativeParts(accumulatedParts, result.parts, activeTaskId)
+        const patch: Partial<Message> = { content: accumulatedParts }
+        if (daemonBlockedError) {
+          patch.streaming = false
+          patch.error = daemonBlockedError
+          patch.runPhase = 'error'
+          patch.taskStepTitle = undefined
+        } else if (latestPlan && !daemonCompleted && latestPlan.status !== 'completed') {
+          patch.streaming = false
+          patch.error = result.stopReason
+            ? `Daemon task loop stopped with ${result.stopReason}.`
+            : 'Daemon task loop ended before completing or blocking the active task plan.'
+          patch.runPhase = 'error'
+          patch.taskStepTitle = undefined
+        } else if (result.stopReason) {
+          patch.streaming = false
+          patch.error = `Stopped: ${result.stopReason}.`
+          patch.runPhase = 'error'
+          patch.taskStepTitle = undefined
+        } else {
+          patch.streaming = false
+          patch.runPhase = 'completed'
+          patch.taskStepTitle = undefined
         }
 
-        // After the initial message, classification changes are suggestions.
-        // Category is user-owned organization, so never move sessions silently.
+        dispatch({
+          type: 'UPDATE_MESSAGE',
+          conversationId,
+          messageId: placeholderId,
+          patch,
+        })
+
+        if (result.detectedToolFormat !== 'none') {
+          const key = `${result.providerId}:${result.model}`
+          dispatch({
+            type: 'UPDATE_SETTINGS',
+            settings: {
+              ...state.settings,
+              modelToolFormatMap: {
+                ...state.settings.modelToolFormatMap,
+                [key]: result.detectedToolFormat,
+              },
+            },
+          })
+        }
+
+        await logFeatureTest({
+          status: patch.error ? 'failed' : 'passed',
+          message: typeof patch.error === 'string' ? patch.error : undefined,
+          stopReason: result.stopReason,
+          fullContent: result.fullContent,
+        })
+
         const currentTraits = conversationSnapshot.traits || ['chat']
-        if (conversationSnapshot.messages.length > 1) {
+        if (!patch.error && conversationSnapshot.messages.length > 1) {
           const lastMsg = conversationSnapshot.messages[conversationSnapshot.messages.length - 1]
           const combinedText = partsToText(lastMsg.content)
           const newTraits = detectTraitsFromText(combinedText)
@@ -1980,23 +1211,22 @@ export function ChatView() {
             setTraitSuggestion({ conversationId, trait: suggested })
           }
         }
-
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg === 'aborted') {
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId,
-              messageId: placeholderId,
-              patch: { streaming: false, aborted: true, runPhase: 'aborted' },
-            })
-            await logFeatureTest({ status: 'failed', message: 'aborted' })
+          dispatch({
+            type: 'UPDATE_MESSAGE',
+            conversationId,
+            messageId: placeholderId,
+            patch: { streaming: false, aborted: true, runPhase: 'aborted', taskStepTitle: undefined },
+          })
+          await logFeatureTest({ status: 'failed', message: 'aborted' })
         } else {
           dispatch({
             type: 'UPDATE_MESSAGE',
             conversationId,
             messageId: placeholderId,
-            patch: { streaming: false, error: msg, runPhase: 'error' },
+            patch: { streaming: false, error: msg, runPhase: 'error', taskStepTitle: undefined },
           })
           await logFeatureTest({ status: 'failed', message: msg })
         }
@@ -2091,35 +1321,20 @@ export function ChatView() {
             },
           ],
         })
-        
-        const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(nextText)
-        const analysis = await runDaemonAnalyzePhase({
-          taskId,
-          goal: nextText,
-          workingDirectory,
-          messages: conversation.messages,
-          traits: planningTraitsFor(nextText, conversation),
-        })
-        const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, nextText, conversation)
 
-        const pendingBase: PendingTaskIntake = {
-          conversationId,
+        const intake = await startIntakeViaDaemon({
           taskId,
+          conversationId,
           content: nextText,
+          conversation,
           attachments,
           commandInvocation: original.commandInvocation,
-          analysis: preparedAnalysis || undefined,
-          clarificationAnswers: [],
-        }
-        const nextQuestion = nextClarification(pendingBase)
-        const finalContent: ContentPart[] = preparedAnalysis
-          ? nextQuestion
-            ? [{
-                type: 'text',
-                text: clarificationQuestionText(nextQuestion, 1, highPriorityUnknowns(preparedAnalysis).length),
-              }]
-            : [{ type: 'text', text: analysisSummaryText(pendingBase, workingDirectory) }]
-          : [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.\n\nThe LLM could not parse the project constraints. Please try re-sending your request, or check your API key and model settings.` }]
+        })
+        const session = intake.session
+        const finalContent: ContentPart[] = [{
+          type: 'text',
+          text: intake.messageText || '⚠️ Agent OS Pre-Flight Analysis failed.',
+        }]
 
         dispatch({
           type: 'UPDATE_MESSAGE',
@@ -2132,10 +1347,17 @@ export function ChatView() {
           }
         })
 
-        setPendingTaskIntake({
-          ...pendingBase,
-          stage: preparedAnalysis && nextQuestion ? 'clarifying' : 'awaiting_summary_confirm',
-        })
+        if (session) {
+          setPendingTaskIntake({
+            conversationId,
+            taskId,
+            sessionId: session.sessionId,
+            content: session.content,
+            attachments,
+            commandInvocation: original.commandInvocation,
+            stage: session.stage === 'awaiting_summary_confirm' ? 'awaiting_summary_confirm' : 'clarifying',
+          })
+        }
         return
       }
 
@@ -2178,13 +1400,50 @@ export function ChatView() {
 
       if (
         pendingTaskIntake &&
-        pendingTaskIntake.conversationId === conversation.id &&
-        pendingTaskIntake.stage === 'awaiting_summary_confirm' &&
-        isTaskConfirmation(content)
+        pendingTaskIntake.conversationId === conversation.id
       ) {
         const pending = pendingTaskIntake
         const placeholder = makeAssistantPlaceholder(pending.taskId)
-        const finalGoal = resolvedGoal(pending)
+        const userMsg = makeUserMessage(content, commandInvocation, pending.taskId, attachments ?? [])
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({
+          type: 'ADD_MESSAGE',
+          conversationId: conversation.id,
+          message: {
+            ...placeholder,
+            content: [{ type: 'text', text: pending.stage === 'awaiting_summary_confirm' ? '🔍 Updating summary with your feedback...' : '🔍 Recording your answer...' }],
+            streaming: true,
+            runPhase: 'generating',
+          },
+        })
+
+        const intake = await replyIntakeViaDaemon({ pending, content, conversation })
+        const session = intake.session
+
+        if (!intake.readyToPlan || !intake.finalGoal) {
+          dispatch({
+            type: 'UPDATE_MESSAGE',
+            conversationId: conversation.id,
+            messageId: placeholder.id,
+            patch: {
+              content: [{ type: 'text', text: intake.messageText || '需求澄清状态已更新。' }],
+              streaming: false,
+              runPhase: intake.canceled ? 'completed' : 'completed',
+            },
+          })
+          setPendingTaskIntake(intake.canceled || !session ? null : {
+            conversationId: conversation.id,
+            taskId: session.taskId,
+            sessionId: session.sessionId,
+            content: session.content,
+            attachments: pending.attachments,
+            commandInvocation: pending.commandInvocation,
+            stage: session.stage === 'awaiting_summary_confirm' ? 'awaiting_summary_confirm' : 'clarifying',
+          })
+          return
+        }
+
+        const finalGoal = intake.finalGoal
         const confirmationContext = {
           id: `ctx_${pending.taskId}_confirmed`,
           taskId: pending.taskId,
@@ -2195,13 +1454,13 @@ export function ChatView() {
         const isBigTask = isCodingDesignBigTask(finalGoal)
         let taskPlan = undefined
         if (isBigTask) {
-          const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(finalGoal)
+          const workingDirectory = intake.workingDirectory || conversation.folderPath || extractWorkingDirectoryFromText(finalGoal)
           if (!workingDirectory) {
             dispatch({
-              type: 'ADD_MESSAGE',
+              type: 'UPDATE_MESSAGE',
               conversationId: conversation.id,
-              message: {
-                ...placeholder,
+              messageId: placeholder.id,
+              patch: {
                 content: [{
                   type: 'text',
                   text: '无法开始执行：这个大任务需要一个工作目录，但当前会话没有绑定 Active Folder，且请求里没有明确路径。请先把目标项目目录设为 Active Folder，或在请求里写清楚路径，例如 D:\\Apps\\TestProject。',
@@ -2223,10 +1482,10 @@ export function ChatView() {
           }
 
           dispatch({
-            type: 'ADD_MESSAGE',
+            type: 'UPDATE_MESSAGE',
             conversationId: conversation.id,
-            message: {
-              ...placeholder,
+            messageId: placeholder.id,
+            patch: {
               content: [{ type: 'text', text: '正在规划任务执行步骤...' }],
               streaming: false,
               runPhase: 'generating',
@@ -2234,12 +1493,13 @@ export function ChatView() {
           })
 
           taskPlan = await generateDaemonTaskPlan({
+            conversationId: conversation.id,
             taskId: pending.taskId,
             goal: finalGoal,
             workingDirectory,
             traits: planningTraitsFor(finalGoal, conversation),
-            analysis: pending.analysis
-              ? { ...pending.analysis, unknowns: [] }
+            analysis: intake.analysis
+              ? { ...intake.analysis, unknowns: [] }
               : null,
             messages: conversation.messages,
           })
@@ -2257,10 +1517,15 @@ export function ChatView() {
           dispatch({ type: 'START_TASK_PLAN', conversationId: conversation.id, plan: taskPlan })
         }
         if (!isBigTask) {
-          dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+          dispatch({
+            type: 'UPDATE_MESSAGE',
+            conversationId: conversation.id,
+            messageId: placeholder.id,
+            patch: { content: [], runPhase: 'connecting' },
+          })
         }
         driveStream(
-          { ...conversation, activeTaskPlan: taskPlan, messages: [...conversation.messages, confirmationContext] },
+          { ...conversation, activeTaskPlan: taskPlan, messages: [...conversation.messages, userMsg, confirmationContext] },
           conversation.id,
           placeholder.id,
           pending.taskId,
@@ -2315,8 +1580,77 @@ export function ChatView() {
         return
       }
 
+      if (!pendingTaskIntake && inputDecision.action === 'handle_file_media') {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const attachmentList = (attachments ?? []).map(path => `- ${path}`).join('\n') || '- (attachment metadata only)'
+        const fileMediaContext = workflowSystemMessage(taskId, [
+          'Workflow action: handle_file_media.',
+          'The user input includes files, images, audio, video, documents, archives, or mixed attachments.',
+          'Treat the attachments as first-class input. Do not ignore them and do not start coding task intake unless the user explicitly asks to create/modify a project.',
+          'If a file can be inspected with available tools, inspect it before answering. If the model cannot view or transcribe a media type, state that limitation and ask for the needed content or a supported tool.',
+          `Attachments:\n${attachmentList}`,
+        ].join('\n'))
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        await driveStream(
+          { ...conversation, messages: [...conversation.messages, userMsg, fileMediaContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+        )
+        return
+      }
+
+      if (!pendingTaskIntake && inputDecision.action === 'update_preference') {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const preferenceContext = workflowSystemMessage(taskId, [
+          'Workflow action: update_preference.',
+          'The user is expressing a preference, default behavior, or setting.',
+          'Do not treat this as a coding task. Determine whether this can be applied to the current conversation, an existing Settings field, or requires a new preference store.',
+          'Be explicit about scope: current conversation, persisted setting, or not yet supported. Do not claim persistence unless a setting was actually changed.',
+        ].join(' '))
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        await driveStream(
+          { ...conversation, messages: [...conversation.messages, userMsg, preferenceContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+        )
+        return
+      }
+
+      if (!pendingTaskIntake && inputDecision.action === 'delegate_to_code_agent') {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const delegationContext = workflowSystemMessage(taskId, [
+          'Workflow action: delegate_to_code_agent.',
+          'The user wants Ava to use or delegate to an external code agent such as Codex, Claude Code, Cursor, or another local agent.',
+          'First identify the requested target agent. If availability is uncertain, use safe shell.run_command checks such as `codex --version` or `claude --version` when tools are available.',
+          'If no target is available, explain the missing dependency and suggest how to connect it. Do not silently fall back to Ava doing the whole coding task unless the user asks.',
+          'If the user only asks a question about delegation, answer directly without starting task intake.',
+        ].join(' '))
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        await driveStream(
+          { ...conversation, messages: [...conversation.messages, userMsg, delegationContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+        )
+        return
+      }
+
       if (!pendingTaskIntake && inputDecision.action === 'recover_task') {
-        const plan = conversation.activeTaskPlan
+        const plan = await getDaemonActiveTaskPlan(conversation.id).catch(() => undefined) ?? conversation.activeTaskPlan
         if (!plan || plan.status === 'completed' || plan.status === 'aborted') {
           await runSend(content, attachments ?? [], conversation, commandInvocation)
           return
@@ -2325,7 +1659,7 @@ export function ChatView() {
         const taskId = plan.taskId
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         const placeholder = makeAssistantPlaceholder(taskId)
-        const retryPlan = retryableTaskPlan(plan, taskId) ?? plan
+        const retryPlan = plan
         const recoveryContext = workflowSystemMessage(taskId, [
           'Workflow action: recover_task.',
           'The user explicitly asked to retry or continue the interrupted task.',
@@ -2335,10 +1669,6 @@ export function ChatView() {
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
-        if (retryPlan !== plan) {
-          dispatch({ type: 'ADVANCE_TASK_STEP', conversationId: conversation.id, plan: retryPlan })
-        }
-
         await driveStream(
           { ...conversation, activeTaskPlan: retryPlan, messages: [...conversation.messages, userMsg, recoveryContext] },
           conversation.id,
@@ -2350,7 +1680,8 @@ export function ChatView() {
       }
 
       if (!pendingTaskIntake && inputDecision.action === 'handle_permission') {
-        const taskId = conversation.activeTaskPlan?.taskId ?? makeTaskId()
+        const existingPlan = await getDaemonActiveTaskPlan(conversation.id).catch(() => undefined) ?? conversation.activeTaskPlan
+        const taskId = existingPlan?.taskId ?? makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
 
@@ -2372,8 +1703,7 @@ export function ChatView() {
         }
 
         const grantedPath = extractWorkingDirectoryFromText(content)
-        const plan = conversation.activeTaskPlan
-        const retryPlan = plan ? retryableTaskPlan(plan, plan.taskId) ?? plan : undefined
+        const retryPlan = existingPlan
         const placeholder = makeAssistantPlaceholder(taskId)
         const nextConversation = grantedPath
           ? { ...conversation, folderPath: grantedPath }
@@ -2389,10 +1719,6 @@ export function ChatView() {
           dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path: grantedPath })
         }
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
-        if (plan && retryPlan && retryPlan !== plan) {
-          dispatch({ type: 'ADVANCE_TASK_STEP', conversationId: conversation.id, plan: retryPlan })
-        }
-
         await driveStream(
           { ...nextConversation, activeTaskPlan: retryPlan, messages: [...conversation.messages, userMsg, permissionContext] },
           conversation.id,
@@ -2451,39 +1777,19 @@ export function ChatView() {
           }
         }
         
-        const workingDirectory = conversation.folderPath || extractWorkingDirectoryFromText(content)
-        const analysis = await runDaemonAnalyzePhase({
-          taskId,
-          goal: content,
-          workingDirectory,
-          messages: conversation.messages,
-          traits: planningTraitsFor(content, conversation),
-        })
-        const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, content, conversation)
-
-        let finalContent: ContentPart[] = []
-        const pendingBase: PendingTaskIntake = {
+        const intake = await startIntakeViaDaemon({
           conversationId,
           taskId,
           content,
+          conversation,
           attachments: attachments ?? [],
           commandInvocation,
-          analysis: preparedAnalysis || undefined,
-          clarificationAnswers: [],
-        }
-
-        if (preparedAnalysis) {
-          const nextQuestion = nextClarification(pendingBase)
-          if (nextQuestion) {
-            const total = highPriorityUnknowns(preparedAnalysis).length
-            const index = 1
-            finalContent = [{ type: 'text', text: clarificationQuestionText(nextQuestion, index, total) }]
-          } else {
-            finalContent = [{ type: 'text', text: analysisSummaryText(pendingBase, workingDirectory) }]
-          }
-        } else {
-          finalContent = [{ type: 'text', text: `⚠️ Agent OS Pre-Flight Analysis failed.` }]
-        }
+        })
+        const session = intake.session
+        const finalContent: ContentPart[] = [{
+          type: 'text',
+          text: intake.messageText || '⚠️ Agent OS Pre-Flight Analysis failed.',
+        }]
 
         dispatch({
           type: 'UPDATE_MESSAGE',
@@ -2496,173 +1802,17 @@ export function ChatView() {
           }
         })
 
-        setPendingTaskIntake({
-          ...pendingBase,
-          stage: preparedAnalysis && nextClarification(pendingBase) ? 'clarifying' : 'awaiting_summary_confirm',
-        })
-        return
-      }
-
-
-
-      if (
-        pendingTaskIntake &&
-        pendingTaskIntake.conversationId === conversation.id
-      ) {
-        const pendingInputDecision = await dispatchInputViaDaemon({
-          content,
-          commandInvocation,
-          conversation,
-          attachments: attachments ?? [],
-          pendingIntake: pendingTaskIntake,
-        })
-
-        if (pendingInputDecision.action === 'cancel_intake') {
-          const taskId = pendingTaskIntake.taskId
-          const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
-          dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
-          dispatch({
-            type: 'ADD_MESSAGE',
-            conversationId: conversation.id,
-            message: {
-              id: makeMessageId(),
-              role: 'assistant',
-              content: [{ type: 'text', text: '已取消当前需求澄清。你可以直接发送新的问题或任务。' }],
-              streaming: false,
-              runPhase: 'completed',
-              createdAt: Date.now(),
-            },
-          })
-          setPendingTaskIntake(null)
-          return
-        }
-
-        if (
-          pendingInputDecision.action === 'run_chat' ||
-          pendingInputDecision.action === 'reanalyze_intake' ||
-          isClarificationRedirect(pendingTaskIntake, content)
-        ) {
-          setPendingTaskIntake(null)
-          runSend(content, attachments ?? [], conversation, commandInvocation)
-          return
-        }
-
-        const taskId = pendingTaskIntake.taskId
-        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
-        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
-
-        const intakeMsgId = makeMessageId()
-        const isSummaryFeedback = pendingTaskIntake.stage === 'awaiting_summary_confirm'
-        dispatch({
-          type: 'ADD_MESSAGE',
-          conversationId: conversation.id,
-          message: {
-            id: intakeMsgId,
-            role: 'assistant',
-            content: [{ type: 'text', text: isSummaryFeedback ? '🔍 Updating summary with your feedback...' : '🔍 Recording your answer...' }],
-            streaming: true,
-            runPhase: 'generating',
-            createdAt: Date.now(),
-          },
-        })
-
-        if (!isSummaryFeedback) {
-          if (needsConcreteWorkingDirectoryAnswer(pendingTaskIntake, content)) {
-            dispatch({
-              type: 'UPDATE_MESSAGE',
-              conversationId: conversation.id,
-              messageId: intakeMsgId,
-              patch: {
-                content: [{
-                  type: 'text',
-                  text: '请直接输入完整 Windows 项目路径，例如：D:\\Apps\\GLBViewer。不能使用 “I will provide another full path” 作为路径。',
-                }],
-                streaming: false,
-                runPhase: 'completed',
-              }
-            })
-            setPendingTaskIntake({ ...pendingTaskIntake, stage: 'clarifying' })
-            return
-          }
-
-          const answeredPending = pendingWithAnswer(pendingTaskIntake, content)
-          const nextQuestion = nextClarification(answeredPending)
-          const finalContent: ContentPart[] = nextQuestion
-            ? [{
-                type: 'text',
-                text: clarificationQuestionText(
-                  nextQuestion,
-                  (answeredPending.clarificationAnswers?.length ?? 0) + 1,
-                  highPriorityUnknowns(answeredPending.analysis).length,
-                ),
-              }]
-            : [{ type: 'text' as const, text: analysisSummaryText(answeredPending, conversation.folderPath || extractWorkingDirectoryFromText(resolvedGoal(answeredPending))) }]
-
-          dispatch({
-            type: 'UPDATE_MESSAGE',
-            conversationId: conversation.id,
-            messageId: intakeMsgId,
-            patch: {
-              content: finalContent,
-              streaming: false,
-              runPhase: 'completed',
-            }
-          })
-
+        if (session) {
           setPendingTaskIntake({
-            ...answeredPending,
-            stage: nextQuestion ? 'clarifying' : 'awaiting_summary_confirm',
+            conversationId,
+            taskId,
+            sessionId: session.sessionId,
+            content: session.content,
+            attachments: attachments ?? [],
+            commandInvocation,
+            stage: session.stage === 'awaiting_summary_confirm' ? 'awaiting_summary_confirm' : 'clarifying',
           })
-          return
         }
-
-        const combinedGoal = `${resolvedGoal(pendingTaskIntake)}\n\nUser correction before confirmation: ${content}`
-        const analysis = await runDaemonAnalyzePhase({
-          taskId,
-          goal: combinedGoal,
-          workingDirectory: conversation.folderPath || extractWorkingDirectoryFromText(combinedGoal),
-          messages: conversation.messages,
-          traits: planningTraitsFor(combinedGoal, conversation),
-        })
-        const preparedAnalysis = withRequiredWorkingDirectoryUnknown(analysis, combinedGoal, conversation)
-
-        let finalContent: ContentPart[] = []
-        const nextPending: PendingTaskIntake = {
-          ...pendingTaskIntake,
-          content: combinedGoal,
-          analysis: preparedAnalysis || pendingTaskIntake.analysis,
-          clarificationAnswers: [],
-        }
-
-        if (preparedAnalysis) {
-          const nextQuestion = nextClarification(nextPending)
-          if (nextQuestion) {
-            finalContent = [{
-              type: 'text',
-              text: clarificationQuestionText(nextQuestion, 1, highPriorityUnknowns(preparedAnalysis).length),
-            }]
-          } else {
-            finalContent = [{ type: 'text', text: analysisSummaryText(nextPending, conversation.folderPath || extractWorkingDirectoryFromText(combinedGoal)) }]
-          }
-        } else {
-          finalContent = [{ type: 'text', text: '⚠️ Analysis refinement failed.' }]
-        }
-
-        dispatch({
-          type: 'UPDATE_MESSAGE',
-          conversationId: conversation.id,
-          messageId: intakeMsgId,
-          patch: {
-            content: finalContent,
-            streaming: false,
-            runPhase: 'completed',
-          }
-        })
-
-        setPendingTaskIntake({
-          ...nextPending,
-          stage: preparedAnalysis && nextClarification(nextPending) ? 'clarifying' : 'awaiting_summary_confirm',
-        })
         return
       }
 
@@ -2681,6 +1831,9 @@ export function ChatView() {
           messageId: lastAssistantId,
         })
         dispatch({ type: 'ABORT_TASK_PLAN', conversationId: activeConversation.id })
+        void clearDaemonActiveTaskPlan(activeConversation.id).catch(err => {
+          console.warn('[task-plan] failed to clear daemon plan:', err)
+        })
       }
       window.ava.llm.abort(streamId).catch(() => { /* noop */ })
     }
@@ -2816,10 +1969,7 @@ export function ChatView() {
         })
       }
       dispatch({ type: 'ADD_MESSAGE', conversationId, message: placeholder })
-      const retryPlan = retryableTaskPlan(activeConversation.activeTaskPlan, taskId)
-      if (retryPlan && retryPlan !== activeConversation.activeTaskPlan) {
-        dispatch({ type: 'ADVANCE_TASK_STEP', conversationId, plan: retryPlan })
-      }
+      const retryPlan = await getDaemonActiveTaskPlan(conversationId).catch(() => undefined) ?? activeConversation.activeTaskPlan
 
       await driveStream(
         { ...activeConversation, activeTaskPlan: retryPlan, messages: retryMessages },

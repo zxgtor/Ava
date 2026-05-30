@@ -54,9 +54,23 @@ export async function loadConversations(): Promise<unknown> {
 }
 
 export async function saveConversations(data: unknown): Promise<void> {
-  await writeJsonAtomic(userDataFile(CONVERSATIONS_FILE), data)
+  await writeJsonAtomic(userDataFile(CONVERSATIONS_FILE), stripActiveTaskPlans(data))
 }
 
 export function getUserDataPath(): string {
   return runtimePaths().userDataPath
+}
+
+function stripActiveTaskPlans(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data
+  const src = data as Record<string, unknown>
+  if (!Array.isArray(src.conversations)) return data
+  return {
+    ...src,
+    conversations: src.conversations.map(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item
+      const { activeTaskPlan: _activeTaskPlan, ...conversation } = item as Record<string, unknown>
+      return conversation
+    }),
+  }
 }

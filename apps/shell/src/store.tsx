@@ -643,119 +643,6 @@ function sanitizeCommandInvocation(raw: unknown): CommandInvocation | undefined 
   }
 }
 
-function sanitizeTaskExecutionPlan(raw: unknown): TaskExecutionPlan | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const src = raw as Partial<TaskExecutionPlan> & Record<string, unknown>
-  if (typeof src.taskId !== 'string' || typeof src.goal !== 'string') return undefined
-  if (src.kind !== 'coding-design') return undefined
-  const status = src.status === 'planning' ||
-    src.status === 'running' ||
-    src.status === 'blocked' ||
-    src.status === 'completed' ||
-    src.status === 'failed' ||
-    src.status === 'aborted'
-    ? src.status
-    : 'running'
-  const steps: TaskExecutionStep[] = []
-  if (Array.isArray(src.steps)) {
-    for (const rawStep of src.steps) {
-      if (!rawStep || typeof rawStep !== 'object') continue
-      const step = rawStep as Partial<TaskExecutionStep> & Record<string, unknown>
-      if (typeof step.id !== 'string' || typeof step.title !== 'string') continue
-      const stepStatus = step.status === 'pending' ||
-        step.status === 'running' ||
-        step.status === 'done' ||
-        step.status === 'failed' ||
-        step.status === 'skipped'
-        ? step.status
-        : 'pending'
-      steps.push({
-        id: step.id,
-        title: step.title,
-        status: stepStatus,
-        requiredTools: Array.isArray(step.requiredTools) ? step.requiredTools.filter((item): item is string => typeof item === 'string') : [],
-        completionSignals: Array.isArray(step.completionSignals) ? step.completionSignals.filter((item): item is string => typeof item === 'string') : [],
-        attempts: typeof step.attempts === 'number' ? step.attempts : 0,
-        lastError: typeof step.lastError === 'string' ? step.lastError : undefined,
-        lastToolSummary: typeof step.lastToolSummary === 'string' ? step.lastToolSummary : undefined,
-        lastProcessId: typeof step.lastProcessId === 'string' ? step.lastProcessId : undefined,
-        lastCommand: typeof step.lastCommand === 'string' ? step.lastCommand : undefined,
-        lastExitCode: typeof step.lastExitCode === 'number' || step.lastExitCode === null ? step.lastExitCode : undefined,
-        lastRecoveredAt: typeof step.lastRecoveredAt === 'number' ? step.lastRecoveredAt : undefined,
-        evidence: Array.isArray(step.evidence)
-          ? step.evidence
-              .filter(item => item && typeof item === 'object')
-              .map(item => item as unknown as Record<string, unknown>)
-              .filter(item => typeof item.toolName === 'string' && typeof item.toolCallId === 'string')
-              .map(item => ({
-                toolName: item.toolName as string,
-                toolCallId: item.toolCallId as string,
-                status: sanitizeToolCallStatus(item.status),
-                timestamp: typeof item.timestamp === 'number' ? item.timestamp : Date.now(),
-                summary: typeof item.summary === 'string' ? item.summary : undefined,
-                processId: typeof item.processId === 'string' ? item.processId : undefined,
-                command: typeof item.command === 'string' ? item.command : undefined,
-                exitCode: typeof item.exitCode === 'number' || item.exitCode === null ? item.exitCode : undefined,
-                persistedOutputPath: typeof item.persistedOutputPath === 'string' ? item.persistedOutputPath : undefined,
-              }))
-              .slice(-20)
-          : undefined,
-        dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn.filter((item): item is string => typeof item === 'string') : undefined,
-        workflowType: step.workflowType === 'scaffold' ||
-          step.workflowType === 'feature' ||
-          step.workflowType === 'debug' ||
-          step.workflowType === 'refactor' ||
-          step.workflowType === 'research'
-          ? step.workflowType
-          : undefined,
-        role: step.role === 'inspect' ||
-          step.role === 'scaffold' ||
-          step.role === 'install' ||
-          step.role === 'feature' ||
-          step.role === 'preview' ||
-          step.role === 'console' ||
-          step.role === 'screenshot' ||
-          step.role === 'repair' ||
-          step.role === 'validate' ||
-          step.role === 'final_report'
-          ? step.role
-          : undefined,
-      })
-    }
-  }
-  if (steps.length === 0) return undefined
-  const validation = src.validation && typeof src.validation === 'object'
-    ? src.validation as Partial<TaskExecutionValidation>
-    : {}
-  return {
-    taskId: src.taskId,
-    status,
-    goal: src.goal,
-    workingDirectory: typeof src.workingDirectory === 'string' ? src.workingDirectory : '(no active folder)',
-    kind: 'coding-design',
-    currentStepId: typeof src.currentStepId === 'string' ? src.currentStepId : undefined,
-    steps,
-    validation: {
-      devServerChecked: Boolean(validation.devServerChecked),
-      consoleChecked: Boolean(validation.consoleChecked),
-      screenshotChecked: Boolean(validation.screenshotChecked),
-      buildChecked: Boolean(validation.buildChecked),
-    },
-    createdAt: typeof src.createdAt === 'number' ? src.createdAt : Date.now(),
-    updatedAt: typeof src.updatedAt === 'number' ? src.updatedAt : Date.now(),
-  }
-}
-
-function sanitizeToolCallStatus(raw: unknown): ToolCallStatus {
-  return raw === 'pending' ||
-    raw === 'running' ||
-    raw === 'ok' ||
-    raw === 'error' ||
-    raw === 'aborted'
-    ? raw
-    : 'error'
-}
-
 function sanitizeConversation(raw: unknown): Conversation | null {
   if (!raw || typeof raw !== 'object') return null
   const c = raw as Partial<Conversation> & Record<string, unknown>
@@ -788,7 +675,9 @@ function sanitizeConversation(raw: unknown): Conversation | null {
     pinned: Boolean(c.pinned),
     archived: Boolean(c.archived),
     folderPath: typeof c.folderPath === 'string' ? c.folderPath : undefined,
-    activeTaskPlan: sanitizeTaskExecutionPlan(c.activeTaskPlan),
+    // Daemon is the canonical owner of active task execution state.
+    // Desktop keeps activeTaskPlan only as a live UI mirror after daemon sync.
+    activeTaskPlan: undefined,
     createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
     updatedAt: typeof c.updatedAt === 'number' ? c.updatedAt : Date.now(),
   }

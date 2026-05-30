@@ -13,6 +13,7 @@ interface RuntimeSettings {
 
 export interface DaemonStreamOptions {
   streamId: string
+  conversationId?: string
   activeTaskId?: string
   activeTaskPlan?: StreamChatArgs['activeTaskPlan']
   activeFolderPath?: string
@@ -108,6 +109,7 @@ export async function resolveStreamChatArgsFromDaemonConfig(
 
   return {
     streamId: options.streamId,
+    conversationId: options.conversationId,
     messages: requestMessages,
     providers: enabledProviders,
     activeTaskId: options.activeTaskId,

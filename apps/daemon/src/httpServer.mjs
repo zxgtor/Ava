@@ -348,6 +348,18 @@ async function routeRequest(req, res, runtime) {
     return
   }
 
+  if (url.pathname === '/intake/start' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'startIntakeSession', [body])
+    return
+  }
+
+  if (url.pathname === '/intake/reply' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'replyIntakeSession', [body])
+    return
+  }
+
   if (url.pathname === '/tasks/analyze' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'analyzeTask', [body])
@@ -357,6 +369,24 @@ async function routeRequest(req, res, runtime) {
   if (url.pathname === '/tasks/plan' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'planTask', [body])
+    return
+  }
+
+  if (url.pathname === '/tasks/active-plan/get' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'getActiveTaskPlan', [body])
+    return
+  }
+
+  if (url.pathname === '/tasks/active-plan/set' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'setActiveTaskPlan', [body])
+    return
+  }
+
+  if (url.pathname === '/tasks/active-plan/clear' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'clearActiveTaskPlan', [body])
     return
   }
 

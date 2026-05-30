@@ -56,6 +56,131 @@
       gap: 14px;
     }
 
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      position: relative;
+    }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: #cfe2e7;
+      background: rgba(255, 255, 255, 0.05);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+    }
+
+    .back-link:hover {
+      border-color: rgba(105, 240, 187, 0.42);
+      color: var(--text);
+      background: rgba(105, 240, 187, 0.08);
+    }
+
+    .top-action-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(78, 200, 255, 0.18);
+      border-radius: 12px;
+      color: #d8eff6;
+      background: rgba(78, 200, 255, 0.08);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+      transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+    }
+
+    .top-action-button:hover {
+      border-color: rgba(78, 200, 255, 0.42);
+      color: var(--text);
+      background: rgba(78, 200, 255, 0.14);
+    }
+
+    .legend-button {
+      width: 34px;
+      padding: 0;
+      border-radius: 999px;
+      font-family: ui-monospace, "Cascadia Code", monospace;
+    }
+
+    .color-popover {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 10px);
+      width: min(340px, calc(100vw - 48px));
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 18px;
+      background: rgba(9, 18, 30, 0.94);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      z-index: 80;
+    }
+
+    .color-popover[hidden] { display: none; }
+
+    .color-popover h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      letter-spacing: -0.02em;
+    }
+
+    .legend-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+    }
+
+    .legend-item {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 9px;
+      align-items: center;
+      color: #c5d6dd;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    .legend-line {
+      width: 18px;
+      height: 0;
+      border-top: 2px solid currentColor;
+      opacity: 0.9;
+    }
+
+    .legend-line.dashed {
+      border-top-style: dashed;
+    }
+
+    .legend-desktop { color: var(--desktop); }
+    .legend-daemon { color: var(--daemon); }
+    .legend-shared { color: var(--violet); }
+    .legend-green { color: var(--green); }
+    .legend-red { color: var(--red); }
+    .legend-warn { color: var(--yellow); }
+    .legend-llm { color: var(--llm); }
+
     .mark {
       width: 42px;
       height: 42px;
@@ -81,26 +206,6 @@
       color: var(--muted);
       font-size: 13px;
     }
-
-    .legend {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      gap: 8px;
-      max-width: 680px;
-    }
-
-    .chip {
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 999px;
-      padding: 7px 10px;
-      background: rgba(255, 255, 255, 0.05);
-      color: #cfe2e7;
-      font-size: 12px;
-      user-select: none;
-    }
-
-    .chip strong { color: var(--text); }
 
     .brain {
       position: relative;
@@ -450,11 +555,6 @@
       cursor: pointer;
     }
 
-    .canvas-controls [data-layout="auto"] {
-      min-width: 52px;
-      padding: 0 10px;
-    }
-
     .canvas-controls button:hover {
       background: rgba(78, 200, 255, 0.18);
     }
@@ -502,12 +602,23 @@
           <p class="subtitle">A discussion map for task intake, clarification, planning, and execution.</p>
         </div>
       </div>
-      <div class="legend" aria-label="Legend">
-        <span class="chip"><strong>Desktop</strong> shell/UI state today</span>
-        <span class="chip"><strong>Daemon</strong> runtime/planner today</span>
-        <span class="chip"><strong>Yellow</strong> should migrate to daemon</span>
-        <span class="chip"><strong>Pink dashed</strong> sends prompt to LLM</span>
-        <span class="chip"><strong>Red</strong> cancel or blocked path</span>
+      <div class="top-actions">
+        <a class="back-link" id="devPanelBackLink" href="/" aria-label="Back to Ava Dev Control Panel">Back</a>
+        <button class="top-action-button" type="button" data-layout="auto" title="Auto organize cards and lines">Auto organize</button>
+        <button class="top-action-button legend-button" id="colorLegendButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="colorLegendPopover" title="Color legend">?</button>
+        <div class="color-popover" id="colorLegendPopover" role="dialog" aria-label="Ava Brain color legend" hidden>
+          <h2>Color meaning</h2>
+          <div class="legend-list">
+            <div class="legend-item"><span class="legend-swatch legend-desktop"></span><span>Yellow card/tag: Desktop shell or UI-owned state.</span></div>
+            <div class="legend-item"><span class="legend-swatch legend-daemon"></span><span>Cyan card/tag: Daemon runtime, planner, or intake logic.</span></div>
+            <div class="legend-item"><span class="legend-swatch legend-shared"></span><span>Violet card/tag: planning or shared execution structure.</span></div>
+            <div class="legend-item"><span class="legend-swatch legend-green"></span><span>Green label: entry, chat, runtime, or successful gate path.</span></div>
+            <div class="legend-item"><span class="legend-swatch legend-red"></span><span>Red: cancel, blocked, retry, or stopped path.</span></div>
+            <div class="legend-item"><span class="legend-line legend-daemon"></span><span>Blue solid line: normal workflow transition.</span></div>
+            <div class="legend-item"><span class="legend-line legend-warn"></span><span>Yellow line: correction, uncertain, or branch path.</span></div>
+            <div class="legend-item"><span class="legend-line dashed legend-llm"></span><span>Pink dashed line: prompt sent to selected LLM provider.</span></div>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -520,7 +631,6 @@
           <button type="button" data-zoom="out">-</button>
           <button type="button" data-zoom="reset" class="zoom-label">100%</button>
           <button type="button" data-zoom="in">+</button>
-          <button type="button" data-layout="auto" title="Auto organize cards and lines">Auto</button>
         </div>
 
         <div class="world" id="world">
@@ -573,47 +683,63 @@
         <article class="node daemon" data-node="router" style="left: 70px; top: 760px; width: 360px;">
           <div class="runtime-tag daemon">daemon</div>
           <h2>2. Intent Gate</h2>
-          <p>Daemon classifies P0/P1 routes and maps them to chat, intake, recovery, permission, file/media, browser, settings, or clarify workflows.</p>
+          <p>Daemon classifies routes with fast rules first, then uses an LLM fallback only for low-confidence or mixed text/file inputs.</p>
           <div class="intent-type-grid" aria-label="Intent Gate input types">
             <span>normal_chat</span>
             <span>meta_question</span>
-            <span>task_request</span>
+            <span>task_intake</span>
             <span>small_task</span>
-            <span>big_task</span>
+            <span>url_input</span>
             <span>command_invocation</span>
             <span>task_confirmation</span>
             <span>clarification_answer</span>
             <span>requirement_correction</span>
             <span>cancel_or_pause</span>
             <span>retry_or_continue</span>
-            <span>tool_result_followup</span>
             <span>file_or_attachment</span>
+            <span>agent_delegation</span>
             <span>permission_response</span>
             <span>preference_or_setting</span>
             <span>unknown_or_ambiguous</span>
           </div>
-          <small>/input/classify</small>
+          <small>/input/classify · rule + LLM fallback</small>
         </article>
 
         <article class="node daemon cyan" data-node="dispatcher" style="left: 500px; top: 760px;">
           <div class="runtime-tag daemon">daemon</div>
           <h2>Workflow Dispatcher</h2>
-          <p>Maps classified route to next action. Implemented now: clarify, URL/browser, recovery, permission, direct tool, chat, intake, cancel, and intake reanalysis.</p>
+          <p>Maps classified route to next action. Implemented now: chat, intake, recovery, permission, direct tool, file/media, URL/browser, preferences, and code-agent delegation.</p>
+          <div class="intent-type-grid" aria-label="Workflow Dispatcher actions">
+            <span>run_chat</span>
+            <span>start_task_intake</span>
+            <span>continue_intake</span>
+            <span>confirm_task</span>
+            <span>reanalyze_intake</span>
+            <span>cancel_intake</span>
+            <span>recover_task</span>
+            <span>handle_permission</span>
+            <span>run_direct_tool</span>
+            <span>handle_file_media</span>
+            <span>handle_url</span>
+            <span>delegate_to_code_agent</span>
+            <span>update_preference</span>
+            <span>ask_clarifying_question</span>
+          </div>
           <small>/input/dispatch</small>
         </article>
 
-        <article class="node desktop yellow" data-node="intake" style="left: 760px; top: 90px;">
-          <div class="runtime-tag desktop">desktop</div>
+        <article class="node daemon" data-node="intake" style="left: 760px; top: 90px;">
+          <div class="runtime-tag daemon">daemon</div>
           <h2>3. Task Intake</h2>
-          <p>Desktop currently owns pending intake state, question index, answer collection, and summary confirmation.</p>
-          <small>move to daemon</small>
+          <p>Daemon owns the intake session: stage, current question, answers, summary confirmation, cancellation, and correction reanalysis.</p>
+          <small>/intake/start · /intake/reply</small>
         </article>
 
         <article class="node desktop yellow" data-node="classifier" style="left: 1110px; top: 90px;">
-          <div class="runtime-tag desktop">desktop now</div>
+          <div class="runtime-tag daemon">daemon now</div>
           <h2>4. Reply Classifier</h2>
-          <p>Should classify answer vs correction vs cancel vs meta question before continuing clarification.</p>
-          <small>missing/weak</small>
+          <p>Intake replies are routed inside the daemon session. Desktop sends the reply and renders the returned question, summary, cancellation, or ready-to-plan state.</p>
+          <small>session dispatch</small>
         </article>
 
         <article class="node desktop" data-node="normal" style="left: 70px; top: 380px;">
@@ -630,18 +756,18 @@
           <small>/tasks/analyze</small>
         </article>
 
-        <article class="node desktop yellow" data-node="question" style="left: 760px; top: 380px;">
-          <div class="runtime-tag desktop">desktop</div>
+        <article class="node daemon" data-node="question" style="left: 760px; top: 380px;">
+          <div class="runtime-tag daemon">daemon</div>
           <h2>Ask One Question</h2>
-          <p>Only one high-priority unknown is shown. Options become quick replies, but free text must be classified.</p>
-          <small>move to daemon</small>
+          <p>Daemon selects the next unanswered high-priority unknown and returns the exact question text. Desktop only renders it.</p>
+          <small>daemon session</small>
         </article>
 
-        <article class="node desktop yellow" data-node="summary" style="left: 1640px; top: 380px;">
-          <div class="runtime-tag desktop">desktop</div>
+        <article class="node daemon" data-node="summary" style="left: 1640px; top: 380px;">
+          <div class="runtime-tag daemon">daemon</div>
           <h2>Summary Confirm</h2>
-          <p>When unknowns are resolved, show goal, answers, risks, and ask user to confirm before planning.</p>
-          <small>move to daemon</small>
+          <p>Daemon creates the summary from saved answers and marks the session ready_to_plan after confirmation.</p>
+          <small>daemon session</small>
         </article>
 
         <article class="node daemon violet" data-node="plan" style="left: 1020px; top: 1040px;">
@@ -669,32 +795,32 @@
         <div class="decision d-unknown" data-node="unknown"><span>More high-priority unknowns?</span></div>
         <div class="decision d-reply" data-node="reply"><span>Answer or correction?</span></div>
 
-        <article class="node desktop" data-node="answer" style="left: 1110px; top: 380px;">
-          <div class="runtime-tag desktop">desktop</div>
+        <article class="node daemon" data-node="answer" style="left: 1110px; top: 380px;">
+          <div class="runtime-tag daemon">daemon</div>
           <h2>Answer Question</h2>
-          <p>Save the user's answer to the current clarification item, then decide whether another unknown remains.</p>
-          <small>answer</small>
+          <p>Daemon saves the answer against the current clarification item, then returns the next question or summary.</p>
+          <small>/intake/reply</small>
         </article>
 
-        <article class="node desktop yellow" data-node="correction" style="left: 1110px; top: 560px;">
-          <div class="runtime-tag desktop">desktop now</div>
+        <article class="node daemon" data-node="correction" style="left: 1110px; top: 560px;">
+          <div class="runtime-tag daemon">daemon</div>
           <h2>Correct Requirement</h2>
-          <p>Merge user correction into the goal and rerun analysis instead of continuing old questions.</p>
+          <p>Daemon merges correction into the goal, reruns analysis, clears prior answers, and resumes clarification.</p>
           <small>reanalyze</small>
         </article>
 
-        <article class="node desktop red" data-node="cancel" style="left: 1460px; top: 90px;">
-          <div class="runtime-tag desktop">desktop</div>
+        <article class="node daemon red" data-node="cancel" style="left: 1460px; top: 90px;">
+          <div class="runtime-tag daemon">daemon</div>
           <h2>Cancel Intake</h2>
-          <p>Clear pending task intake. Do not ask the next old question.</p>
+          <p>Daemon marks the intake session canceled. Desktop clears its session pointer and renders the returned message.</p>
           <small>stop intake</small>
         </article>
 
-        <article class="node desktop yellow" data-node="meta" style="left: 1460px; top: 220px;">
-          <div class="runtime-tag desktop">desktop</div>
+        <article class="node daemon" data-node="meta" style="left: 1460px; top: 220px;">
+          <div class="runtime-tag daemon">daemon</div>
           <h2>Meta Question</h2>
-          <p>Pause the task flow and answer questions like “what can Ava do?” or “why are you asking this?”</p>
-          <small>answer first</small>
+          <p>Daemon keeps the session active and returns a short explanation instead of advancing to the next old question.</p>
+          <small>session-safe</small>
         </article>
 
         <article class="node daemon" data-node="stepgate" style="left: 1300px; top: 1400px;">
@@ -723,6 +849,34 @@
     </section>
   </main>
   <script>
+    const devPanelBackLink = document.querySelector('#devPanelBackLink')
+    if (devPanelBackLink && location.port === '17872') {
+      devPanelBackLink.href = `${location.protocol}//${location.hostname}:5179/`
+    }
+
+    const colorLegendButton = document.querySelector('#colorLegendButton')
+    const colorLegendPopover = document.querySelector('#colorLegendPopover')
+    colorLegendButton.addEventListener('click', event => {
+      event.stopPropagation()
+      const nextOpen = colorLegendPopover.hidden
+      colorLegendPopover.hidden = !nextOpen
+      colorLegendButton.setAttribute('aria-expanded', String(nextOpen))
+    })
+
+    document.addEventListener('click', event => {
+      if (colorLegendPopover.hidden) return
+      if (event.target.closest('#colorLegendPopover') || event.target.closest('#colorLegendButton')) return
+      colorLegendPopover.hidden = true
+      colorLegendButton.setAttribute('aria-expanded', 'false')
+    })
+
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || colorLegendPopover.hidden) return
+      colorLegendPopover.hidden = true
+      colorLegendButton.setAttribute('aria-expanded', 'false')
+      colorLegendButton.focus()
+    })
+
     const canvas = document.querySelector('.canvas')
     const world = document.querySelector('#world')
     const zoomLabel = document.querySelector('.zoom-label')

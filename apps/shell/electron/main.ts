@@ -342,8 +342,13 @@ function registerIpc(): void {
 
   ipcMain.handle('ava:agent:classifyInput', async (_e, request: unknown) => daemonRuntimeClient.classifyInput(request))
   ipcMain.handle('ava:agent:dispatchInput', async (_e, request: unknown) => daemonRuntimeClient.dispatchInput(request))
+  ipcMain.handle('ava:agent:startIntakeSession', async (_e, request: unknown) => daemonRuntimeClient.startIntakeSession(request))
+  ipcMain.handle('ava:agent:replyIntakeSession', async (_e, request: unknown) => daemonRuntimeClient.replyIntakeSession(request))
   ipcMain.handle('ava:agent:analyzeTask', async (_e, request: unknown) => daemonRuntimeClient.analyzeTask(request))
   ipcMain.handle('ava:agent:planTask', async (_e, request: unknown) => daemonRuntimeClient.planTask(request))
+  ipcMain.handle('ava:agent:getActiveTaskPlan', async (_e, request: unknown) => daemonRuntimeClient.getActiveTaskPlan(request))
+  ipcMain.handle('ava:agent:setActiveTaskPlan', async (_e, request: unknown) => daemonRuntimeClient.setActiveTaskPlan(request))
+  ipcMain.handle('ava:agent:clearActiveTaskPlan', async (_e, request: unknown) => daemonRuntimeClient.clearActiveTaskPlan(request))
 
   // ── conversations persistence ───────────────
   ipcMain.handle('ava:conversations:load', async () => loadConversations())

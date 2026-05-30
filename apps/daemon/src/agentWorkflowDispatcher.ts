@@ -5,7 +5,7 @@ import type {
   AvaWorkflowAction,
   AvaWorkflowImplementationStatus,
 } from '@ava/contracts'
-import { classifyInput } from './agentInputRouter'
+import { classifyInputWithFallback } from './agentInputRouter'
 
 const IMPLEMENTED_ACTIONS = new Set<AvaWorkflowAction>([
   'run_chat',
@@ -17,7 +17,10 @@ const IMPLEMENTED_ACTIONS = new Set<AvaWorkflowAction>([
   'recover_task',
   'handle_permission',
   'run_direct_tool',
+  'handle_file_media',
   'handle_url',
+  'delegate_to_code_agent',
+  'update_preference',
   'ask_clarifying_question',
 ])
 
@@ -43,6 +46,8 @@ function actionForRoute(classification: AvaInputClassifyResult): AvaWorkflowActi
       return 'handle_file_media'
     case 'url_input':
       return 'handle_url'
+    case 'agent_delegation':
+      return 'delegate_to_code_agent'
     case 'preference_or_setting':
       return 'update_preference'
     case 'unknown_or_ambiguous':
@@ -58,8 +63,8 @@ function implementationStatus(action: AvaWorkflowAction): AvaWorkflowImplementat
   return IMPLEMENTED_ACTIONS.has(action) ? 'implemented' : 'planned'
 }
 
-export function dispatchInput(request: AvaInputDispatchRequest): AvaInputDispatchResult {
-  const classification = classifyInput(request)
+export async function dispatchInput(request: AvaInputDispatchRequest): Promise<AvaInputDispatchResult> {
+  const classification = await classifyInputWithFallback(request)
   const action = actionForRoute(classification)
   const status = implementationStatus(action)
 
