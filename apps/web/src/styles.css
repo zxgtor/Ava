@@ -126,6 +126,75 @@ textarea {
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.26);
 }
 
+.session-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(12, 18, 30, 0.58);
+  padding: 12px;
+}
+
+.session-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.session-title button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-2);
+}
+
+.session-list {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.session-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  padding: 9px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.session-list button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-list button.active {
+  border-color: rgba(94, 208, 165, 0.25);
+  background: rgba(94, 208, 165, 0.1);
+  color: #defbea;
+}
+
 .status-title {
   display: flex;
   align-items: center;

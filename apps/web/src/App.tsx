@@ -1,17 +1,47 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Bot, Circle, Loader2, PlugZap, RefreshCw, UserRound, Wrench } from 'lucide-react'
+import { ArrowUp, Bot, Circle, Folder, Loader2, MessageSquarePlus, PlugZap, RefreshCw, UserRound, Wrench } from 'lucide-react'
 import { AvaClient } from '@ava/client-sdk'
-import type { AvaChatStreamEvent, AvaDaemonChatRequest, AvaDaemonStatus } from '@ava/contracts'
+import type {
+  AvaChatContentPart,
+  AvaChatMessage,
+  AvaChatStreamEvent,
+  AvaDaemonChatRequest,
+  AvaDaemonStatus,
+} from '@ava/contracts'
 
-type Role = 'user' | 'assistant'
+type Role = 'user' | 'assistant' | 'system' | 'tool'
 type RunStatus = 'idle' | 'running' | 'failed'
 
-interface ChatMessage {
+interface WebMessage {
   id: string
   role: Role
-  content: string
+  content: AvaChatContentPart[]
   createdAt: number
   sendToModel?: boolean
+}
+
+interface WebConversation {
+  id: string
+  title: string
+  messages: WebMessage[]
+  traits?: string[]
+  pinned?: boolean
+  archived?: boolean
+  folderPath?: string
+  createdAt: number
+  updatedAt: number
+}
+
+interface ConversationStore {
+  conversations: WebConversation[]
+  activeConversationId: string | null
+  [key: string]: unknown
+}
+
+interface WebSettings {
+  pluginStates?: Record<string, { enabled: boolean }>
+  modelToolFormatMap?: Record<string, 'openai' | 'hermes' | 'none'>
+  [key: string]: unknown
 }
 
 interface ToolPart {
@@ -27,6 +57,26 @@ const DEFAULT_DAEMON_URL = 'http://127.0.0.1:17871'
 
 function createId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function textPart(text: string): AvaChatContentPart {
+  return { type: 'text', text }
+}
+
+function contentText(parts: AvaChatContentPart[] | string): string {
+  if (typeof parts === 'string') return parts
+  return parts
+    .filter(part => part.type === 'text')
+    .map(part => part.text)
+    .join('\n')
+}
+
+function messageText(message: WebMessage): string {
+  return contentText(message.content)
 }
 
 function formatTime(timestamp: number) {
@@ -56,26 +106,100 @@ function compactJson(value: unknown) {
   }
 }
 
+function sanitizeMessage(raw: unknown): WebMessage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const src = raw as Record<string, unknown>
+  const role = src.role === 'user' || src.role === 'assistant' || src.role === 'system' || src.role === 'tool'
+    ? src.role
+    : null
+  if (!role) return null
+  const content = Array.isArray(src.content)
+    ? src.content.filter((part): part is AvaChatContentPart => Boolean(part && typeof part === 'object' && 'type' in part))
+    : typeof src.content === 'string'
+      ? [textPart(src.content)]
+      : []
+  return {
+    id: typeof src.id === 'string' ? src.id : createId(role),
+    role,
+    content,
+    createdAt: typeof src.createdAt === 'number' ? src.createdAt : Date.now(),
+    sendToModel: src.sendToModel === false ? false : undefined,
+  }
+}
+
+function sanitizeConversation(raw: unknown): WebConversation | null {
+  if (!raw || typeof raw !== 'object') return null
+  const src = raw as Record<string, unknown>
+  if (typeof src.id !== 'string') return null
+  const messages = Array.isArray(src.messages)
+    ? src.messages.map(sanitizeMessage).filter((message): message is WebMessage => Boolean(message))
+    : []
+  return {
+    id: src.id,
+    title: typeof src.title === 'string' ? src.title : 'Untitled',
+    messages,
+    traits: Array.isArray(src.traits) ? src.traits.filter((item): item is string => typeof item === 'string') : undefined,
+    pinned: Boolean(src.pinned),
+    archived: Boolean(src.archived),
+    folderPath: typeof src.folderPath === 'string' ? src.folderPath : undefined,
+    createdAt: typeof src.createdAt === 'number' ? src.createdAt : Date.now(),
+    updatedAt: typeof src.updatedAt === 'number' ? src.updatedAt : Date.now(),
+  }
+}
+
+function createConversation(): WebConversation {
+  const createdAt = Date.now()
+  return {
+    id: createId('web_conversation'),
+    title: 'Ava Web Session',
+    traits: ['chat'],
+    createdAt,
+    updatedAt: createdAt,
+    messages: [{
+      id: createId('assistant'),
+      role: 'assistant',
+      content: [textPart('Ava Web is connected through the daemon. Ask a question or request a local task.')],
+      createdAt,
+      sendToModel: false,
+    }],
+  }
+}
+
+function conversationToClientMessages(conversation: WebConversation): AvaChatMessage[] {
+  return conversation.messages
+    .filter(message => message.sendToModel !== false)
+    .filter(message => message.role === 'user' || message.role === 'assistant' || message.role === 'system' || message.role === 'tool')
+    .filter(message => message.content.length > 0)
+    .map(message => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      createdAt: new Date(message.createdAt).toISOString(),
+    }))
+}
+
 export function App() {
   const [daemonUrl, setDaemonUrl] = useState(() => localStorage.getItem('ava-web-daemon-url') || DEFAULT_DAEMON_URL)
   const [status, setStatus] = useState<AvaDaemonStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: createId('assistant'),
-      role: 'assistant',
-      content: 'Ava Web is connected through the daemon. Ask a question or request a local task.',
-      createdAt: Date.now(),
-      sendToModel: false,
-    },
-  ])
+  const [settings, setSettings] = useState<WebSettings>({})
+  const [store, setStore] = useState<ConversationStore>(() => {
+    const conversation = createConversation()
+    return { conversations: [conversation], activeConversationId: conversation.id }
+  })
   const [toolParts, setToolParts] = useState<ToolPart[]>([])
   const [input, setInput] = useState('')
   const [runStatus, setRunStatus] = useState<RunStatus>('idle')
   const [runError, setRunError] = useState<string | null>(null)
+  const [hydrated, setHydrated] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const client = useMemo(() => new AvaClient({ baseUrl: daemonUrl }), [daemonUrl])
+
+  const activeConversation = useMemo(
+    () => store.conversations.find(conversation => conversation.id === store.activeConversationId) ?? store.conversations[0],
+    [store],
+  )
 
   const refreshStatus = async () => {
     localStorage.setItem('ava-web-daemon-url', daemonUrl)
@@ -89,25 +213,82 @@ export function App() {
     }
   }
 
+  const hydrateFromDaemon = async () => {
+    try {
+      const [rawSettings, rawConversations] = await Promise.all([
+        client.loadSettings<WebSettings | null>().catch(() => null),
+        client.loadConversations<ConversationStore | null>().catch(() => null),
+      ])
+      setSettings(rawSettings ?? {})
+      if (rawConversations && Array.isArray(rawConversations.conversations)) {
+        const conversations = rawConversations.conversations
+          .map(sanitizeConversation)
+          .filter((conversation): conversation is WebConversation => Boolean(conversation))
+        if (conversations.length > 0) {
+          const activeConversationId = conversations.some(item => item.id === rawConversations.activeConversationId)
+            ? rawConversations.activeConversationId
+            : conversations[0].id
+          setStore({ ...rawConversations, conversations, activeConversationId })
+        }
+      }
+    } finally {
+      setHydrated(true)
+    }
+  }
+
   useEffect(() => {
     void refreshStatus()
+    void hydrateFromDaemon()
     const id = window.setInterval(() => void refreshStatus(), 3000)
     return () => window.clearInterval(id)
   }, [client])
 
   useEffect(() => {
+    if (!hydrated) return
+    const id = window.setTimeout(() => {
+      void client.saveConversations({
+        conversations: store.conversations,
+        activeConversationId: store.activeConversationId,
+      })
+    }, 350)
+    return () => window.clearTimeout(id)
+  }, [client, hydrated, store])
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, toolParts, runStatus])
+  }, [store, toolParts, runStatus])
+
+  const patchConversation = (conversationId: string, updater: (conversation: WebConversation) => WebConversation) => {
+    setStore(prev => ({
+      ...prev,
+      conversations: prev.conversations.map(conversation => (
+        conversation.id === conversationId ? updater(conversation) : conversation
+      )),
+    }))
+  }
+
+  const createNewSession = () => {
+    const conversation = createConversation()
+    setToolParts([])
+    setRunError(null)
+    setStore(prev => ({
+      ...prev,
+      conversations: [conversation, ...prev.conversations],
+      activeConversationId: conversation.id,
+    }))
+  }
 
   const sendMessage = async () => {
     const text = input.trim()
-    if (!text || runStatus === 'running') return
+    const conversation = activeConversation
+    if (!text || !conversation || runStatus === 'running') return
 
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
-    const userMessage: ChatMessage = { id: createId('user'), role: 'user', content: text, createdAt: Date.now() }
+    const userMessage: WebMessage = { id: createId('user'), role: 'user', content: [textPart(text)], createdAt: Date.now() }
     const assistantId = createId('assistant')
+    const assistantMessage: WebMessage = { id: assistantId, role: 'assistant', content: [], createdAt: Date.now() }
     const runId = createId('web_run')
     let assistantText = ''
 
@@ -115,31 +296,48 @@ export function App() {
     setRunError(null)
     setRunStatus('running')
     setToolParts([])
-    setMessages(prev => [
-      ...prev,
-      userMessage,
-      { id: assistantId, role: 'assistant', content: '', createdAt: Date.now() },
-    ])
+    patchConversation(conversation.id, current => ({
+      ...current,
+      title: current.messages.some(message => message.role === 'user') ? current.title : text.slice(0, 60),
+      messages: [...current.messages, userMessage, assistantMessage],
+      updatedAt: Date.now(),
+    }))
+
+    const conversationForRequest: WebConversation = {
+      ...conversation,
+      messages: [...conversation.messages, userMessage, assistantMessage],
+      title: conversation.messages.some(message => message.role === 'user') ? conversation.title : text.slice(0, 60),
+      updatedAt: Date.now(),
+    }
+    const projectBrief = conversation.folderPath
+      ? await client.getProjectBrief<{ files: string[]; tasksDone: number; tasksTotal: number } | null>({ folderPath: conversation.folderPath }).catch(() => null)
+      : null
 
     const request: AvaDaemonChatRequest = {
       runId,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are Ava Web, a browser client for Ava. Use daemon tools when the user asks for external state, local files, commands, or app actions. Keep final answers concise and useful.',
-        },
-        ...messages
-          .filter(message => message.sendToModel !== false)
-          .filter(message => message.content.trim())
-          .slice(-12)
-          .map(message => ({ role: message.role, content: message.content })),
-        { role: 'user', content: text },
-      ],
+      conversationId: conversation.id,
+      messages: [],
       metadata: {
+        clientContext: {
+          conversation: {
+            id: conversation.id,
+            title: conversationForRequest.title,
+            traits: conversation.traits,
+            folderPath: conversation.folderPath,
+            messages: conversationToClientMessages(conversationForRequest),
+          },
+          projectBrief: projectBrief ?? undefined,
+          folderPath: conversation.folderPath,
+        },
         streamOptions: {
           streamId: runId,
+          conversationId: conversation.id,
+          activeFolderPath: conversation.folderPath,
+          taskAllowedDirs: conversation.folderPath ? [conversation.folderPath] : undefined,
           temperature: 0.2,
         },
+        toolFormatMap: settings.modelToolFormatMap,
+        pluginStates: settings.pluginStates,
       },
     }
 
@@ -175,25 +373,37 @@ export function App() {
           if (event.type === 'chat.run.failed') {
             throw new Error(event.error)
           }
-          setMessages(prev => prev.map(message => (
-            message.id === assistantId ? { ...message, content: assistantText } : message
-          )))
+          patchConversation(conversation.id, current => ({
+            ...current,
+            messages: current.messages.map(message => (
+              message.id === assistantId ? { ...message, content: [textPart(assistantText)] } : message
+            )),
+            updatedAt: Date.now(),
+          }))
         },
       })
-      setMessages(prev => prev.map(message => (
-        message.id === assistantId
-          ? { ...message, content: assistantText || 'No visible response returned.' }
-          : message
-      )))
+      patchConversation(conversation.id, current => ({
+        ...current,
+        messages: current.messages.map(message => (
+          message.id === assistantId
+            ? { ...message, content: [textPart(assistantText || 'No visible response returned.')] }
+            : message
+        )),
+        updatedAt: Date.now(),
+      }))
       setRunStatus('idle')
     } catch (error) {
       if (controller.signal.aborted) return
       const message = error instanceof Error ? error.message : String(error)
       setRunError(message)
       setRunStatus('failed')
-      setMessages(prev => prev.map(item => (
-        item.id === assistantId ? { ...item, content: `Request failed: ${message}` } : item
-      )))
+      patchConversation(conversation.id, current => ({
+        ...current,
+        messages: current.messages.map(item => (
+          item.id === assistantId ? { ...item, content: [textPart(`Request failed: ${message}`)] } : item
+        )),
+        updatedAt: Date.now(),
+      }))
     }
   }
 
@@ -234,18 +444,38 @@ export function App() {
           </button>
           <dl>
             <div><dt>Runtime</dt><dd>{status?.runtimeAttached ? 'attached' : '-'}</dd></div>
-            <div><dt>Node</dt><dd>{status?.node ?? '-'}</dd></div>
+            <div><dt>Conversations</dt><dd>{store.conversations.length}</dd></div>
             <div><dt>PID</dt><dd>{status?.pid ?? '-'}</dd></div>
           </dl>
           {statusError && <p className="status-error">{statusError}</p>}
+        </section>
+
+        <section className="session-card">
+          <div className="session-title">
+            <span>Sessions</span>
+            <button type="button" onClick={createNewSession}><MessageSquarePlus size={14} /></button>
+          </div>
+          <div className="session-list">
+            {store.conversations.map(conversation => (
+              <button
+                key={conversation.id}
+                type="button"
+                className={conversation.id === activeConversation?.id ? 'active' : ''}
+                onClick={() => setStore(prev => ({ ...prev, activeConversationId: conversation.id }))}
+              >
+                <span>{conversation.title || 'Untitled'}</span>
+                {conversation.folderPath && <Folder size={12} />}
+              </button>
+            ))}
+          </div>
         </section>
       </aside>
 
       <main className="chat-main">
         <header className="chat-header">
           <div>
-            <h2>Chat Workspace</h2>
-            <p>Streams through <code>{daemonUrl}</code></p>
+            <h2>{activeConversation?.title ?? 'Chat Workspace'}</h2>
+            <p>Daemon context mode · <code>{daemonUrl}</code></p>
           </div>
           <span className={`run-pill ${runStatus}`}>
             {runStatus === 'running' ? <Loader2 size={14} className="spin" /> : <Circle size={10} />}
@@ -254,7 +484,7 @@ export function App() {
         </header>
 
         <div className="message-list" ref={scrollRef}>
-          {messages.map(message => (
+          {(activeConversation?.messages ?? []).map(message => (
             <article className={`message ${message.role}`} key={message.id}>
               <div className="avatar">{message.role === 'user' ? <UserRound size={16} /> : <Bot size={16} />}</div>
               <div className="bubble">
@@ -262,7 +492,7 @@ export function App() {
                   <strong>{message.role === 'user' ? 'You' : 'Ava'}</strong>
                   <span>{formatTime(message.createdAt)}</span>
                 </div>
-                <p>{message.content || (message.role === 'assistant' && runStatus === 'running' ? 'Thinking...' : '')}</p>
+                <p>{messageText(message) || (message.role === 'assistant' && runStatus === 'running' ? 'Thinking...' : '')}</p>
               </div>
             </article>
           ))}
