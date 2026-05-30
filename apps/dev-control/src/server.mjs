@@ -9,6 +9,7 @@ const PORT = Number(process.env.AVA_DEV_CONTROL_PORT || 17872)
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const STATE_DIR = resolve(ROOT, '.ava-dev-control')
 const LAYOUT_PATH = resolve(STATE_DIR, 'layout.json')
+const AVA_BRAIN_INPUT_FLOW_PATH = resolve(ROOT, 'apps', 'dev-control', 'ava-brain', 'ava-brain-input-flow.html')
 const IS_WIN = process.platform === 'win32'
 const NPM = IS_WIN ? 'npm.cmd' : 'npm'
 const MAX_LOG_LINES = 500
@@ -142,6 +143,15 @@ function json(res, statusCode, body) {
 function empty(res, statusCode) {
   res.writeHead(statusCode, corsHeaders)
   res.end()
+}
+
+function html(res, statusCode, body) {
+  res.writeHead(statusCode, {
+    ...corsHeaders,
+    'Cache-Control': 'no-store',
+    'Content-Type': 'text/html; charset=utf-8',
+  })
+  res.end(body)
 }
 
 function targetById(id) {
@@ -400,6 +410,11 @@ async function handle(req, res) {
     if (url.pathname === '/layout' && req.method === 'POST') {
       const body = await readJsonBody(req)
       json(res, 200, { ok: true, result: writeLayout(body) })
+      return
+    }
+
+    if (url.pathname === '/ava-brain/input-flow' && req.method === 'GET') {
+      html(res, 200, readFileSync(AVA_BRAIN_INPUT_FLOW_PATH, 'utf8'))
       return
     }
 

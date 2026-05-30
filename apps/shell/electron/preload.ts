@@ -527,6 +527,8 @@ const ava = {
   },
 
   agent: {
+    classifyInput: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:classifyInput', request),
+    dispatchInput: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:dispatchInput', request),
     analyzeTask: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:analyzeTask', request),
     planTask: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:planTask', request),
   },

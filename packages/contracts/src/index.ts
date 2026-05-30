@@ -183,6 +183,95 @@ export type AvaApiErr = {
 
 export type AvaApiResponse<T> = AvaApiOk<T> | AvaApiErr
 
+export type AvaInputRoute =
+  | 'normal_chat'
+  | 'meta_question'
+  | 'task_intake'
+  | 'continue_intake'
+  | 'task_confirmation'
+  | 'requirement_correction'
+  | 'cancel_or_pause'
+  | 'retry_or_continue'
+  | 'permission_response'
+  | 'small_task'
+  | 'file_or_attachment_input'
+  | 'url_input'
+  | 'preference_or_setting'
+  | 'unknown_or_ambiguous'
+
+export type AvaInputWorkflow =
+  | 'chat'
+  | 'intake'
+  | 'intake_reply'
+  | 'intake_reanalysis'
+  | 'cancel'
+  | 'recovery'
+  | 'permission'
+  | 'direct_tool'
+  | 'file_media'
+  | 'browser'
+  | 'settings'
+  | 'clarify'
+
+export type AvaInputClassifySource = 'rule' | 'fallback'
+
+export type AvaInputAttachment = {
+  kind?: 'image' | 'video' | 'audio' | 'document' | 'archive' | 'code' | 'url' | 'unknown'
+  path?: string
+  url?: string
+  name?: string
+  mimeType?: string
+  sizeBytes?: number
+}
+
+export type AvaInputClassifyRequest = {
+  content: string
+  hasCommandInvocation?: boolean
+  pendingIntake?: boolean
+  pendingIntakeStage?: 'clarifying' | 'awaiting_summary_confirm'
+  workingDirectory?: string
+  traits?: string[]
+  attachments?: AvaInputAttachment[]
+}
+
+export type AvaInputClassifyResult = {
+  route: AvaInputRoute
+  workflow: AvaInputWorkflow
+  requiresTaskIntake: boolean
+  needsClarification?: boolean
+  source: AvaInputClassifySource
+  reason: string
+  confidence: number
+}
+
+export type AvaWorkflowAction =
+  | 'run_chat'
+  | 'start_task_intake'
+  | 'continue_intake'
+  | 'confirm_task'
+  | 'reanalyze_intake'
+  | 'cancel_intake'
+  | 'recover_task'
+  | 'handle_permission'
+  | 'run_direct_tool'
+  | 'handle_file_media'
+  | 'handle_url'
+  | 'update_preference'
+  | 'ask_clarifying_question'
+
+export type AvaWorkflowImplementationStatus = 'implemented' | 'planned'
+
+export type AvaInputDispatchRequest = AvaInputClassifyRequest
+
+export type AvaInputDispatchResult = {
+  classification: AvaInputClassifyResult
+  action: AvaWorkflowAction
+  workflow: AvaInputWorkflow
+  status: AvaWorkflowImplementationStatus
+  fallbackAction?: AvaWorkflowAction
+  reason: string
+}
+
 export type AvaDaemonStatus = {
   ok: true
   service: 'ava-daemon'
@@ -201,6 +290,8 @@ export type AvaDaemonApiPath =
   | '/runtime/status'
   | '/settings/load'
   | '/settings/save'
+  | '/input/classify'
+  | '/input/dispatch'
   | '/tasks/analyze'
   | '/tasks/plan'
   | '/mcp/servers'

@@ -17,7 +17,7 @@ async function main() {
   }
 
   console.log(`[ava-daemon] runtime listening on ${daemon.url}`)
-  console.log('[ava-daemon] endpoints: /health, /runtime/status, /tasks/analyze, /tasks/plan, /mcp/servers, /chat/stream, /chat/ws')
+  console.log('[ava-daemon] endpoints: /health, /runtime/status, /input/classify, /input/dispatch, /tasks/analyze, /tasks/plan, /mcp/servers, /chat/stream, /chat/ws')
 
   async function shutdown(signal: string) {
     console.log(`[ava-daemon] received ${signal}; shutting down`)

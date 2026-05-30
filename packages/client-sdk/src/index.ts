@@ -3,6 +3,10 @@ import type {
   AvaChatStreamEvent,
   AvaDaemonChatRequest,
   AvaDaemonStatus,
+  AvaInputClassifyRequest,
+  AvaInputClassifyResult,
+  AvaInputDispatchRequest,
+  AvaInputDispatchResult,
   AvaTaskAnalyzeRequest,
   AvaTaskAnalyzeResult,
   AvaTaskPlanRequest,
@@ -46,6 +50,14 @@ export class AvaClient {
 
   async saveSettings(data: unknown): Promise<boolean> {
     return this.postResult<boolean>('/settings/save', { data })
+  }
+
+  async classifyInput(request: AvaInputClassifyRequest): Promise<AvaInputClassifyResult> {
+    return this.postResult<AvaInputClassifyResult>('/input/classify', request)
+  }
+
+  async dispatchInput(request: AvaInputDispatchRequest): Promise<AvaInputDispatchResult> {
+    return this.postResult<AvaInputDispatchResult>('/input/dispatch', request)
   }
 
   async analyzeTask(request: AvaTaskAnalyzeRequest): Promise<AvaTaskAnalyzeResult> {

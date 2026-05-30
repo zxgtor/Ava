@@ -179,6 +179,7 @@ const DEFAULT_NODE_POSITIONS: Record<string, NodePosition> = {
   'dev-control-backend': { x: 79, y: 28 },
   'daemon-test-ui': { x: 79, y: 47 },
   'unit-test': { x: 79, y: 70 },
+  'ava-brain': { x: 79, y: 116 },
 }
 const CANVAS_NODE_POSITION_MIN = -500
 const CANVAS_NODE_POSITION_MAX = 600
@@ -273,6 +274,17 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
     dependencies: ['Ava Dev Control Panel route', 'Ava Daemon runtime API', 'LLM provider when routing tests run', 'Test workspace'],
     dependsOn: ['daemon-test-ui', 'daemon'],
   },
+  'ava-brain': {
+    type: 'dev-infra',
+    features: [
+      'User input flow map',
+      'Desktop / daemon boundary',
+      'Task intake discussion surface',
+      'Draggable brain canvas',
+    ],
+    dependencies: ['Ava Dev Control Panel route'],
+    dependsOn: ['daemon-test-ui'],
+  },
 }
 const DEPENDENCY_PIN_COLORS: Record<string, string> = {
   daemon: '#56d6ff',
@@ -283,6 +295,7 @@ const DEPENDENCY_PIN_COLORS: Record<string, string> = {
   'dev-control-backend': '#f4c95d',
   'daemon-test-ui': '#ffd36a',
   'unit-test': '#a8ccff',
+  'ava-brain': '#a999ff',
 }
 const SVG_NODE_WIDTH = 285
 const SVG_NODE_BASE_HEIGHT = 148
@@ -378,6 +391,10 @@ function nodeScreenStyle(node: DevDependencyNode, canvasSize: CanvasSize, canvas
 
 function openExternalTab(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function avaBrainUrl(_devControlUrl: string) {
+  return '/ava-brain/input-flow'
 }
 
 function displayDevStatus(node: DevDependencyNode, status: string, process?: DevProcess) {
@@ -1311,6 +1328,17 @@ export function App() {
           url: baseUrl,
         },
       },
+      {
+        id: 'ava-brain',
+        ...position('ava-brain'),
+        metadata: DEV_NODE_METADATA['ava-brain'],
+        feature: {
+          label: 'Ava Brain',
+          description: 'Open the interactive user input flow and desktop/daemon boundary map.',
+          status: 'available',
+          url: avaBrainUrl(devControlUrl),
+        },
+      },
     ]
   }, [baseUrl, devControlStatus, devControlUrl, nodePositions, processById])
 
@@ -1392,6 +1420,10 @@ export function App() {
         ? [
           { label: 'Open Unit Test', disabled: devBusyId === 'daemon', run: () => { void openUnitTestPage() } },
         ]
+        : node.id === 'ava-brain'
+          ? [
+            { label: 'Open Ava Brain', disabled: false, run: () => { openExternalTab(avaBrainUrl(devControlUrl)) } },
+          ]
         : []
       : [
         { label: 'Start', disabled: !process?.available || Boolean(process.running), run: () => { setOpenNodeMenuId(null); void controlDevProcess(node.id, 'start') } },
@@ -1860,6 +1892,11 @@ export function App() {
                   {selectedDevNode.id === 'unit-test' && (
                     <div className="dev-actions">
                       <button className="primary" disabled={devBusyId === 'daemon'} onClick={() => { setSelectedDevNodeId(null); void openUnitTestPage() }}>Open Unit Test</button>
+                    </div>
+                  )}
+                  {selectedDevNode.id === 'ava-brain' && (
+                    <div className="dev-actions">
+                      <button className="primary" onClick={() => { setSelectedDevNodeId(null); openExternalTab(avaBrainUrl(devControlUrl)) }}>Open Ava Brain</button>
                     </div>
                   )}
                 </article>

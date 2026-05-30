@@ -1,0 +1,1039 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ava Brain Input Flow</title>
+  <style>
+    :root {
+      --bg: #071018;
+      --panel: rgba(13, 25, 38, 0.78);
+      --panel-strong: rgba(19, 39, 58, 0.92);
+      --line: rgba(122, 160, 178, 0.28);
+      --text: #eaf7f5;
+      --muted: #84a4b6;
+      --green: #69f0bb;
+      --cyan: #4ec8ff;
+      --yellow: #f4c95d;
+      --red: #ff6f8f;
+      --violet: #a999ff;
+      --llm: #ff9fdb;
+      --desktop: #f4c95d;
+      --daemon: #4ec8ff;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 17% 24%, rgba(67, 193, 150, 0.16), transparent 34rem),
+        radial-gradient(circle at 82% 12%, rgba(78, 200, 255, 0.14), transparent 32rem),
+        linear-gradient(135deg, #061118 0%, #0c1020 62%, #150b1b 100%);
+      font-family: ui-sans-serif, "Segoe UI Variable", "Manrope", "Aptos", sans-serif;
+      overflow-x: hidden;
+    }
+
+    .shell {
+      min-height: 100vh;
+      padding: 26px 34px 38px;
+    }
+
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 26px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(105, 240, 187, 0.42);
+      border-radius: 14px;
+      color: var(--green);
+      background: rgba(105, 240, 187, 0.08);
+      box-shadow: 0 0 30px rgba(105, 240, 187, 0.13);
+      font: 800 21px/1 ui-monospace, "Cascadia Code", monospace;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(22px, 2.3vw, 36px);
+      letter-spacing: -0.045em;
+      line-height: 1;
+    }
+
+    .subtitle {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      max-width: 680px;
+    }
+
+    .chip {
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: rgba(255, 255, 255, 0.05);
+      color: #cfe2e7;
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .chip strong { color: var(--text); }
+
+    .brain {
+      position: relative;
+      min-height: calc(100vh - 150px);
+      border-top: 1px solid rgba(255, 255, 255, 0.07);
+      overflow: hidden;
+    }
+
+    .grid {
+      position: absolute;
+      inset: 0;
+      opacity: 0.42;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: radial-gradient(circle at 50% 50%, black, transparent 76%);
+    }
+
+    .halo {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 560px;
+      height: 560px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background:
+        conic-gradient(from 20deg, transparent, rgba(105, 240, 187, 0.3), transparent 22%, rgba(78, 200, 255, 0.26), transparent 48%, rgba(169, 153, 255, 0.18), transparent 76%);
+      filter: blur(18px);
+      opacity: 0.28;
+      animation: slowSpin 28s linear infinite;
+    }
+
+    @keyframes slowSpin {
+      to { transform: translate(-50%, -50%) rotate(360deg); }
+    }
+
+    .canvas {
+      position: relative;
+      height: calc(100vh - 154px);
+      min-height: 760px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .canvas.panning {
+      cursor: grabbing;
+    }
+
+    .world {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 2000px;
+      height: 1760px;
+      transform-origin: 0 0;
+    }
+
+    .node {
+      position: absolute;
+      width: 245px;
+      padding: 14px 14px 13px;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(18, 31, 46, 0.92), rgba(9, 18, 29, 0.86));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+      cursor: grab;
+      user-select: none;
+    }
+
+    .node:hover {
+      transform: translateY(-3px);
+      border-color: rgba(78, 200, 255, 0.55);
+      background: linear-gradient(180deg, rgba(22, 47, 68, 0.95), rgba(10, 24, 38, 0.9));
+    }
+
+    .node.dragging {
+      cursor: grabbing;
+      z-index: 20;
+      transition: none;
+      border-color: rgba(105, 240, 187, 0.68);
+    }
+
+    .node h2 {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: -0.015em;
+    }
+
+    .node p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .intent-type-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 5px;
+      margin-top: 11px;
+    }
+
+    .intent-type-grid span {
+      min-width: 0;
+      padding: 5px 7px;
+      border: 1px solid rgba(78, 200, 255, 0.16);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.045);
+      color: #d8edf4;
+      font: 800 9px/1.15 ui-monospace, "Cascadia Code", monospace;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .node small {
+      display: inline-flex;
+      margin-top: 11px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: #081018;
+      background: var(--green);
+      font: 800 10px/1 ui-monospace, "Cascadia Code", monospace;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .node.yellow small { background: var(--yellow); }
+    .node.cyan small { background: var(--cyan); }
+    .node.red small { background: var(--red); }
+    .node.violet small { background: var(--violet); color: #0c0920; }
+    .node.llm small { background: var(--llm); color: #190716; }
+
+    .node.red {
+      border-color: rgba(255, 111, 143, 0.32);
+      background: linear-gradient(180deg, rgba(55, 22, 34, 0.92), rgba(24, 13, 22, 0.86));
+    }
+
+    .node.desktop {
+      border-color: rgba(244, 201, 93, 0.28);
+      background: linear-gradient(180deg, rgba(45, 37, 20, 0.9), rgba(20, 19, 14, 0.84));
+    }
+
+    .node.daemon {
+      border-color: rgba(78, 200, 255, 0.28);
+      background: linear-gradient(180deg, rgba(18, 43, 62, 0.92), rgba(8, 21, 34, 0.86));
+    }
+
+    .node.shared {
+      border-color: rgba(169, 153, 255, 0.3);
+    }
+
+    .node.llm {
+      border-color: rgba(255, 159, 219, 0.34);
+      background: linear-gradient(180deg, rgba(58, 25, 51, 0.92), rgba(24, 13, 28, 0.88));
+    }
+
+    .lane {
+      position: absolute;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.025);
+      pointer-events: auto;
+      cursor: grab;
+    }
+
+    .lane.dragging {
+      cursor: grabbing;
+      z-index: 3;
+      border-color: rgba(105, 240, 187, 0.5);
+    }
+
+    .lane.resizing {
+      cursor: nwse-resize;
+      z-index: 3;
+      border-color: rgba(78, 200, 255, 0.56);
+    }
+
+    .lane span {
+      position: absolute;
+      left: 18px;
+      top: 14px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: #0b1018;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    .lane-resize {
+      position: absolute;
+      right: 9px;
+      bottom: 9px;
+      width: 22px;
+      height: 22px;
+      border-right: 2px solid rgba(255, 255, 255, 0.38);
+      border-bottom: 2px solid rgba(255, 255, 255, 0.38);
+      border-radius: 4px;
+      cursor: nwse-resize;
+      pointer-events: auto;
+      opacity: 0.75;
+    }
+
+    .lane-resize:hover {
+      opacity: 1;
+      border-color: rgba(78, 200, 255, 0.9);
+    }
+
+    .lane.desktop {
+      left: 28px;
+      top: 16px;
+      width: 1888px;
+      height: 590px;
+      border-color: rgba(244, 201, 93, 0.18);
+    }
+
+    .lane.desktop span { background: var(--desktop); }
+
+    .lane.daemon {
+      left: 28px;
+      top: 660px;
+      width: 1888px;
+      height: 1040px;
+      border-color: rgba(78, 200, 255, 0.2);
+    }
+
+    .lane.daemon span { background: var(--daemon); }
+
+    .runtime-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 9px;
+      color: var(--muted);
+      font: 800 10px/1 ui-monospace, "Cascadia Code", monospace;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .runtime-tag::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    .runtime-tag.desktop { color: var(--desktop); }
+    .runtime-tag.daemon { color: var(--daemon); }
+    .runtime-tag.shared { color: var(--violet); }
+    .runtime-tag.llm { color: var(--llm); }
+
+    svg {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 2000px;
+      height: 1760px;
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    path {
+      fill: none;
+      stroke: rgba(122, 160, 178, 0.32);
+      stroke-width: 1.45;
+      stroke-linecap: round;
+      stroke-dasharray: 6 8;
+      filter: drop-shadow(0 0 8px rgba(78, 200, 255, 0.16));
+    }
+
+    path.primary {
+      stroke: rgba(78, 200, 255, 0.72);
+      stroke-width: 1.8;
+      stroke-dasharray: none;
+    }
+
+    path.warn { stroke: rgba(244, 201, 93, 0.72); }
+    path.stop { stroke: rgba(255, 111, 143, 0.7); }
+    path.llm-call {
+      stroke: rgba(255, 159, 219, 0.74);
+      stroke-dasharray: 2 7;
+    }
+
+    .decision {
+      position: absolute;
+      width: 132px;
+      height: 132px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 16px;
+      border: 1px solid rgba(105, 240, 187, 0.36);
+      border-radius: 34px;
+      background: rgba(8, 22, 32, 0.74);
+      box-shadow: 0 0 40px rgba(105, 240, 187, 0.09);
+      color: #c9fff0;
+      font-weight: 800;
+      font-size: 12px;
+      transform: rotate(45deg);
+    }
+
+    .decision span {
+      transform: rotate(-45deg);
+      display: block;
+      line-height: 1.25;
+    }
+
+    .d-task { left: 500px; top: 1060px; }
+    .d-unknown { left: 780px; top: 1240px; }
+    .d-reply { left: 1370px; top: 292px; border-color: rgba(244, 201, 93, 0.42); color: #ffefbd; }
+
+    .canvas-controls {
+      position: absolute;
+      right: 18px;
+      top: 18px;
+      z-index: 30;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: 16px;
+      background: rgba(7, 16, 24, 0.78);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+    }
+
+    .canvas-controls button {
+      min-width: 34px;
+      height: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+      font-weight: 900;
+      cursor: pointer;
+    }
+
+    .canvas-controls [data-layout="auto"] {
+      min-width: 52px;
+      padding: 0 10px;
+    }
+
+    .canvas-controls button:hover {
+      background: rgba(78, 200, 255, 0.18);
+    }
+
+    .zoom-label {
+      min-width: 52px;
+      text-align: center;
+      color: #d8edf1;
+      font: 800 12px/1 ui-monospace, "Cascadia Code", monospace;
+    }
+
+    .note {
+      position: absolute;
+      left: 4%;
+      bottom: 18px;
+      max-width: 680px;
+      color: #aac2cf;
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 13px 16px;
+      border-left: 2px solid rgba(105, 240, 187, 0.64);
+      background: rgba(4, 12, 20, 0.48);
+    }
+
+    .note strong { color: var(--text); }
+
+    @media (max-width: 980px) {
+      .shell { padding: 20px; }
+      .top { align-items: flex-start; flex-direction: column; }
+      .canvas { height: auto; min-height: 0; display: grid; gap: 14px; padding: 18px 0 120px; }
+      .world { position: relative; width: auto; height: auto; transform: none !important; display: grid; gap: 14px; }
+      .node, .decision, .note { position: relative; inset: auto; left: auto; top: auto; bottom: auto; width: auto; transform: none; }
+      .decision span { transform: none; }
+      svg, .halo, .lane, .canvas-controls { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div class="brand">
+        <div class="mark">{•}</div>
+        <div>
+          <h1>Ava Brain: User Input Flow</h1>
+          <p class="subtitle">A discussion map for task intake, clarification, planning, and execution.</p>
+        </div>
+      </div>
+      <div class="legend" aria-label="Legend">
+        <span class="chip"><strong>Desktop</strong> shell/UI state today</span>
+        <span class="chip"><strong>Daemon</strong> runtime/planner today</span>
+        <span class="chip"><strong>Yellow</strong> should migrate to daemon</span>
+        <span class="chip"><strong>Pink dashed</strong> sends prompt to LLM</span>
+        <span class="chip"><strong>Red</strong> cancel or blocked path</span>
+      </div>
+    </header>
+
+    <section class="brain" aria-label="Ava brain flow chart">
+      <div class="grid"></div>
+      <div class="halo"></div>
+
+      <div class="canvas">
+        <div class="canvas-controls" aria-label="Canvas controls">
+          <button type="button" data-zoom="out">-</button>
+          <button type="button" data-zoom="reset" class="zoom-label">100%</button>
+          <button type="button" data-zoom="in">+</button>
+          <button type="button" data-layout="auto" title="Auto organize cards and lines">Auto</button>
+        </div>
+
+        <div class="world" id="world">
+          <div class="lane desktop" data-lane="desktop"><span>Ava Desktop / Shell</span><i class="lane-resize" aria-hidden="true"></i></div>
+          <div class="lane daemon" data-lane="daemon"><span>Ava Daemon / Runtime</span><i class="lane-resize" aria-hidden="true"></i></div>
+
+          <svg viewBox="0 0 2000 1760" preserveAspectRatio="none" aria-hidden="true">
+            <path class="primary" data-edge="input,router" />
+            <path class="primary" data-edge="router,dispatcher" />
+            <path class="primary" data-edge="dispatcher,task" />
+            <path data-edge="dispatcher,normal" />
+            <path class="primary" data-edge="task,intake" />
+            <path class="warn" data-edge="intake,classifier" />
+            <path data-edge="task,normal" />
+            <path class="primary" data-edge="intake,analyze" />
+            <path class="primary" data-edge="analyze,question" />
+            <path class="primary" data-edge="question,reply" />
+            <path class="primary" data-edge="reply,answer" />
+            <path class="warn" data-edge="reply,correction" />
+            <path class="stop" data-edge="reply,cancel" />
+            <path class="warn" data-edge="reply,meta" />
+            <path class="primary" data-edge="answer,unknown" />
+            <path class="primary" data-edge="question,summary" />
+            <path class="warn" data-edge="correction,analyze" />
+            <path class="stop" data-edge="cancel,normal" />
+            <path class="warn" data-edge="meta,normal" />
+            <path class="primary" data-edge="unknown,plan" />
+            <path class="primary" data-edge="plan,execute" />
+            <path class="primary" data-edge="execute,stepgate" />
+            <path class="primary" data-edge="stepgate,execute" />
+            <path class="stop" data-edge="stepgate,blocked" />
+            <path class="primary" data-edge="stepgate,report" />
+            <path class="primary" data-edge="execute,report" />
+            <path class="warn" data-edge="summary,unknown" />
+            <path class="llm-call" data-edge="normal,llm" />
+            <path class="llm-call" data-edge="classifier,llm" />
+            <path class="llm-call" data-edge="analyze,llm" />
+            <path class="llm-call" data-edge="plan,llm" />
+            <path class="llm-call" data-edge="execute,llm" />
+            <path class="llm-call" data-edge="report,llm" />
+          </svg>
+
+        <article class="node desktop" data-node="input" style="left: 70px; top: 90px;">
+          <div class="runtime-tag desktop">desktop</div>
+          <h2>1. User Input</h2>
+          <p>Message, attachments, command invocation, active conversation, current folder.</p>
+          <small>entry</small>
+        </article>
+
+        <article class="node daemon" data-node="router" style="left: 70px; top: 760px; width: 360px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>2. Intent Gate</h2>
+          <p>Daemon classifies P0/P1 routes and maps them to chat, intake, recovery, permission, file/media, browser, settings, or clarify workflows.</p>
+          <div class="intent-type-grid" aria-label="Intent Gate input types">
+            <span>normal_chat</span>
+            <span>meta_question</span>
+            <span>task_request</span>
+            <span>small_task</span>
+            <span>big_task</span>
+            <span>command_invocation</span>
+            <span>task_confirmation</span>
+            <span>clarification_answer</span>
+            <span>requirement_correction</span>
+            <span>cancel_or_pause</span>
+            <span>retry_or_continue</span>
+            <span>tool_result_followup</span>
+            <span>file_or_attachment</span>
+            <span>permission_response</span>
+            <span>preference_or_setting</span>
+            <span>unknown_or_ambiguous</span>
+          </div>
+          <small>/input/classify</small>
+        </article>
+
+        <article class="node daemon cyan" data-node="dispatcher" style="left: 500px; top: 760px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Workflow Dispatcher</h2>
+          <p>Maps classified route to next action: chat, intake, cancel, recovery, permission, direct tool, file/media, browser, settings, or clarify.</p>
+          <small>/input/dispatch</small>
+        </article>
+
+        <article class="node desktop yellow" data-node="intake" style="left: 760px; top: 90px;">
+          <div class="runtime-tag desktop">desktop</div>
+          <h2>3. Task Intake</h2>
+          <p>Desktop currently owns pending intake state, question index, answer collection, and summary confirmation.</p>
+          <small>move to daemon</small>
+        </article>
+
+        <article class="node desktop yellow" data-node="classifier" style="left: 1110px; top: 90px;">
+          <div class="runtime-tag desktop">desktop now</div>
+          <h2>4. Reply Classifier</h2>
+          <p>Should classify answer vs correction vs cancel vs meta question before continuing clarification.</p>
+          <small>missing/weak</small>
+        </article>
+
+        <article class="node desktop" data-node="normal" style="left: 70px; top: 380px;">
+          <div class="runtime-tag desktop">desktop route</div>
+          <h2>Normal Chat</h2>
+          <p>Conceptual question, status question, or meta question goes directly to chat response.</p>
+          <small>chat</small>
+        </article>
+
+        <article class="node daemon" data-node="analyze" style="left: 760px; top: 1040px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Analyze Requirements</h2>
+          <p>Daemon returns project summary, architecture assumptions, high-priority unknowns, and risks.</p>
+          <small>/tasks/analyze</small>
+        </article>
+
+        <article class="node desktop yellow" data-node="question" style="left: 760px; top: 380px;">
+          <div class="runtime-tag desktop">desktop</div>
+          <h2>Ask One Question</h2>
+          <p>Only one high-priority unknown is shown. Options become quick replies, but free text must be classified.</p>
+          <small>move to daemon</small>
+        </article>
+
+        <article class="node desktop yellow" data-node="summary" style="left: 1640px; top: 380px;">
+          <div class="runtime-tag desktop">desktop</div>
+          <h2>Summary Confirm</h2>
+          <p>When unknowns are resolved, show goal, answers, risks, and ask user to confirm before planning.</p>
+          <small>move to daemon</small>
+        </article>
+
+        <article class="node daemon violet" data-node="plan" style="left: 1020px; top: 1040px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Execution Plan</h2>
+          <p>Daemon creates small steps sized for context: inspect, scaffold, install, write, preview, validate, repair.</p>
+          <small>/tasks/plan</small>
+        </article>
+
+        <article class="node daemon" data-node="execute" style="left: 1300px; top: 1040px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Agent Loop</h2>
+          <p>Run current step only, call allowed tools, require evidence, continue until validation passes or no progress.</p>
+          <small>runtime</small>
+        </article>
+
+        <article class="node daemon" data-node="report" style="left: 1580px; top: 1400px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Final Report</h2>
+          <p>Only after gates pass: changed files, validation result, preview result, remaining risks.</p>
+          <small>done</small>
+        </article>
+
+        <div class="decision d-task" data-node="task"><span>Task-like request?</span></div>
+        <div class="decision d-unknown" data-node="unknown"><span>More high-priority unknowns?</span></div>
+        <div class="decision d-reply" data-node="reply"><span>Answer or correction?</span></div>
+
+        <article class="node desktop" data-node="answer" style="left: 1110px; top: 380px;">
+          <div class="runtime-tag desktop">desktop</div>
+          <h2>Answer Question</h2>
+          <p>Save the user's answer to the current clarification item, then decide whether another unknown remains.</p>
+          <small>answer</small>
+        </article>
+
+        <article class="node desktop yellow" data-node="correction" style="left: 1110px; top: 560px;">
+          <div class="runtime-tag desktop">desktop now</div>
+          <h2>Correct Requirement</h2>
+          <p>Merge user correction into the goal and rerun analysis instead of continuing old questions.</p>
+          <small>reanalyze</small>
+        </article>
+
+        <article class="node desktop red" data-node="cancel" style="left: 1460px; top: 90px;">
+          <div class="runtime-tag desktop">desktop</div>
+          <h2>Cancel Intake</h2>
+          <p>Clear pending task intake. Do not ask the next old question.</p>
+          <small>stop intake</small>
+        </article>
+
+        <article class="node desktop yellow" data-node="meta" style="left: 1460px; top: 220px;">
+          <div class="runtime-tag desktop">desktop</div>
+          <h2>Meta Question</h2>
+          <p>Pause the task flow and answer questions like “what can Ava do?” or “why are you asking this?”</p>
+          <small>answer first</small>
+        </article>
+
+        <article class="node daemon" data-node="stepgate" style="left: 1300px; top: 1400px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Step Evidence Gate</h2>
+          <p>Check required tools, file changes, build output, console/screenshot, and progress before advancing.</p>
+          <small>gate</small>
+        </article>
+
+        <article class="node daemon red" data-node="blocked" style="left: 1020px; top: 1400px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Blocked / Retry</h2>
+          <p>If no progress or missing evidence, show exact reason plus Retry/Continue options.</p>
+          <small>blocked</small>
+        </article>
+
+        <article class="node llm" data-node="llm" style="left: 1580px; top: 1040px;">
+          <div class="runtime-tag llm">LLM provider</div>
+          <h2>Model Call</h2>
+          <p>Daemon sends prompts to selected provider for chat, requirement analysis, reply classification, planning, execution, and final report text.</p>
+          <small>LLM</small>
+        </article>
+
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const canvas = document.querySelector('.canvas')
+    const world = document.querySelector('#world')
+    const zoomLabel = document.querySelector('.zoom-label')
+    const nodes = [...document.querySelectorAll('[data-node]')]
+    const lanes = [...document.querySelectorAll('[data-lane]')]
+    const edges = [...document.querySelectorAll('[data-edge]')]
+    const stateKey = 'ava-brain-input-flow-layout-v7'
+    let view = { x: 0, y: 0, scale: 1 }
+    let drag = null
+    let pan = null
+    let laneMove = null
+    let laneResize = null
+
+    function nodeCenter(name) {
+      const element = document.querySelector(`[data-node="${name}"]`)
+      if (!element) return { x: 0, y: 0 }
+      const x = parseFloat(element.style.left || 0)
+      const y = parseFloat(element.style.top || 0)
+      return { x: x + element.offsetWidth / 2, y: y + element.offsetHeight / 2 }
+    }
+
+    function elementRectInWorld(element) {
+      const computed = getComputedStyle(element)
+      return {
+        left: parseFloat(element.style.left || computed.left || 0),
+        top: parseFloat(element.style.top || computed.top || 0),
+        width: parseFloat(element.style.width || computed.width || 0),
+        height: parseFloat(element.style.height || computed.height || 0),
+      }
+    }
+
+    function nodesInsideLane(lane) {
+      const rect = elementRectInWorld(lane)
+      return nodes.filter(node => {
+        const left = parseFloat(node.style.left || 0)
+        const top = parseFloat(node.style.top || 0)
+        const centerX = left + node.offsetWidth / 2
+        const centerY = top + node.offsetHeight / 2
+        return centerX >= rect.left &&
+          centerX <= rect.left + rect.width &&
+          centerY >= rect.top &&
+          centerY <= rect.top + rect.height
+      }).map(node => ({
+        node,
+        left: parseFloat(node.style.left || 0),
+        top: parseFloat(node.style.top || 0),
+      }))
+    }
+
+    function edgePath(a, b) {
+      const start = nodeCenter(a)
+      const end = nodeCenter(b)
+      const dx = Math.max(80, Math.abs(end.x - start.x) * 0.48)
+      return `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}`
+    }
+
+    function renderEdges() {
+      for (const edge of edges) {
+        const [a, b] = edge.dataset.edge.split(',')
+        edge.setAttribute('d', edgePath(a, b))
+      }
+    }
+
+    function renderView() {
+      world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`
+      zoomLabel.textContent = `${Math.round(view.scale * 100)}%`
+      renderEdges()
+    }
+
+    function saveLayout() {
+      const positions = {}
+      for (const node of nodes) {
+        positions[node.dataset.node] = {
+          left: parseFloat(node.style.left || 0),
+          top: parseFloat(node.style.top || 0),
+        }
+      }
+      const laneLayout = {}
+      for (const lane of lanes) {
+        const computed = getComputedStyle(lane)
+        laneLayout[lane.dataset.lane] = {
+          left: parseFloat(lane.style.left || computed.left || 0),
+          top: parseFloat(lane.style.top || computed.top || 0),
+          width: parseFloat(lane.style.width || computed.width || 0),
+          height: parseFloat(lane.style.height || computed.height || 0),
+        }
+      }
+      localStorage.setItem(stateKey, JSON.stringify({ view, positions, lanes: laneLayout }))
+    }
+
+    function loadLayout() {
+      try {
+        const raw = localStorage.getItem(stateKey)
+        if (!raw) return
+        const parsed = JSON.parse(raw)
+        if (parsed.view) view = { ...view, ...parsed.view }
+        for (const [name, pos] of Object.entries(parsed.positions || {})) {
+          const node = document.querySelector(`[data-node="${name}"]`)
+          if (!node || typeof pos.left !== 'number' || typeof pos.top !== 'number') continue
+          node.style.left = `${pos.left}px`
+          node.style.top = `${pos.top}px`
+        }
+        for (const [name, rect] of Object.entries(parsed.lanes || {})) {
+          const lane = document.querySelector(`[data-lane="${name}"]`)
+          if (!lane) continue
+          if (typeof rect.left === 'number') lane.style.left = `${rect.left}px`
+          if (typeof rect.top === 'number') lane.style.top = `${rect.top}px`
+          if (typeof rect.width === 'number') lane.style.width = `${Math.max(180, rect.width)}px`
+          if (typeof rect.height === 'number') lane.style.height = `${Math.max(140, rect.height)}px`
+        }
+      } catch {
+        localStorage.removeItem(stateKey)
+      }
+    }
+
+    function zoomAt(clientX, clientY, factor) {
+      const rect = canvas.getBoundingClientRect()
+      const px = clientX - rect.left
+      const py = clientY - rect.top
+      const nextScale = Math.min(2.6, Math.max(0.35, view.scale * factor))
+      const worldX = (px - view.x) / view.scale
+      const worldY = (py - view.y) / view.scale
+      view = {
+        scale: nextScale,
+        x: px - worldX * nextScale,
+        y: py - worldY * nextScale,
+      }
+      renderView()
+      saveLayout()
+    }
+
+    function setRect(element, rect) {
+      element.style.left = `${rect.left}px`
+      element.style.top = `${rect.top}px`
+      if (typeof rect.width === 'number') element.style.width = `${rect.width}px`
+      if (typeof rect.height === 'number') element.style.height = `${rect.height}px`
+    }
+
+    function autoOrganize() {
+      const layout = {
+        input: { left: 70, top: 90 },
+        router: { left: 70, top: 770 },
+        dispatcher: { left: 500, top: 770 },
+        task: { left: 500, top: 1060 },
+        intake: { left: 860, top: 90 },
+        classifier: { left: 1160, top: 90 },
+        cancel: { left: 1460, top: 80 },
+        meta: { left: 1460, top: 220 },
+        normal: { left: 70, top: 390 },
+        question: { left: 860, top: 390 },
+        reply: { left: 1168, top: 412 },
+        answer: { left: 1360, top: 390 },
+        correction: { left: 1360, top: 560 },
+        summary: { left: 1660, top: 390 },
+        analyze: { left: 760, top: 1040 },
+        unknown: { left: 780, top: 1240 },
+        plan: { left: 1020, top: 1040 },
+        execute: { left: 1300, top: 1040 },
+        llm: { left: 1580, top: 1040 },
+        blocked: { left: 1020, top: 1400 },
+        stepgate: { left: 1300, top: 1400 },
+        report: { left: 1580, top: 1400 },
+      }
+      for (const [name, rect] of Object.entries(layout)) {
+        const node = document.querySelector(`[data-node="${name}"]`)
+        if (node) setRect(node, rect)
+      }
+      setRect(document.querySelector('[data-lane="desktop"]'), { left: 28, top: 16, width: 1888, height: 600 })
+      setRect(document.querySelector('[data-lane="daemon"]'), { left: 28, top: 690, width: 1888, height: 1020 })
+      view = { x: 0, y: 0, scale: 1 }
+      renderView()
+      saveLayout()
+    }
+
+    canvas.addEventListener('wheel', event => {
+      event.preventDefault()
+      zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * 0.0014))
+    }, { passive: false })
+
+    canvas.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return
+      if (event.target.closest('.canvas-controls')) return
+      const laneResizeHandle = event.target.closest('.lane-resize')
+      if (laneResizeHandle) {
+        const lane = laneResizeHandle.closest('[data-lane]')
+        const computed = getComputedStyle(lane)
+        laneResize = {
+          id: event.pointerId,
+          lane,
+          startX: event.clientX,
+          startY: event.clientY,
+          width: parseFloat(lane.style.width || computed.width || 0),
+          height: parseFloat(lane.style.height || computed.height || 0),
+        }
+        lane.classList.add('resizing')
+        lane.setPointerCapture(event.pointerId)
+        return
+      }
+      const node = event.target.closest('[data-node]')
+      if (node) {
+        drag = {
+          id: event.pointerId,
+          node,
+          startX: event.clientX,
+          startY: event.clientY,
+          left: parseFloat(node.style.left || 0),
+          top: parseFloat(node.style.top || 0),
+        }
+        node.classList.add('dragging')
+        node.setPointerCapture(event.pointerId)
+        return
+      }
+      const lane = event.target.closest('[data-lane]')
+      if (lane) {
+        const computed = getComputedStyle(lane)
+        laneMove = {
+          id: event.pointerId,
+          lane,
+          startX: event.clientX,
+          startY: event.clientY,
+          left: parseFloat(lane.style.left || computed.left || 0),
+          top: parseFloat(lane.style.top || computed.top || 0),
+          children: nodesInsideLane(lane),
+        }
+        lane.classList.add('dragging')
+        lane.setPointerCapture(event.pointerId)
+        return
+      }
+      pan = { id: event.pointerId, startX: event.clientX, startY: event.clientY, x: view.x, y: view.y }
+      canvas.classList.add('panning')
+      canvas.setPointerCapture(event.pointerId)
+    })
+
+    canvas.addEventListener('pointermove', event => {
+      if (drag && drag.id === event.pointerId) {
+        drag.node.style.left = `${drag.left + (event.clientX - drag.startX) / view.scale}px`
+        drag.node.style.top = `${drag.top + (event.clientY - drag.startY) / view.scale}px`
+        renderEdges()
+        return
+      }
+      if (laneMove && laneMove.id === event.pointerId) {
+        const deltaX = (event.clientX - laneMove.startX) / view.scale
+        const deltaY = (event.clientY - laneMove.startY) / view.scale
+        laneMove.lane.style.left = `${laneMove.left + deltaX}px`
+        laneMove.lane.style.top = `${laneMove.top + deltaY}px`
+        for (const child of laneMove.children) {
+          child.node.style.left = `${child.left + deltaX}px`
+          child.node.style.top = `${child.top + deltaY}px`
+        }
+        renderEdges()
+        return
+      }
+      if (laneResize && laneResize.id === event.pointerId) {
+        laneResize.lane.style.width = `${Math.max(180, laneResize.width + (event.clientX - laneResize.startX) / view.scale)}px`
+        laneResize.lane.style.height = `${Math.max(140, laneResize.height + (event.clientY - laneResize.startY) / view.scale)}px`
+        return
+      }
+      if (pan && pan.id === event.pointerId) {
+        view.x = pan.x + event.clientX - pan.startX
+        view.y = pan.y + event.clientY - pan.startY
+        renderView()
+      }
+    })
+
+    function stopInteraction(event) {
+      if (drag && drag.id === event.pointerId) {
+        drag.node.classList.remove('dragging')
+        drag = null
+        saveLayout()
+      }
+      if (laneMove && laneMove.id === event.pointerId) {
+        laneMove.lane.classList.remove('dragging')
+        laneMove = null
+        saveLayout()
+      }
+      if (laneResize && laneResize.id === event.pointerId) {
+        laneResize.lane.classList.remove('resizing')
+        laneResize = null
+        saveLayout()
+      }
+      if (pan && pan.id === event.pointerId) {
+        pan = null
+        canvas.classList.remove('panning')
+        saveLayout()
+      }
+    }
+
+    canvas.addEventListener('pointerup', stopInteraction)
+    canvas.addEventListener('pointercancel', stopInteraction)
+
+    document.querySelector('[data-zoom="in"]').addEventListener('click', () => {
+      const rect = canvas.getBoundingClientRect()
+      zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, 1.16)
+    })
+
+    document.querySelector('[data-zoom="out"]').addEventListener('click', () => {
+      const rect = canvas.getBoundingClientRect()
+      zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, 0.86)
+    })
+
+    document.querySelector('[data-zoom="reset"]').addEventListener('click', () => {
+      view = { x: 0, y: 0, scale: 1 }
+      renderView()
+      saveLayout()
+    })
+
+    document.querySelector('[data-layout="auto"]').addEventListener('click', autoOrganize)
+
+    loadLayout()
+    renderView()
+    window.addEventListener('resize', renderEdges)
+  </script>
+</body>
+</html>

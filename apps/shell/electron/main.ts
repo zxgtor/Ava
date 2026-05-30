@@ -340,6 +340,8 @@ function registerIpc(): void {
     return true
   })
 
+  ipcMain.handle('ava:agent:classifyInput', async (_e, request: unknown) => daemonRuntimeClient.classifyInput(request))
+  ipcMain.handle('ava:agent:dispatchInput', async (_e, request: unknown) => daemonRuntimeClient.dispatchInput(request))
   ipcMain.handle('ava:agent:analyzeTask', async (_e, request: unknown) => daemonRuntimeClient.analyzeTask(request))
   ipcMain.handle('ava:agent:planTask', async (_e, request: unknown) => daemonRuntimeClient.planTask(request))
 

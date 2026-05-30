@@ -8,6 +8,8 @@ function client(): AvaClient {
 export const daemonRuntimeClient = {
   loadSettings: () => client().loadSettings(),
   saveSettings: (data: unknown) => client().saveSettings(data),
+  classifyInput: (request: any) => client().classifyInput(request),
+  dispatchInput: (request: any) => client().dispatchInput(request),
   analyzeTask: (request: any) => client().analyzeTask(request),
   planTask: (request: any) => client().planTask(request),
   listMcpServers: () => client().listMcpServers<unknown[]>(),

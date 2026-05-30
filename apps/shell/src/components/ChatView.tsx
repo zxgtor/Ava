@@ -126,7 +126,7 @@ function retryableTaskPlan(plan: TaskExecutionPlan | undefined, taskId: string):
   }
 }
 
-function shouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
+function localShouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
   if (commandInvocation) return true
   return TASK_INTAKE_INTENT_RE.test(content)
 }
@@ -134,6 +134,18 @@ function shouldRequireTaskIntake(content: string, commandInvocation?: CommandInv
 function isTaskConfirmation(content: string): boolean {
   const normalized = content.trim().replace(/[.!?。！？,，;；:：\s]+$/g, '')
   return ENGLISH_CONFIRM_TASK_RE.test(normalized) || CHINESE_CONFIRM_TASK_RE.test(normalized)
+}
+
+function isClarificationRedirect(pending: PendingTaskIntake, content: string): boolean {
+  if (pending.stage !== 'clarifying') return false
+  const normalized = content.trim()
+  if (!normalized) return false
+
+  const currentQuestion = nextClarification(pending)
+  const options = currentQuestion?.options?.map(option => option.trim().toLowerCase()).filter(Boolean) ?? []
+  if (options.includes(normalized.toLowerCase())) return false
+
+  return /\b(not what i mean|misunderstood|misunderstand|actually|instead|change|cancel|stop|i want to|i need to|first)\b|不是|不对|误解|理解错|我的意思|其实|改成|取消|先看看|先看|先确认/i.test(normalized)
 }
 
 function highPriorityUnknowns(analysis?: ProjectAnalysis): ProjectAnalysis['unknowns'] {
@@ -258,6 +270,62 @@ function withRequiredWorkingDirectoryUnknown(
 function planningTraitsFor(content: string, conversation: Conversation): string[] {
   if (isCodingDesignBigTask(content)) return ['code']
   return conversation.traits?.length ? conversation.traits : detectTraitsFromText(content)
+}
+
+type InputClassifyResult = {
+  route?: string
+  workflow?: string
+  requiresTaskIntake?: boolean
+  needsClarification?: boolean
+  reason?: string
+  confidence?: number
+}
+
+type InputDispatchResult = {
+  classification?: InputClassifyResult
+  action?: string
+  workflow?: string
+  status?: 'implemented' | 'planned'
+  fallbackAction?: string
+  reason?: string
+}
+
+function attachmentInputs(attachments?: string[]) {
+  return (attachments ?? []).map(path => ({ path, name: path.split(/[\\/]/).pop() || path }))
+}
+
+async function dispatchInputViaDaemon(input: {
+  content: string
+  commandInvocation?: CommandInvocation
+  conversation: Conversation
+  attachments?: string[]
+  pendingIntake?: PendingTaskIntake | null
+}): Promise<InputDispatchResult> {
+  try {
+    const result = await window.ava.agent.dispatchInput({
+      content: input.content,
+      hasCommandInvocation: Boolean(input.commandInvocation),
+      pendingIntake: Boolean(input.pendingIntake),
+      pendingIntakeStage: input.pendingIntake?.stage,
+      workingDirectory: input.conversation.folderPath || extractWorkingDirectoryFromText(input.content),
+      traits: planningTraitsFor(input.content, input.conversation),
+      attachments: attachmentInputs(input.attachments),
+    }) as InputDispatchResult
+    return result
+  } catch {
+    const requiresTaskIntake = localShouldRequireTaskIntake(input.content, input.commandInvocation)
+    return {
+      classification: {
+        route: requiresTaskIntake ? 'task_intake' : 'normal_chat',
+        workflow: requiresTaskIntake ? 'intake' : 'chat',
+        requiresTaskIntake,
+        confidence: 0.4,
+      },
+      action: requiresTaskIntake ? 'start_task_intake' : 'run_chat',
+      workflow: requiresTaskIntake ? 'intake' : 'chat',
+      status: 'implemented',
+    }
+  }
 }
 
 async function runDaemonAnalyzePhase(input: {
@@ -1971,7 +2039,13 @@ export function ChatView() {
       const editedUser = makeUserMessage(nextText, original.commandInvocation, taskId, attachments)
       const conversationId = conversation.id
 
-      if (shouldRequireTaskIntake(nextText, original.commandInvocation)) {
+      const editedInputDecision = await dispatchInputViaDaemon({
+        content: nextText,
+        commandInvocation: original.commandInvocation,
+        conversation,
+        attachments,
+      })
+      if (editedInputDecision.action === 'start_task_intake' || editedInputDecision.classification?.requiresTaskIntake) {
         const intakeMsg = makeAssistantPlaceholder(taskId)
         dispatch({
           type: 'REPLACE_MESSAGES_FROM',
@@ -2165,7 +2239,14 @@ export function ChatView() {
         return
       }
 
-      if (!pendingTaskIntake && shouldRequireTaskIntake(content, commandInvocation)) {
+      const inputDecision = await dispatchInputViaDaemon({
+        content,
+        commandInvocation,
+        conversation,
+        attachments: attachments ?? [],
+      })
+
+      if (!pendingTaskIntake && (inputDecision.action === 'start_task_intake' || inputDecision.classification?.requiresTaskIntake)) {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         const intakeMsg = makeAssistantPlaceholder(taskId)
@@ -2250,6 +2331,44 @@ export function ChatView() {
         pendingTaskIntake &&
         pendingTaskIntake.conversationId === conversation.id
       ) {
+        const pendingInputDecision = await dispatchInputViaDaemon({
+          content,
+          commandInvocation,
+          conversation,
+          attachments: attachments ?? [],
+          pendingIntake: pendingTaskIntake,
+        })
+
+        if (pendingInputDecision.action === 'cancel_intake') {
+          const taskId = pendingTaskIntake.taskId
+          const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+          dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+          dispatch({
+            type: 'ADD_MESSAGE',
+            conversationId: conversation.id,
+            message: {
+              id: makeMessageId(),
+              role: 'assistant',
+              content: [{ type: 'text', text: '已取消当前需求澄清。你可以直接发送新的问题或任务。' }],
+              streaming: false,
+              runPhase: 'completed',
+              createdAt: Date.now(),
+            },
+          })
+          setPendingTaskIntake(null)
+          return
+        }
+
+        if (
+          pendingInputDecision.action === 'run_chat' ||
+          pendingInputDecision.action === 'reanalyze_intake' ||
+          isClarificationRedirect(pendingTaskIntake, content)
+        ) {
+          setPendingTaskIntake(null)
+          runSend(content, attachments ?? [], conversation, commandInvocation)
+          return
+        }
+
         const taskId = pendingTaskIntake.taskId
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
