@@ -14,6 +14,11 @@ const IMPLEMENTED_ACTIONS = new Set<AvaWorkflowAction>([
   'confirm_task',
   'reanalyze_intake',
   'cancel_intake',
+  'recover_task',
+  'handle_permission',
+  'run_direct_tool',
+  'handle_url',
+  'ask_clarifying_question',
 ])
 
 function actionForRoute(classification: AvaInputClassifyResult): AvaWorkflowAction {

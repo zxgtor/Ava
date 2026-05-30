@@ -294,6 +294,14 @@ function attachmentInputs(attachments?: string[]) {
   return (attachments ?? []).map(path => ({ path, name: path.split(/[\\/]/).pop() || path }))
 }
 
+function isPermissionDeny(content: string): boolean {
+  return /\b(deny|denied|reject|rejected|do not|don't|no)\b|拒绝|不同意|不允许|不要/i.test(content)
+}
+
+function extractUrlFromText(content: string): string | null {
+  return content.match(/\bhttps?:\/\/[^\s<>"']+|\b(?:localhost|127\.0\.0\.1):\d+\b/i)?.[0] ?? null
+}
+
 async function dispatchInputViaDaemon(input: {
   content: string
   commandInvocation?: CommandInvocation
@@ -325,6 +333,28 @@ async function dispatchInputViaDaemon(input: {
       workflow: requiresTaskIntake ? 'intake' : 'chat',
       status: 'implemented',
     }
+  }
+}
+
+function workflowSystemMessage(taskId: string, text: string): Message {
+  return {
+    id: `ctx_${taskId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    taskId,
+    role: 'system',
+    content: [{ type: 'text', text }],
+    createdAt: Date.now(),
+  }
+}
+
+function makeCompletedAssistantMessage(taskId: string, text: string): Message {
+  return {
+    id: makeMessageId(),
+    taskId,
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+    streaming: false,
+    runPhase: 'completed',
+    createdAt: Date.now(),
   }
 }
 
@@ -2245,6 +2275,154 @@ export function ChatView() {
         conversation,
         attachments: attachments ?? [],
       })
+
+      if (!pendingTaskIntake && inputDecision.action === 'ask_clarifying_question') {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({
+          type: 'ADD_MESSAGE',
+          conversationId: conversation.id,
+          message: makeCompletedAssistantMessage(
+            taskId,
+            '我不确定你想让我继续哪个具体任务。请说明目标和对象，例如：继续上一个 build、查看某个 URL、读取某个文件，或创建/修改哪个项目。',
+          ),
+        })
+        return
+      }
+
+      if (!pendingTaskIntake && inputDecision.action === 'handle_url') {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const url = extractUrlFromText(content)
+        const urlContext = workflowSystemMessage(taskId, [
+          'Workflow action: handle_url.',
+          url ? `Detected URL: ${url}` : '',
+          'Classify what the user wants to do with the URL before acting: open/preview local URL, diagnose refused connection or console errors, summarize/research remote URL, or explain what the URL points to.',
+          'For local preview URLs, use preview.open/preview.console/preview.screenshot when relevant. For remote URLs without a browser/fetch tool, explain the limitation and ask for pasted content if needed.',
+          'Do not start task intake unless the user explicitly asks to build or modify a project from this URL.',
+        ].filter(Boolean).join(' '))
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        await driveStream(
+          { ...conversation, messages: [...conversation.messages, userMsg, urlContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+        )
+        return
+      }
+
+      if (!pendingTaskIntake && inputDecision.action === 'recover_task') {
+        const plan = conversation.activeTaskPlan
+        if (!plan || plan.status === 'completed' || plan.status === 'aborted') {
+          await runSend(content, attachments ?? [], conversation, commandInvocation)
+          return
+        }
+
+        const taskId = plan.taskId
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const retryPlan = retryableTaskPlan(plan, taskId) ?? plan
+        const recoveryContext = workflowSystemMessage(taskId, [
+          'Workflow action: recover_task.',
+          'The user explicitly asked to retry or continue the interrupted task.',
+          'Resume from the current TaskExecutionPlan and existing project state.',
+          'Do not restart from scratch. Inspect current files or process state only if needed.',
+        ].join(' '))
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        if (retryPlan !== plan) {
+          dispatch({ type: 'ADVANCE_TASK_STEP', conversationId: conversation.id, plan: retryPlan })
+        }
+
+        await driveStream(
+          { ...conversation, activeTaskPlan: retryPlan, messages: [...conversation.messages, userMsg, recoveryContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+          retryPlan,
+        )
+        return
+      }
+
+      if (!pendingTaskIntake && inputDecision.action === 'handle_permission') {
+        const taskId = conversation.activeTaskPlan?.taskId ?? makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+
+        if (isPermissionDeny(content)) {
+          dispatch({
+            type: 'ADD_MESSAGE',
+            conversationId: conversation.id,
+            message: {
+              id: makeMessageId(),
+              taskId,
+              role: 'assistant',
+              content: [{ type: 'text', text: '已拒绝该权限请求。Ava 不会继续执行依赖该权限的操作。' }],
+              streaming: false,
+              runPhase: 'completed',
+              createdAt: Date.now(),
+            },
+          })
+          return
+        }
+
+        const grantedPath = extractWorkingDirectoryFromText(content)
+        const plan = conversation.activeTaskPlan
+        const retryPlan = plan ? retryableTaskPlan(plan, plan.taskId) ?? plan : undefined
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const nextConversation = grantedPath
+          ? { ...conversation, folderPath: grantedPath }
+          : conversation
+        const permissionContext = workflowSystemMessage(taskId, [
+          'Workflow action: handle_permission.',
+          'The user granted permission or access needed by the previous blocked operation.',
+          grantedPath ? `Approved working directory/path: ${grantedPath}` : '',
+          'Continue only the operation that was blocked by this permission. If no blocked operation exists, explain what permission was recorded.',
+        ].filter(Boolean).join(' '))
+
+        if (grantedPath) {
+          dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path: grantedPath })
+        }
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        if (plan && retryPlan && retryPlan !== plan) {
+          dispatch({ type: 'ADVANCE_TASK_STEP', conversationId: conversation.id, plan: retryPlan })
+        }
+
+        await driveStream(
+          { ...nextConversation, activeTaskPlan: retryPlan, messages: [...conversation.messages, userMsg, permissionContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+          retryPlan,
+        )
+        return
+      }
+
+      if (!pendingTaskIntake && inputDecision.action === 'run_direct_tool') {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const directToolContext = workflowSystemMessage(taskId, [
+          'Workflow action: run_direct_tool.',
+          'This is a small direct task. Do not start requirement intake or create a multi-step plan.',
+          'Use the smallest necessary tool calls, then answer with the observed result. If a required path or permission is missing, ask for that exact missing input.',
+        ].join(' '))
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        await driveStream(
+          { ...conversation, messages: [...conversation.messages, userMsg, directToolContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+        )
+        return
+      }
 
       if (!pendingTaskIntake && (inputDecision.action === 'start_task_intake' || inputDecision.classification?.requiresTaskIntake)) {
         const taskId = makeTaskId()
