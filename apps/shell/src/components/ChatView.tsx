@@ -244,6 +244,16 @@ type CodeAgentDispatchResult = {
       probe?: { status: string; version?: string; error?: string }
     }
     taskPackage?: string
+    task?: { conversationId?: string; goal?: string; workingDirectory?: string; taskKind?: string }
+    completion?: {
+      exitOk: boolean
+      changedFilesMentioned: boolean
+      validationMentioned: boolean
+      finalReportMentioned: boolean
+      requiredSignals: string[]
+      missingSignals: string[]
+      summary: string
+    }
   }
   candidates?: Array<{
     agent: { id: CodeAgentId; name: string }
@@ -421,6 +431,18 @@ function formatCodeAgentSessionMessage(session: CodeAgentSession, reason?: strin
     ? selected.reasons.map(item => `- ${item}`).join('\n')
     : '- no selection reason returned'
   const events = formatCodeAgentEvents(session.events ?? [])
+  const needsInput = [...(session.events ?? [])].reverse().find(event => event.type === 'needs_input')?.message
+  const completion = session.completion
+  const completionText = completion
+    ? [
+        `退出状态：${completion.exitOk ? 'ok' : 'failed'}`,
+        `变更文件证据：${completion.changedFilesMentioned ? 'yes' : 'no'}`,
+        `验证证据：${completion.validationMentioned ? 'yes' : 'no'}`,
+        `最终报告证据：${completion.finalReportMentioned ? 'yes' : 'no'}`,
+        completion.missingSignals.length ? `缺失：${completion.missingSignals.join(', ')}` : '缺失：none',
+        `摘要：${completion.summary}`,
+      ].join('\n')
+    : ''
   return [
     'Code Agent 任务会话',
     '',
@@ -428,6 +450,8 @@ function formatCodeAgentSessionMessage(session: CodeAgentSession, reason?: strin
     `会话：${session.sessionId}`,
     `状态：${session.status}${pid}`,
     reason ? `说明：${reason}` : '',
+    needsInput ? `需要用户输入：\n${needsInput}` : '',
+    completionText ? `完成证据：\n${completionText}` : '',
     '',
     '选择原因：',
     reasons,
@@ -453,6 +477,22 @@ function isCodeAgentTerminalStatus(status?: string): boolean {
 
 async function listCodeAgentSessionsViaDaemon(): Promise<CodeAgentSessionListResult> {
   return window.ava.agent.listCodeAgentSessions() as Promise<CodeAgentSessionListResult>
+}
+
+async function sendCodeAgentSessionMessageViaDaemon(input: {
+  sessionId: string
+  message: string
+}): Promise<CodeAgentSession> {
+  return window.ava.agent.sendCodeAgentSessionMessage(input) as Promise<CodeAgentSession>
+}
+
+async function findBlockedCodeAgentSessionForConversation(conversationId: string): Promise<CodeAgentSession | undefined> {
+  const list = await listCodeAgentSessionsViaDaemon()
+  return (list.sessions ?? []).find(session => (
+    session.status === 'blocked'
+    && session.task?.conversationId === conversationId
+    && (session.events ?? []).some(event => event.type === 'needs_input')
+  ))
 }
 
 async function dispatchCodeAgentTaskViaDaemon(input: {
@@ -1901,6 +1941,51 @@ export function ChatView() {
       }
 
       if (!pendingTaskIntake && inputDecision.action === 'handle_permission') {
+        const blockedCodeAgent = await findBlockedCodeAgentSessionForConversation(conversation.id).catch(() => undefined)
+        if (blockedCodeAgent && !isPermissionDeny(content)) {
+          const taskId = makeTaskId()
+          const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+          const placeholder = makeAssistantPlaceholder(taskId)
+
+          dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+          dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+
+          try {
+            const session = await sendCodeAgentSessionMessageViaDaemon({
+              sessionId: blockedCodeAgent.sessionId,
+              message: content,
+            })
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId: conversation.id,
+              messageId: placeholder.id,
+              patch: {
+                content: [{ type: 'text', text: formatCodeAgentSessionMessage(session, '已把你的回复发送给等待输入的 Code Agent。') }],
+                streaming: !isCodeAgentTerminalStatus(session.status),
+                runPhase: isCodeAgentTerminalStatus(session.status) ? 'completed' : 'generating',
+              },
+            })
+            await pollCodeAgentSessionUpdates({
+              sessionId: session.sessionId,
+              conversationId: conversation.id,
+              messageId: placeholder.id,
+              dispatch,
+            })
+          } catch (err) {
+            dispatch({
+              type: 'UPDATE_MESSAGE',
+              conversationId: conversation.id,
+              messageId: placeholder.id,
+              patch: {
+                content: [{ type: 'text', text: `发送给 Code Agent 失败：${err instanceof Error ? err.message : String(err)}` }],
+                streaming: false,
+                runPhase: 'error',
+              },
+            })
+          }
+          return
+        }
+
         const existingPlan = await getDaemonActiveTaskPlan(conversation.id).catch(() => undefined) ?? conversation.activeTaskPlan
         const taskId = existingPlan?.taskId ?? makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])

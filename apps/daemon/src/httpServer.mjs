@@ -577,6 +577,12 @@ async function routeRequest(req, res, runtime) {
     return
   }
 
+  if (url.pathname === '/dev/direct-unit-test' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'directUnitTest', [body])
+    return
+  }
+
   if (url.pathname === '/dev/unit-test-results/append' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'appendUnitTestResult', [body?.entry])

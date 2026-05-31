@@ -287,6 +287,138 @@ async function clearUnitTestResults(): Promise<{ ok: true; path: string } | { ok
   }
 }
 
+function unitTestToolArgs(name: string, cwd: string): Record<string, unknown> {
+  const testDir = join(cwd, '.ava-unit-test')
+  const previewPort = 48000 + Math.floor(Math.random() * 4000)
+  const previewUrl = `http://127.0.0.1:${previewPort}/`
+  const nodeServerScript = `require('http').createServer(function(q,r){r.end('ava unit test')}).listen(${previewPort},'127.0.0.1',function(){console.log('${previewUrl}')})`
+  const previewStart = {
+    cwd,
+    command: 'node',
+    args: ['-e', nodeServerScript],
+    expectedUrl: previewUrl,
+  }
+
+  const args: Record<string, Record<string, unknown>> = {
+    'shell.run_command': { cwd, command: 'node', args: ['-e', "console.log('ava shell ok')"] },
+    'file.read_text': { path: join(cwd, 'package.json') },
+    'file.write_text': { path: join(testDir, 'tool-write.txt'), content: 'ava unit test write ok' },
+    'file.list_dir': { path: cwd },
+    'file.create_dir': { path: join(testDir, 'created-dir'), allowExisting: true },
+    'file.stat': { path: join(cwd, 'package.json') },
+    'project.detect': { cwd },
+    'project.map': { cwd, maxDepth: 2 },
+    'project.validate': { cwd, level: 'quick' },
+    'search.ripgrep': { cwd, query: 'ava', maxMatches: 5 },
+    'git.status': { cwd },
+    'git.diff': { cwd },
+    'devserver.start': previewStart,
+    'devserver.status': { cwd },
+    'devserver.stop': { cwd },
+    'process.start': { cwd, command: 'node', args: ['-e', "setTimeout(function(){ console.log('ava process ok') },200)"] },
+    'process.status': { cwd },
+    'process.logs': {},
+    'process.wait': {},
+    'process.kill': {},
+    'preview.open': { url: previewUrl },
+    'preview.console': { url: previewUrl, waitMs: 300 },
+    'preview.screenshot': { url: previewUrl, outputPath: join(testDir, 'preview.png'), waitMs: 300 },
+  }
+  return args[name] ?? {}
+}
+
+function unitTestPreviewStartArgs(name: string, cwd: string): Record<string, unknown> {
+  const previewPort = 48000 + Math.floor(Math.random() * 4000)
+  const previewUrl = `http://127.0.0.1:${previewPort}/`
+  return unitTestPreviewStartArgsForUrl(cwd, previewUrl)
+}
+
+function unitTestPreviewStartArgsForUrl(cwd: string, previewUrl: string): Record<string, unknown> {
+  const url = new URL(previewUrl)
+  const previewPort = Number(url.port)
+  const nodeServerScript = `require('http').createServer(function(q,r){r.end('ava unit test')}).listen(${previewPort},'127.0.0.1',function(){console.log('${previewUrl}')})`
+  return {
+    cwd,
+    command: 'node',
+    args: ['-e', nodeServerScript],
+    expectedUrl: previewUrl,
+  }
+}
+
+function extractProcessId(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined
+  const content = (result as { content?: unknown }).content
+  if (!content || typeof content !== 'object') return undefined
+  const id = (content as { processId?: unknown; id?: unknown }).processId ?? (content as { id?: unknown }).id
+  return typeof id === 'string' ? id : undefined
+}
+
+function isToolResultOk(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false
+  const record = result as { ok?: unknown; isError?: unknown }
+  return record.ok === true && record.isError !== true
+}
+
+async function directUnitTest(raw: unknown) {
+  const request = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  const kind = typeof request.kind === 'string' ? request.kind : ''
+  const name = typeof request.name === 'string' ? request.name : ''
+  const cwd = typeof request.cwd === 'string' && request.cwd.trim() ? request.cwd.trim() : await ensureUnitTestWorkspace()
+  const rawArgs = request.args && typeof request.args === 'object' && !Array.isArray(request.args)
+    ? request.args as Record<string, unknown>
+    : unitTestToolArgs(name, cwd)
+  const context = { activeFolderPath: cwd, allowedDirs: [cwd] }
+  const startedAt = Date.now()
+  const calls: Array<{ name: string; ok: boolean; result: unknown }> = []
+
+  async function callBuiltIn(toolName: string, args: Record<string, unknown>) {
+    const result = await builtInTools.callTool(toolName, args, context)
+    calls.push({ name: toolName, ok: isToolResultOk(result), result })
+    return result
+  }
+
+  if (kind === 'built-in') {
+    if (name === 'file.patch') {
+      await callBuiltIn('file.write_text', { path: join(cwd, '.ava-unit-test', 'patch-target.txt'), content: 'before patch' })
+      await callBuiltIn('file.patch', { path: join(cwd, '.ava-unit-test', 'patch-target.txt'), oldText: 'before', newText: 'after' })
+    } else if (name === 'devserver.stop') {
+      await callBuiltIn('devserver.start', unitTestPreviewStartArgs(name, cwd))
+      await callBuiltIn('devserver.stop', rawArgs)
+    } else if (name === 'preview.open' || name === 'preview.console' || name === 'preview.screenshot') {
+      await callBuiltIn('devserver.start', unitTestPreviewStartArgsForUrl(cwd, String(rawArgs.url ?? '')))
+      await callBuiltIn(name, rawArgs)
+    } else if (name === 'process.status') {
+      const start = await callBuiltIn('process.start', { cwd, command: 'node', args: ['-e', "setTimeout(function(){ console.log('ava process status ok') },500)"] })
+      await callBuiltIn('process.status', { id: extractProcessId(start) })
+    } else if (name === 'process.logs') {
+      const start = await callBuiltIn('process.start', { cwd, command: 'node', args: ['-e', "console.log('ava process logs ok')"] })
+      const id = extractProcessId(start)
+      await callBuiltIn('process.wait', { id, timeoutMs: 2000 })
+      await callBuiltIn('process.logs', { id })
+    } else if (name === 'process.wait') {
+      const start = await callBuiltIn('process.start', { cwd, command: 'node', args: ['-e', "setTimeout(function(){ console.log('ava process wait ok') },100)"] })
+      await callBuiltIn('process.wait', { id: extractProcessId(start), timeoutMs: 2000 })
+    } else if (name === 'process.kill') {
+      const start = await callBuiltIn('process.start', { cwd, command: 'node', args: ['-e', 'setTimeout(function(){},10000)'] })
+      await callBuiltIn('process.kill', { id: extractProcessId(start) })
+    } else {
+      await callBuiltIn(name, rawArgs)
+    }
+  } else if (kind === 'mcp') {
+    const result = await mcpSupervisor.callTool({ namespacedName: name, rawArgs })
+    calls.push({ name, ok: isToolResultOk(result) || (result as { ok?: unknown }).ok === true, result })
+  } else {
+    throw new Error(`Unsupported direct unit test kind: ${kind}`)
+  }
+
+  const passed = calls.length > 0 && calls.every(call => call.ok)
+  return {
+    passed,
+    durationMs: Date.now() - startedAt,
+    calls,
+  }
+}
+
 export function createDaemonRuntimeServices() {
   return {
     async streamChat(request: AvaChatStreamRequest, emit: EmitDaemonEvent) {
@@ -411,6 +543,7 @@ export function createDaemonRuntimeServices() {
     },
 
     unitTestContext,
+    directUnitTest,
     appendUnitTestResult,
     readUnitTestResults,
     clearUnitTestResults,

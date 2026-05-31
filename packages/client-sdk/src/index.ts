@@ -200,6 +200,10 @@ export class AvaClient {
     return this.postResult<T>('/dev/unit-test-context', { states })
   }
 
+  async directUnitTest<T = unknown>(request: unknown): Promise<T> {
+    return this.postResult<T>('/dev/direct-unit-test', request)
+  }
+
   async appendUnitTestResult<T = unknown>(entry: unknown): Promise<T> {
     return this.postResult<T>('/dev/unit-test-results/append', { entry })
   }

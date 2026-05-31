@@ -531,6 +531,11 @@ export type AvaDaemonApiPath =
   | '/environment/open-vscode'
   | '/mcp/servers'
   | '/mcp/restart'
+  | '/dev/direct-unit-test'
+  | '/dev/unit-test-context'
+  | '/dev/unit-test-results/append'
+  | '/dev/unit-test-results/read'
+  | '/dev/unit-test-results/clear'
   | '/chat/stream'
   | '/chat/ws'
 

@@ -4,7 +4,7 @@ import { CheckCircle2, ClipboardList, FlaskConical, HelpCircle, Play, RefreshCw,
 import { AvaClient } from '@ava/client-sdk'
 import type { AvaChatStreamEvent, AvaCodeAgentSession, AvaDaemonChatRequest } from '@ava/contracts'
 
-type TargetKind = 'daemon' | 'intent' | 'workflow' | 'code-agent' | 'built-in' | 'mcp' | 'skill' | 'dev' | 'audit' | 'brain'
+type TargetKind = 'daemon' | 'intent' | 'workflow' | 'code-agent' | 'built-in' | 'built-in-routing' | 'mcp' | 'mcp-routing' | 'skill' | 'dev' | 'audit' | 'brain'
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed'
 type BackendStatus = 'checking' | 'online' | 'offline'
 type CanvasView = { x: number; y: number; scale: number }
@@ -193,7 +193,7 @@ interface DevNodeMetadata {
 const DEFAULT_DAEMON_URL = 'http://127.0.0.1:17871'
 const DEFAULT_DEV_CONTROL_URL = 'http://127.0.0.1:17872'
 const NODE_POSITIONS_STORAGE_KEY = 'ava-dev-control-node-positions'
-const TEST_KINDS = ['daemon', 'intent', 'workflow', 'code-agent', 'built-in', 'mcp', 'skill'] as const
+const TEST_KINDS = ['daemon', 'intent', 'workflow', 'code-agent', 'built-in', 'built-in-routing', 'mcp', 'mcp-routing', 'skill'] as const
 const DEFAULT_NODE_POSITIONS: Record<string, NodePosition> = {
   daemon: { x: 50, y: 50 },
   'node-runtime': { x: 50, y: 8 },
@@ -335,8 +335,10 @@ function targetKindLabel(kind: TargetKind) {
   if (kind === 'intent') return 'Intent Gate'
   if (kind === 'workflow') return 'Workflow Dispatcher'
   if (kind === 'code-agent') return 'Code Agent Dispatcher'
-  if (kind === 'built-in') return 'Built-in Tools'
-  if (kind === 'mcp') return 'MCP Tools'
+  if (kind === 'built-in') return 'Built-in Direct'
+  if (kind === 'built-in-routing') return 'Built-in Routing'
+  if (kind === 'mcp') return 'MCP Direct'
+  if (kind === 'mcp-routing') return 'MCP Routing'
   if (kind === 'skill') return 'Skills'
   if (kind === 'daemon') return 'Daemon'
   if (kind === 'audit') return 'Tool Audit'
@@ -578,6 +580,19 @@ function makeMcpRequest(toolName: string, schema: unknown): string {
     call,
     'If the tool reports a safe validation or permission error, stop and summarize it.',
   ].join('\n')
+}
+
+function makeDirectToolRequest(baseUrl: string, kind: 'built-in' | 'mcp', toolName: string, cwd: string, args?: unknown): string {
+  const body: Record<string, unknown> = { kind, name: toolName, cwd }
+  if (args && typeof args === 'object') body.args = args
+  return requestJson({
+    method: 'POST',
+    url: `${baseUrl.replace(/\/+$/, '')}/dev/direct-unit-test`,
+    body,
+    expectJson: {
+      'result.passed': true,
+    },
+  })
 }
 
 function makeSkillRequest(skillName: string, pluginName: string): string {
@@ -1387,7 +1402,8 @@ function prettyJson(value: unknown): string {
 
 function requiredToolsForTarget(target: TestTarget): string[] | undefined {
   if (target.kind === 'skill') return undefined
-  if (target.kind === 'mcp') return [target.name]
+  if (target.kind === 'mcp-routing') return [target.name]
+  if (target.kind === 'mcp') return undefined
 
   const dependencies: Record<string, string[]> = {
     'file.patch': ['file.write_text', 'file.patch'],
@@ -1400,7 +1416,7 @@ function requiredToolsForTarget(target: TestTarget): string[] | undefined {
     'preview.console': ['devserver.start', 'preview.console'],
     'preview.screenshot': ['devserver.start', 'preview.screenshot'],
   }
-  return dependencies[target.name] ?? [target.name]
+  return target.kind === 'built-in-routing' ? dependencies[target.name] ?? [target.name] : undefined
 }
 
 function applyToolPartUpdate(parts: ToolPart[], payload: Record<string, unknown>): ToolPart[] {
@@ -1749,11 +1765,30 @@ export function App() {
       label: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
+      defaultRequest: makeDirectToolRequest(baseUrl, 'built-in', tool.name, nextCwd),
+    }))
+    const builtInRouting: TestTarget[] = context.builtInTools.map(tool => ({
+      id: `built-in-routing:${tool.name}`,
+      kind: 'built-in-routing',
+      name: tool.name,
+      label: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
       defaultRequest: defaultBuiltInRequest(tool.name, nextCwd),
     }))
     const mcp: TestTarget[] = context.mcpTools.map(tool => ({
       id: `mcp:${tool.serverId}:${tool.name}`,
       kind: 'mcp',
+      name: tool.name,
+      label: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      meta: `${tool.serverName} · ${tool.serverStatus}`,
+      defaultRequest: makeDirectToolRequest(baseUrl, 'mcp', tool.name, nextCwd, minimalJsonForSchema(tool.inputSchema)),
+    }))
+    const mcpRouting: TestTarget[] = context.mcpTools.map(tool => ({
+      id: `mcp-routing:${tool.serverId}:${tool.name}`,
+      kind: 'mcp-routing',
       name: tool.name,
       label: tool.name,
       description: tool.description,
@@ -1776,7 +1811,9 @@ export function App() {
       ...makeWorkflowDispatcherTargets(baseUrl),
       ...makeCodeAgentDispatcherTargets(baseUrl),
       ...builtIns,
+      ...builtInRouting,
       ...mcp,
+      ...mcpRouting,
       ...skills,
     ]
     setTargets(nextTargets)
@@ -2061,12 +2098,12 @@ export function App() {
       const targetReachedCall = targetCalls.find(part => part.status === 'ok' || part.status === 'error')
       const passed = target.kind === 'skill'
         ? Boolean(fullContent.trim())
-        : target.kind === 'mcp'
+        : target.kind === 'mcp-routing'
           ? Boolean(targetReachedCall)
           : Boolean(targetOkCall)
       const durationMs = Date.now() - startedAt
       const message = passed
-        ? target.kind === 'mcp' && targetFailedCall
+        ? target.kind === 'mcp-routing' && targetFailedCall
           ? `Reached MCP tool in ${durationMs}ms; tool returned error: ${targetFailedCall.error ?? 'tool error'}`
           : `Passed in ${durationMs}ms`
         : targetFailedCall?.error || `Target tool was not called successfully. Calls: ${toolParts.map(part => `${part.name}:${part.status}`).join(', ') || 'none'}`
@@ -2099,7 +2136,7 @@ export function App() {
   }
 
   const runTarget = async (target: TestTarget) => {
-    if (target.kind === 'daemon' || target.kind === 'intent' || target.kind === 'workflow' || target.kind === 'code-agent') await runDaemonTarget(target)
+    if (target.kind === 'daemon' || target.kind === 'intent' || target.kind === 'workflow' || target.kind === 'code-agent' || target.kind === 'built-in' || target.kind === 'mcp') await runDaemonTarget(target)
     else await runLlmRoutingTarget(target)
   }
 
@@ -2281,7 +2318,9 @@ export function App() {
     workflow: summarizeTestTargets(targets.filter(target => target.kind === 'workflow'), tests),
     'code-agent': summarizeTestTargets(targets.filter(target => target.kind === 'code-agent'), tests),
     'built-in': summarizeTestTargets(targets.filter(target => target.kind === 'built-in'), tests),
+    'built-in-routing': summarizeTestTargets(targets.filter(target => target.kind === 'built-in-routing'), tests),
     mcp: summarizeTestTargets(targets.filter(target => target.kind === 'mcp'), tests),
+    'mcp-routing': summarizeTestTargets(targets.filter(target => target.kind === 'mcp-routing'), tests),
     skill: summarizeTestTargets(targets.filter(target => target.kind === 'skill'), tests),
   }), [targets, tests])
   const allTestSummary = useMemo(
@@ -2749,8 +2788,10 @@ export function App() {
                         <li><strong>Intent Gate</strong><span>{testSummariesByKind.intent.label}</span></li>
                         <li><strong>Workflow</strong><span>{testSummariesByKind.workflow.label}</span></li>
                         <li><strong>Code Agent</strong><span>{testSummariesByKind['code-agent'].label}</span></li>
-                        <li><strong>Built-in</strong><span>{testSummariesByKind['built-in'].label}</span></li>
-                        <li><strong>MCP</strong><span>{testSummariesByKind.mcp.label}</span></li>
+                        <li><strong>Built-in Direct</strong><span>{testSummariesByKind['built-in'].label}</span></li>
+                        <li><strong>Built-in Routing</strong><span>{testSummariesByKind['built-in-routing'].label}</span></li>
+                        <li><strong>MCP Direct</strong><span>{testSummariesByKind.mcp.label}</span></li>
+                        <li><strong>MCP Routing</strong><span>{testSummariesByKind['mcp-routing'].label}</span></li>
                         <li><strong>Skill</strong><span>{testSummariesByKind.skill.label}</span></li>
                       </ul>
                     </section>
