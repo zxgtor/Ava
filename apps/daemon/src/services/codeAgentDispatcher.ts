@@ -162,6 +162,14 @@ const runningProcesses = new Map<string, ChildProcessWithoutNullStreams>()
 let sessionsLoaded = false
 const MAX_PERSISTED_SESSIONS = 200
 
+type CodeAgentHistoryStats = {
+  completed: number
+  failed: number
+  blocked: number
+  stopped: number
+  successRate: number
+}
+
 export function listCodeAgentProfiles(): AvaCodeAgentProfile[] {
   return CODE_AGENT_PROFILES
 }
@@ -332,7 +340,7 @@ export async function sendCodeAgentSessionMessage(raw: AvaCodeAgentSendMessageRe
   }
   const next: AvaCodeAgentSession = {
     ...session,
-    status: session.status === 'created' ? 'running' : session.status,
+    status: processForSession?.stdin?.writable || session.status === 'created' ? 'running' : session.status,
     events: [...session.events, event],
     updatedAt: Date.now(),
   }
@@ -369,6 +377,7 @@ function normalizeTaskRequest(raw: AvaCodeAgentTaskRequest): AvaCodeAgentTaskReq
   if (!goal) throw new Error('goal is required.')
   return {
     goal,
+    conversationId: typeof raw.conversationId === 'string' && raw.conversationId.trim() ? raw.conversationId.trim() : undefined,
     workingDirectory: typeof raw.workingDirectory === 'string' && raw.workingDirectory.trim() ? raw.workingDirectory.trim() : undefined,
     taskKind: normalizeTaskKind(raw.taskKind, goal),
     preferredAgentId: normalizeAgentId(raw.preferredAgentId),
@@ -400,12 +409,18 @@ function normalizeAgentId(input: unknown): AvaCodeAgentId | undefined {
 
 function selectCodeAgentCandidates(request: AvaCodeAgentTaskRequest, probes: CodeAgentProbeResult[]): AvaCodeAgentSelection[] {
   const probeById = new Map(probes.map(item => [item.id, item]))
+  const historyById = codeAgentHistoryStats()
   return CODE_AGENT_PROFILES
-    .map(agent => scoreAgent(agent, request, probeById.get(agent.id)))
+    .map(agent => scoreAgent(agent, request, probeById.get(agent.id), historyById.get(agent.id)))
     .sort((a, b) => b.score - a.score || a.agent.fallbackRank - b.agent.fallbackRank)
 }
 
-function scoreAgent(agent: AvaCodeAgentProfile, request: AvaCodeAgentTaskRequest, probe?: CodeAgentProbeResult): AvaCodeAgentSelection {
+function scoreAgent(
+  agent: AvaCodeAgentProfile,
+  request: AvaCodeAgentTaskRequest,
+  probe?: CodeAgentProbeResult,
+  history?: CodeAgentHistoryStats,
+): AvaCodeAgentSelection {
   const reasons: string[] = []
   let score = 0
 
@@ -432,6 +447,19 @@ function scoreAgent(agent: AvaCodeAgentProfile, request: AvaCodeAgentTaskRequest
     reasons.push(`matches-${request.taskKind}`)
   }
 
+  if (history) {
+    const scoredRuns = history.completed + history.failed + history.blocked
+    if (scoredRuns >= 2) {
+      const historyBonus = Math.round((history.successRate - 0.5) * 40)
+      score += historyBonus
+      reasons.push(`history-success-rate-${Math.round(history.successRate * 100)}pct`)
+    }
+    if (scoredRuns >= 3 && history.successRate < 0.34) {
+      score -= 20
+      reasons.push('history-failure-penalty')
+    }
+  }
+
   score += Math.max(0, 12 - agent.fallbackRank * 2)
 
   return {
@@ -445,7 +473,30 @@ function scoreAgent(agent: AvaCodeAgentProfile, request: AvaCodeAgentTaskRequest
           error: probe.error,
         }
       : undefined,
+    history,
   }
+}
+
+function codeAgentHistoryStats(): Map<AvaCodeAgentId, CodeAgentHistoryStats> {
+  const grouped = new Map<AvaCodeAgentId, CodeAgentHistoryStats>()
+  for (const session of sessions.values()) {
+    const agentId = session.selected.agent.id
+    const current = grouped.get(agentId) ?? {
+      completed: 0,
+      failed: 0,
+      blocked: 0,
+      stopped: 0,
+      successRate: 0,
+    }
+    if (session.status === 'completed') current.completed += 1
+    if (session.status === 'failed') current.failed += 1
+    if (session.status === 'blocked') current.blocked += 1
+    if (session.status === 'stopped') current.stopped += 1
+    const scoredRuns = current.completed + current.failed + current.blocked
+    current.successRate = scoredRuns > 0 ? current.completed / scoredRuns : 0
+    grouped.set(agentId, current)
+  }
+  return grouped
 }
 
 function createSession(task: AvaCodeAgentTaskRequest, selected: AvaCodeAgentSelection): AvaCodeAgentSession {
@@ -537,11 +588,15 @@ function updateSession(sessionId: string, updater: (session: AvaCodeAgentSession
 }
 
 function appendProcessEvent(sessionId: string, type: 'stdout' | 'stderr', chunk: Buffer): void {
+  const message = normalizeProcessChunk(chunk)
+  const inputRequest = detectInputRequest(message)
   updateSession(sessionId, current => ({
     ...current,
+    status: inputRequest ? 'blocked' : current.status,
     events: [
       ...current.events,
-      createEvent(sessionId, type, normalizeProcessChunk(chunk)),
+      createEvent(sessionId, type, message),
+      ...(inputRequest ? [createEvent(sessionId, 'needs_input', inputRequest)] : []),
     ],
     updatedAt: Date.now(),
   }))
@@ -551,6 +606,21 @@ function normalizeProcessChunk(chunk: Buffer): string {
   const text = chunk.toString('utf8').replace(/\r\n/g, '\n').trimEnd()
   if (text.length <= 8_000) return text
   return `${text.slice(0, 8_000)}\n...[truncated ${text.length - 8_000} chars]`
+}
+
+function detectInputRequest(text: string): string | null {
+  const clean = text.replace(/\u001b\[[0-9;]*m/g, '').trim()
+  if (!clean) return null
+  const lines = clean.split(/\n/).map(line => line.trim()).filter(Boolean)
+  const tail = lines.slice(-8).join('\n').slice(0, 1200)
+  if (/AVA_NEEDS_INPUT\s*:/i.test(tail)) return tail
+  if (/\b(not authenticated|authentication required|unauthorized|sign in|login required|please log in|api key|missing token)\b/i.test(tail)) {
+    return `Code agent needs authentication or credentials:\n${tail}`
+  }
+  if (/\b(do you want to|are you sure|confirm|confirmation|allow|permission|approval|required approval|proceed\?|continue\?|press enter|select an option|choose one|\[y\/n\]|\[y\/N\]|\(y\/n\))\b/i.test(tail)) {
+    return `Code agent is waiting for user input or permission:\n${tail}`
+  }
+  return null
 }
 
 function processInfoFor(
@@ -710,6 +780,7 @@ function buildTaskPackage(task: AvaCodeAgentTaskRequest, selected: AvaCodeAgentS
     '',
     'Completion contract:',
     '- Ask Ava/user only when required information is missing.',
+    '- If you need permission, login, API key, or other user input, print exactly: AVA_NEEDS_INPUT: <short question or required action>.',
     '- Return changed files, commands run, validation results, and remaining risks.',
   ].join('\n')
 }

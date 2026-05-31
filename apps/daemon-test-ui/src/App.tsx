@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent, WheelEvent } from 'react'
 import { CheckCircle2, ClipboardList, FlaskConical, HelpCircle, Play, RefreshCw, Trash2, X, XCircle } from 'lucide-react'
 import { AvaClient } from '@ava/client-sdk'
-import type { AvaChatStreamEvent, AvaDaemonChatRequest } from '@ava/contracts'
+import type { AvaChatStreamEvent, AvaCodeAgentSession, AvaDaemonChatRequest } from '@ava/contracts'
 
 type TargetKind = 'daemon' | 'intent' | 'workflow' | 'code-agent' | 'built-in' | 'mcp' | 'skill' | 'dev' | 'audit' | 'brain'
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed'
@@ -216,7 +216,7 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'Built-in tools runtime',
       'MCP and skill context',
       'Process registry',
-      'Code agent dispatcher events',
+      'Code agent sessions',
     ],
     dependencies: ['Node runtime', 'Localhost ports', 'Local config', 'Local LLM runtime', 'Ava Speech plugin', 'Workspace filesystem', 'MCP servers'],
     dependsOn: ['node-runtime', 'localhost-ports', 'local-llm', 'speech-services'],
@@ -1369,6 +1369,14 @@ function formatTestTime(timestamp?: number) {
   return new Date(timestamp).toLocaleString()
 }
 
+function latestCodeAgentEvent(session: AvaCodeAgentSession) {
+  return session.events[session.events.length - 1]
+}
+
+function latestCodeAgentInputRequest(session: AvaCodeAgentSession) {
+  return [...session.events].reverse().find(event => event.type === 'needs_input')?.message
+}
+
 function prettyJson(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2)
@@ -1424,6 +1432,10 @@ export function App() {
   const [devLogs, setDevLogs] = useState<Record<string, DevLogLine[]>>({})
   const [devEnvironment, setDevEnvironment] = useState<DevEnvironment>({})
   const [devEnvironmentError, setDevEnvironmentError] = useState<string | null>(null)
+  const [codeAgentSessions, setCodeAgentSessions] = useState<AvaCodeAgentSession[]>([])
+  const [codeAgentError, setCodeAgentError] = useState<string | null>(null)
+  const [codeAgentBusyId, setCodeAgentBusyId] = useState<string | null>(null)
+  const [codeAgentInputById, setCodeAgentInputById] = useState<Record<string, string>>({})
   const [selectedDevNodeId, setSelectedDevNodeId] = useState<string | null>(null)
   const [auditEntries, setAuditEntries] = useState<ToolAuditEntry[]>([])
   const [auditLoading, setAuditLoading] = useState(false)
@@ -1492,6 +1504,68 @@ export function App() {
     setSelectedDevNodeId(null)
     setKind('brain')
   }, [])
+
+  const loadCodeAgentSessions = useCallback(async () => {
+    try {
+      const result = await client.listCodeAgentSessions()
+      setCodeAgentSessions(result.sessions)
+      setCodeAgentError(null)
+    } catch (err) {
+      setCodeAgentError(err instanceof Error ? err.message : String(err))
+    }
+  }, [client])
+
+  const startCodeAgentSession = useCallback(async (sessionId: string) => {
+    setCodeAgentBusyId(sessionId)
+    setCodeAgentError(null)
+    try {
+      await client.startCodeAgentSession(sessionId)
+      await loadCodeAgentSessions()
+    } catch (err) {
+      setCodeAgentError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCodeAgentBusyId(null)
+    }
+  }, [client, loadCodeAgentSessions])
+
+  const stopCodeAgentSession = useCallback(async (sessionId: string) => {
+    setCodeAgentBusyId(sessionId)
+    setCodeAgentError(null)
+    try {
+      await client.stopCodeAgentSession(sessionId)
+      await loadCodeAgentSessions()
+    } catch (err) {
+      setCodeAgentError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCodeAgentBusyId(null)
+    }
+  }, [client, loadCodeAgentSessions])
+
+  const sendCodeAgentInput = useCallback(async (sessionId: string) => {
+    const message = codeAgentInputById[sessionId]?.trim()
+    if (!message) return
+    setCodeAgentBusyId(sessionId)
+    setCodeAgentError(null)
+    try {
+      await client.sendCodeAgentSessionMessage({ sessionId, message })
+      setCodeAgentInputById(prev => ({ ...prev, [sessionId]: '' }))
+      await loadCodeAgentSessions()
+    } catch (err) {
+      setCodeAgentError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCodeAgentBusyId(null)
+    }
+  }, [client, codeAgentInputById, loadCodeAgentSessions])
+
+  const openCodeAgentCwd = useCallback(async (path?: string) => {
+    if (!path) return
+    setCodeAgentError(null)
+    try {
+      await client.openPath({ path })
+    } catch (err) {
+      setCodeAgentError(err instanceof Error ? err.message : String(err))
+    }
+  }, [client])
 
   const autoOrganizeAvaBrain = useCallback(() => {
     const api = brainFrameRef.current?.contentWindow as Window & { avaBrain?: { autoOrganize?: () => void } }
@@ -1765,6 +1839,13 @@ export function App() {
   }, [kind, loadDevProcesses])
 
   useEffect(() => {
+    if (kind !== 'dev') return
+    void loadCodeAgentSessions()
+    const id = window.setInterval(() => void loadCodeAgentSessions(), 5000)
+    return () => window.clearInterval(id)
+  }, [kind, loadCodeAgentSessions])
+
+  useEffect(() => {
     if (devControlStatus !== 'online') return
     layoutLoadedRef.current = false
     void loadDevLayout()
@@ -2018,7 +2099,7 @@ export function App() {
   }
 
   const runTarget = async (target: TestTarget) => {
-    if (target.kind === 'daemon' || target.kind === 'intent' || target.kind === 'workflow') await runDaemonTarget(target)
+    if (target.kind === 'daemon' || target.kind === 'intent' || target.kind === 'workflow' || target.kind === 'code-agent') await runDaemonTarget(target)
     else await runLlmRoutingTarget(target)
   }
 
@@ -2672,6 +2753,55 @@ export function App() {
                         <li><strong>MCP</strong><span>{testSummariesByKind.mcp.label}</span></li>
                         <li><strong>Skill</strong><span>{testSummariesByKind.skill.label}</span></li>
                       </ul>
+                    </section>
+                  )}
+
+                  {selectedDevNode.id === 'daemon' && (
+                    <section className="dev-detail-section code-agent-session-panel">
+                      <div className="section-title-row">
+                        <h3>Code Agent Sessions</h3>
+                        <button className="ghost compact" onClick={loadCodeAgentSessions}>Refresh</button>
+                      </div>
+                      {codeAgentError && <p className="inline-error">{codeAgentError}</p>}
+                      {codeAgentSessions.length === 0 ? (
+                        <p className="empty-dependency-note">No delegated code-agent sessions yet.</p>
+                      ) : (
+                        <div className="code-agent-session-list">
+                          {codeAgentSessions.slice(0, 8).map(session => {
+                            const lastEvent = latestCodeAgentEvent(session)
+                            const needsInput = latestCodeAgentInputRequest(session)
+                            const busy = codeAgentBusyId === session.sessionId
+                            return (
+                              <article className={`code-agent-session ${session.status}`} key={session.sessionId}>
+                                <div className="code-agent-session-head">
+                                  <div>
+                                    <strong>{session.selected.agent.name}</strong>
+                                    <span>{session.task.taskKind ?? 'unknown'} · {formatTestTime(session.updatedAt)}</span>
+                                  </div>
+                                  <span className={`pill ${session.status}`}>{session.status}</span>
+                                </div>
+                                <p>{truncateText(session.task.goal, 160)}</p>
+                                {session.task.workingDirectory && <code>{session.task.workingDirectory}</code>}
+                                {needsInput && <pre className="code-agent-input-request">{needsInput}</pre>}
+                                {lastEvent && <pre className="code-agent-last-event">[{lastEvent.type}] {lastEvent.message}</pre>}
+                                <div className="code-agent-session-actions">
+                                  <button className="ghost compact" disabled={busy || session.status === 'completed' || session.status === 'running' || session.status === 'starting'} onClick={() => void startCodeAgentSession(session.sessionId)}>Retry</button>
+                                  <button className="ghost compact" disabled={busy || session.status === 'completed' || session.status === 'failed' || session.status === 'stopped'} onClick={() => void stopCodeAgentSession(session.sessionId)}>Stop</button>
+                                  <button className="ghost compact" disabled={!session.task.workingDirectory} onClick={() => void openCodeAgentCwd(session.task.workingDirectory)}>Open CWD</button>
+                                </div>
+                                <div className="code-agent-input-row">
+                                  <input
+                                    value={codeAgentInputById[session.sessionId] ?? ''}
+                                    placeholder="Reply to permission/input prompt..."
+                                    onChange={event => setCodeAgentInputById(prev => ({ ...prev, [session.sessionId]: event.target.value }))}
+                                  />
+                                  <button className="primary compact" disabled={busy || !(codeAgentInputById[session.sessionId] ?? '').trim()} onClick={() => void sendCodeAgentInput(session.sessionId)}>Send</button>
+                                </div>
+                              </article>
+                            )
+                          })}
+                        </div>
+                      )}
                     </section>
                   )}
 

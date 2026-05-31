@@ -1538,6 +1538,158 @@ button:disabled {
   background: rgba(255, 211, 106, 0.12);
 }
 
+.pill.created,
+.pill.starting,
+.pill.running {
+  color: #79e2a8;
+  background: rgba(121, 226, 168, 0.11);
+}
+
+.pill.completed {
+  color: #8dd7ff;
+  background: rgba(99, 164, 255, 0.14);
+}
+
+.pill.blocked {
+  color: #ffd36a;
+  background: rgba(255, 211, 106, 0.12);
+}
+
+.pill.failed,
+.pill.stopped {
+  color: var(--danger);
+  background: rgba(255, 107, 123, 0.11);
+}
+
+.compact {
+  min-height: 28px;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.section-title-row h3 {
+  margin: 0;
+}
+
+.inline-error {
+  margin: 0 0 10px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.code-agent-session-panel {
+  margin-top: 15px;
+}
+
+.code-agent-session-list {
+  display: grid;
+  gap: 10px;
+}
+
+.code-agent-session {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(177, 197, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(7, 12, 23, 0.48);
+  padding: 11px;
+}
+
+.code-agent-session.blocked {
+  border-color: rgba(255, 211, 106, 0.28);
+}
+
+.code-agent-session.failed,
+.code-agent-session.stopped {
+  border-color: rgba(255, 107, 123, 0.22);
+}
+
+.code-agent-session-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.code-agent-session-head div {
+  display: grid;
+  gap: 3px;
+}
+
+.code-agent-session-head strong {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.code-agent-session-head span:not(.pill) {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.code-agent-session p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.code-agent-session code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+
+.code-agent-input-request,
+.code-agent-last-event {
+  max-height: 94px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid rgba(177, 197, 255, 0.1);
+  border-radius: 11px;
+  background: rgba(3, 6, 13, 0.5);
+  color: #d9e5ff;
+  padding: 9px;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.code-agent-input-request {
+  border-color: rgba(255, 211, 106, 0.24);
+  color: #ffe6a3;
+}
+
+.code-agent-session-actions,
+.code-agent-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.code-agent-input-row input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid rgba(177, 197, 255, 0.13);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-2);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+
 .dev-meta {
   display: grid;
   gap: 9px;

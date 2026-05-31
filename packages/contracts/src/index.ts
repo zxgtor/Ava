@@ -400,6 +400,7 @@ export type AvaCodeAgentProfile = {
 
 export type AvaCodeAgentTaskRequest = {
   goal: string
+  conversationId?: string
   workingDirectory?: string
   taskKind?: AvaCodeAgentTaskKind
   preferredAgentId?: AvaCodeAgentId
@@ -418,12 +419,19 @@ export type AvaCodeAgentSelection = {
     version?: string
     error?: string
   }
+  history?: {
+    completed: number
+    failed: number
+    blocked: number
+    stopped: number
+    successRate: number
+  }
 }
 
 export type AvaCodeAgentEvent = {
   id: string
   sessionId: string
-  type: 'selected' | 'task_packaged' | 'starting' | 'started' | 'stdout' | 'stderr' | 'message_sent' | 'message_queued' | 'exit' | 'completed' | 'failed' | 'blocked' | 'stopped'
+  type: 'selected' | 'task_packaged' | 'starting' | 'started' | 'stdout' | 'stderr' | 'needs_input' | 'message_sent' | 'message_queued' | 'exit' | 'completed' | 'failed' | 'blocked' | 'stopped'
   message: string
   createdAt: number
 }

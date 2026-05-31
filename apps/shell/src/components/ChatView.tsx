@@ -461,6 +461,7 @@ async function dispatchCodeAgentTaskViaDaemon(input: {
 }): Promise<CodeAgentDispatchResult> {
   return window.ava.agent.dispatchCodeAgentTask({
     goal: input.content,
+    conversationId: input.conversation.id,
     workingDirectory: input.conversation.folderPath || extractWorkingDirectoryFromText(input.content),
     taskKind: inferCodeAgentTaskKind(input.content),
     preferredAgentId: inferPreferredCodeAgent(input.content),
