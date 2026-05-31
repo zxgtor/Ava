@@ -439,6 +439,16 @@ export type AvaCodeAgentProcessInfo = {
   signal?: string | null
 }
 
+export type AvaCodeAgentCompletionEvidence = {
+  exitOk: boolean
+  changedFilesMentioned: boolean
+  validationMentioned: boolean
+  finalReportMentioned: boolean
+  requiredSignals: string[]
+  missingSignals: string[]
+  summary: string
+}
+
 export type AvaCodeAgentSession = {
   sessionId: string
   status: AvaCodeAgentSessionStatus
@@ -446,6 +456,7 @@ export type AvaCodeAgentSession = {
   task: AvaCodeAgentTaskRequest
   taskPackage: string
   process?: AvaCodeAgentProcessInfo
+  completion?: AvaCodeAgentCompletionEvidence
   events: AvaCodeAgentEvent[]
   createdAt: number
   updatedAt: number
