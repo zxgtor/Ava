@@ -384,6 +384,75 @@ export type AvaInputDispatchResult = {
   reason: string
 }
 
+export type AvaCodeAgentId = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'openclaw'
+
+export type AvaCodeAgentTaskKind = 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research' | 'design' | 'unknown'
+
+export type AvaCodeAgentSessionStatus = 'created' | 'running' | 'blocked' | 'completed' | 'failed' | 'stopped'
+
+export type AvaCodeAgentProfile = {
+  id: AvaCodeAgentId
+  name: string
+  command: string
+  strengths: AvaCodeAgentTaskKind[]
+  fallbackRank: number
+}
+
+export type AvaCodeAgentTaskRequest = {
+  goal: string
+  workingDirectory?: string
+  taskKind?: AvaCodeAgentTaskKind
+  preferredAgentId?: AvaCodeAgentId
+  constraints?: string[]
+  validationCommands?: string[]
+}
+
+export type AvaCodeAgentSelection = {
+  agent: AvaCodeAgentProfile
+  score: number
+  reasons: string[]
+  probe?: {
+    status: 'ready' | 'missing' | 'error'
+    version?: string
+    error?: string
+  }
+}
+
+export type AvaCodeAgentEvent = {
+  id: string
+  sessionId: string
+  type: 'selected' | 'task_packaged' | 'message_queued' | 'blocked' | 'stopped'
+  message: string
+  createdAt: number
+}
+
+export type AvaCodeAgentSession = {
+  sessionId: string
+  status: AvaCodeAgentSessionStatus
+  selected: AvaCodeAgentSelection
+  task: AvaCodeAgentTaskRequest
+  taskPackage: string
+  events: AvaCodeAgentEvent[]
+  createdAt: number
+  updatedAt: number
+}
+
+export type AvaCodeAgentDispatchResult = {
+  session?: AvaCodeAgentSession
+  candidates: AvaCodeAgentSelection[]
+  status: 'assigned' | 'blocked'
+  reason: string
+}
+
+export type AvaCodeAgentSessionListResult = {
+  sessions: AvaCodeAgentSession[]
+}
+
+export type AvaCodeAgentSendMessageRequest = {
+  sessionId: string
+  message: string
+}
+
 export type AvaDaemonStatus = {
   ok: true
   service: 'ava-daemon'
@@ -418,6 +487,11 @@ export type AvaDaemonApiPath =
   | '/workspace/list-dir'
   | '/workspace/code-agents'
   | '/workspace/code-agents/install'
+  | '/code-agents/profiles'
+  | '/code-agents/dispatch'
+  | '/code-agents/sessions'
+  | '/code-agents/sessions/send'
+  | '/code-agents/sessions/stop'
   | '/environment/open-path'
   | '/environment/open-terminal'
   | '/environment/open-vscode'

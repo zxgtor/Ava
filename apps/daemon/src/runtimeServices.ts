@@ -47,6 +47,13 @@ import {
   writeWorkspaceText,
 } from './services/workspaceEnvironment'
 import { installCodeAgent, probeCodeAgents } from './services/codeAgentProbe'
+import {
+  dispatchCodeAgentTask,
+  listCodeAgentProfiles,
+  listCodeAgentSessions,
+  sendCodeAgentSessionMessage,
+  stopCodeAgentSession,
+} from './services/codeAgentDispatcher'
 
 const UNIT_TEST_WORKSPACE_DIR = '.ava-unit-test-workspace'
 const UNIT_TEST_RESULTS_FILE = 'unit-test-results.jsonl'
@@ -334,6 +341,11 @@ export function createDaemonRuntimeServices() {
     listWorkspaceDir,
     probeCodeAgents,
     installCodeAgent,
+    listCodeAgentProfiles,
+    dispatchCodeAgentTask,
+    listCodeAgentSessions,
+    sendCodeAgentSessionMessage,
+    stopCodeAgentSession,
     openEnvironmentPath,
     openEnvironmentTerminal,
     openEnvironmentVSCode,

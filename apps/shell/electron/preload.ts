@@ -556,6 +556,10 @@ const ava = {
     getActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:getActiveTaskPlan', request),
     setActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:setActiveTaskPlan', request),
     clearActiveTaskPlan: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:clearActiveTaskPlan', request),
+    dispatchCodeAgentTask: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:dispatchCodeAgentTask', request),
+    listCodeAgentSessions: (): Promise<unknown> => ipcRenderer.invoke('ava:agent:listCodeAgentSessions'),
+    sendCodeAgentSessionMessage: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:sendCodeAgentSessionMessage', request),
+    stopCodeAgentSession: (sessionId: string): Promise<unknown> => ipcRenderer.invoke('ava:agent:stopCodeAgentSession', sessionId),
     getProjectBrief: (request: unknown): Promise<unknown> => ipcRenderer.invoke('ava:agent:getProjectBrief', request),
   },
 

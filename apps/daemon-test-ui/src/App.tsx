@@ -4,7 +4,7 @@ import { CheckCircle2, ClipboardList, FlaskConical, HelpCircle, Play, RefreshCw,
 import { AvaClient } from '@ava/client-sdk'
 import type { AvaChatStreamEvent, AvaDaemonChatRequest } from '@ava/contracts'
 
-type TargetKind = 'daemon' | 'intent' | 'workflow' | 'built-in' | 'mcp' | 'skill' | 'dev' | 'audit' | 'brain'
+type TargetKind = 'daemon' | 'intent' | 'workflow' | 'code-agent' | 'built-in' | 'mcp' | 'skill' | 'dev' | 'audit' | 'brain'
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed'
 type BackendStatus = 'checking' | 'online' | 'offline'
 type CanvasView = { x: number; y: number; scale: number }
@@ -96,6 +96,7 @@ interface DaemonRequest {
   body?: unknown
   expectEventTypes?: string[]
   expectJson?: Record<string, unknown>
+  expectJsonOneOf?: Record<string, unknown[]>
 }
 
 interface DevProcess {
@@ -192,7 +193,7 @@ interface DevNodeMetadata {
 const DEFAULT_DAEMON_URL = 'http://127.0.0.1:17871'
 const DEFAULT_DEV_CONTROL_URL = 'http://127.0.0.1:17872'
 const NODE_POSITIONS_STORAGE_KEY = 'ava-dev-control-node-positions'
-const TEST_KINDS = ['daemon', 'intent', 'workflow', 'built-in', 'mcp', 'skill'] as const
+const TEST_KINDS = ['daemon', 'intent', 'workflow', 'code-agent', 'built-in', 'mcp', 'skill'] as const
 const DEFAULT_NODE_POSITIONS: Record<string, NodePosition> = {
   daemon: { x: 50, y: 50 },
   'node-runtime': { x: 50, y: 8 },
@@ -331,6 +332,7 @@ const SVG_FEATURE_GAP = 7
 function targetKindLabel(kind: TargetKind) {
   if (kind === 'intent') return 'Intent Gate'
   if (kind === 'workflow') return 'Workflow Dispatcher'
+  if (kind === 'code-agent') return 'Code Agent Dispatcher'
   if (kind === 'built-in') return 'Built-in Tools'
   if (kind === 'mcp') return 'MCP Tools'
   if (kind === 'skill') return 'Skills'
@@ -1168,6 +1170,55 @@ function makeWorkflowDispatcherTargets(baseUrl: string): TestTarget[] {
   ]
 }
 
+function makeCodeAgentDispatcherTargets(baseUrl: string): TestTarget[] {
+  const normalized = baseUrl.replace(/\/+$/, '')
+  return [
+    {
+      id: 'code-agent:profiles',
+      kind: 'code-agent',
+      name: 'code_agent.profiles',
+      label: 'profiles',
+      description: 'GET /code-agents/profiles should return Ava code-agent capability profiles.',
+      defaultRequest: requestJson({
+        method: 'GET',
+        url: `${normalized}/code-agents/profiles`,
+      }),
+    },
+    {
+      id: 'code-agent:dispatch',
+      kind: 'code-agent',
+      name: 'code_agent.dispatch',
+      label: 'dispatch',
+      description: 'POST /code-agents/dispatch should score available agents and create a session when one is ready.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url: `${normalized}/code-agents/dispatch`,
+        body: {
+          goal: 'Fix a TypeScript build error in D:\\Apps\\Ava and report changed files plus validation.',
+          workingDirectory: 'D:\\Apps\\Ava',
+          taskKind: 'debug',
+          constraints: ['Do not modify unrelated files.', 'Run typecheck after edits.'],
+          validationCommands: ['npm run typecheck --workspace=@ava/shell'],
+        },
+        expectJsonOneOf: {
+          'result.status': ['assigned', 'blocked'],
+        },
+      }),
+    },
+    {
+      id: 'code-agent:sessions',
+      kind: 'code-agent',
+      name: 'code_agent.sessions',
+      label: 'sessions',
+      description: 'GET /code-agents/sessions should return the daemon-owned code-agent session registry.',
+      defaultRequest: requestJson({
+        method: 'GET',
+        url: `${normalized}/code-agents/sessions`,
+      }),
+    },
+  ]
+}
+
 function makeDaemonTargets(baseUrl: string): TestTarget[] {
   const normalized = baseUrl.replace(/\/+$/, '')
   return [
@@ -1239,8 +1290,12 @@ function getJsonPath(value: unknown, path: string): unknown {
   }, value)
 }
 
-function assertExpectedJson(fullContent: string, expected?: Record<string, unknown>): string[] {
-  if (!expected || Object.keys(expected).length === 0) return []
+function assertExpectedJson(
+  fullContent: string,
+  expected?: Record<string, unknown>,
+  expectedOneOf?: Record<string, unknown[]>,
+): string[] {
+  if ((!expected || Object.keys(expected).length === 0) && (!expectedOneOf || Object.keys(expectedOneOf).length === 0)) return []
   let parsed: unknown
   try {
     parsed = JSON.parse(fullContent)
@@ -1250,12 +1305,20 @@ function assertExpectedJson(fullContent: string, expected?: Record<string, unkno
 
   const matched: string[] = []
   const missing: string[] = []
-  for (const [path, expectedValue] of Object.entries(expected)) {
+  for (const [path, expectedValue] of Object.entries(expected ?? {})) {
     const actual = getJsonPath(parsed, path)
     if (actual === expectedValue) {
       matched.push(`${path}=${String(expectedValue)}`)
     } else {
       missing.push(`${path}: expected ${JSON.stringify(expectedValue)}, got ${JSON.stringify(actual)}`)
+    }
+  }
+  for (const [path, expectedValues] of Object.entries(expectedOneOf ?? {})) {
+    const actual = getJsonPath(parsed, path)
+    if (expectedValues.some(value => value === actual)) {
+      matched.push(`${path}=${String(actual)}`)
+    } else {
+      missing.push(`${path}: expected one of ${JSON.stringify(expectedValues)}, got ${JSON.stringify(actual)}`)
     }
   }
   if (missing.length > 0) throw new Error(`JSON expectation failed: ${missing.join('; ')}`)
@@ -1634,6 +1697,7 @@ export function App() {
       ...makeDaemonTargets(baseUrl),
       ...makeIntentGateTargets(baseUrl),
       ...makeWorkflowDispatcherTargets(baseUrl),
+      ...makeCodeAgentDispatcherTargets(baseUrl),
       ...builtIns,
       ...mcp,
       ...skills,
@@ -1812,7 +1876,7 @@ export function App() {
       const eventTypes = parseSseEventTypes(fullContent)
       const missing = (request.expectEventTypes ?? []).filter(type => !eventTypes.includes(type))
       if (missing.length > 0) throw new Error(`Missing expected SSE events: ${missing.join(', ')}`)
-      const matchedJson = assertExpectedJson(fullContent, request.expectJson)
+      const matchedJson = assertExpectedJson(fullContent, request.expectJson, request.expectJsonOneOf)
 
       const durationMs = Date.now() - startedAt
       const details = [
@@ -2131,6 +2195,7 @@ export function App() {
     daemon: summarizeTestTargets(targets.filter(target => target.kind === 'daemon'), tests),
     intent: summarizeTestTargets(targets.filter(target => target.kind === 'intent'), tests),
     workflow: summarizeTestTargets(targets.filter(target => target.kind === 'workflow'), tests),
+    'code-agent': summarizeTestTargets(targets.filter(target => target.kind === 'code-agent'), tests),
     'built-in': summarizeTestTargets(targets.filter(target => target.kind === 'built-in'), tests),
     mcp: summarizeTestTargets(targets.filter(target => target.kind === 'mcp'), tests),
     skill: summarizeTestTargets(targets.filter(target => target.kind === 'skill'), tests),
@@ -2599,6 +2664,7 @@ export function App() {
                         <li><strong>Daemon</strong><span>{testSummariesByKind.daemon.label}</span></li>
                         <li><strong>Intent Gate</strong><span>{testSummariesByKind.intent.label}</span></li>
                         <li><strong>Workflow</strong><span>{testSummariesByKind.workflow.label}</span></li>
+                        <li><strong>Code Agent</strong><span>{testSummariesByKind['code-agent'].label}</span></li>
                         <li><strong>Built-in</strong><span>{testSummariesByKind['built-in'].label}</span></li>
                         <li><strong>MCP</strong><span>{testSummariesByKind.mcp.label}</span></li>
                         <li><strong>Skill</strong><span>{testSummariesByKind.skill.label}</span></li>

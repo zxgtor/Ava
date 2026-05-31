@@ -226,6 +226,31 @@ type InputDispatchResult = {
   reason?: string
 }
 
+type CodeAgentId = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'openclaw'
+type CodeAgentTaskKind = 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research' | 'design' | 'unknown'
+
+type CodeAgentDispatchResult = {
+  status?: 'assigned' | 'blocked'
+  reason?: string
+  session?: {
+    sessionId: string
+    status: string
+    selected: {
+      agent: { id: CodeAgentId; name: string }
+      score: number
+      reasons: string[]
+      probe?: { status: string; version?: string; error?: string }
+    }
+    taskPackage?: string
+  }
+  candidates?: Array<{
+    agent: { id: CodeAgentId; name: string }
+    score: number
+    reasons: string[]
+    probe?: { status: string; version?: string; error?: string }
+  }>
+}
+
 type IntakeSessionResult = {
   session?: {
     sessionId: string
@@ -325,6 +350,84 @@ async function replyIntakeViaDaemon(input: {
     messages: input.conversation.messages,
     traits: planningTraitsFor(input.content, input.conversation),
   }) as Promise<IntakeSessionResult>
+}
+
+function inferPreferredCodeAgent(content: string): CodeAgentId | undefined {
+  if (/\bclaude(?:\s+code)?\b/i.test(content)) return 'claude-code'
+  if (/\bcodex\b|openai\s+codex/i.test(content)) return 'codex'
+  if (/\bgemini\b/i.test(content)) return 'gemini'
+  if (/\bopencode\b/i.test(content)) return 'opencode'
+  if (/\bopenclaw\b/i.test(content)) return 'openclaw'
+  return undefined
+}
+
+function inferCodeAgentTaskKind(content: string): CodeAgentTaskKind {
+  if (/\b(debug|fix|error|bug|fail|failing|crash|broken)\b|修复|报错|错误|失败|崩溃/i.test(content)) return 'debug'
+  if (/\b(refactor|rename|extract|restructure|cleanup)\b|重构|整理|拆分/i.test(content)) return 'refactor'
+  if (/\b(research|compare|investigate|study|look into)\b|研究|调研|对比/i.test(content)) return 'research'
+  if (/\b(design|ui|ux|layout|mockup|visual)\b|设计|界面|布局/i.test(content)) return 'design'
+  if (/\b(create|build|scaffold|generate|new project|app|site)\b|创建|生成|搭建|新项目/i.test(content)) return 'scaffold'
+  if (/\b(implement|add|change|update|feature)\b|实现|添加|修改|更新|功能/i.test(content)) return 'feature'
+  return 'unknown'
+}
+
+function formatCodeAgentDispatchMessage(result: CodeAgentDispatchResult): string {
+  if (result.status === 'assigned' && result.session) {
+    const session = result.session
+    const selected = session.selected
+    const probe = selected.probe?.version ? `（${selected.probe.version}）` : ''
+    const reasons = selected.reasons.length
+      ? selected.reasons.map(item => `- ${item}`).join('\n')
+      : '- no selection reason returned'
+    return [
+      '已创建 Code Agent 任务会话。',
+      '',
+      `代理：${selected.agent.name}${probe}`,
+      `会话：${session.sessionId}`,
+      `状态：${session.status}`,
+      '',
+      '选择原因：',
+      reasons,
+      '',
+      '当前阶段：Ava 已完成代理选择和任务打包。下一步需要由 daemon 启动该代理进程、监听事件，并把最终结果回填到聊天。'
+    ].join('\n')
+  }
+
+  const candidates = (result.candidates ?? []).slice(0, 5)
+  const candidateText = candidates.length
+    ? candidates.map(item => {
+        const status = item.probe?.status ?? 'unknown'
+        const detail = item.probe?.error || item.probe?.version || ''
+        return `- ${item.agent.name}: ${status}${detail ? ` (${detail})` : ''}`
+      }).join('\n')
+    : '- no candidates returned'
+
+  return [
+    '暂时不能分派给 Code Agent。',
+    '',
+    `原因：${result.reason || 'No ready code agent is available.'}`,
+    '',
+    '候选代理：',
+    candidateText,
+    '',
+    '请先在 Workspace 页面安装或修复可用的 code agent，然后重试。'
+  ].join('\n')
+}
+
+async function dispatchCodeAgentTaskViaDaemon(input: {
+  content: string
+  conversation: Conversation
+}): Promise<CodeAgentDispatchResult> {
+  return window.ava.agent.dispatchCodeAgentTask({
+    goal: input.content,
+    workingDirectory: input.conversation.folderPath || extractWorkingDirectoryFromText(input.content),
+    taskKind: inferCodeAgentTaskKind(input.content),
+    preferredAgentId: inferPreferredCodeAgent(input.content),
+    constraints: [
+      'Do not modify unrelated files.',
+      'Report changed files and validation results.',
+    ],
+  }) as Promise<CodeAgentDispatchResult>
 }
 
 function workflowSystemMessage(taskId: string, text: string): Message {
@@ -1633,24 +1736,31 @@ export function ChatView() {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
-        const placeholder = makeAssistantPlaceholder(taskId)
-        const delegationContext = workflowSystemMessage(taskId, [
-          'Workflow action: delegate_to_code_agent.',
-          'The user wants Ava to use or delegate to an external code agent such as Codex, Claude Code, Gemini CLI, Cursor, or another local agent.',
-          'First identify the requested target agent. If availability is uncertain, use safe shell.run_command checks such as `codex --version`, `claude --version`, or `gemini --version` when tools are available.',
-          'If no target is available, explain the missing dependency and suggest how to connect it. Do not silently fall back to Ava doing the whole coding task unless the user asks.',
-          'If the user only asks a question about delegation, answer directly without starting task intake.',
-        ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
         if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
-        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
-        await driveStream(
-          { ...conversation, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), delegationContext] },
-          conversation.id,
-          placeholder.id,
-          taskId,
-        )
+
+        try {
+          const result = await dispatchCodeAgentTaskViaDaemon({ content, conversation })
+          dispatch({
+            type: 'ADD_MESSAGE',
+            conversationId: conversation.id,
+            message: makeCompletedAssistantMessage(taskId, formatCodeAgentDispatchMessage(result)),
+          })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          dispatch({
+            type: 'ADD_MESSAGE',
+            conversationId: conversation.id,
+            message: makeCompletedAssistantMessage(taskId, [
+              'Code Agent Dispatcher 调用失败。',
+              '',
+              `错误：${message}`,
+              '',
+              '请确认 Ava Daemon 正在运行，然后重试。',
+            ].join('\n')),
+          })
+        }
         return
       }
 

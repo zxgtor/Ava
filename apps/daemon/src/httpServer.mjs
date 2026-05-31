@@ -460,6 +460,34 @@ async function routeRequest(req, res, runtime) {
     return
   }
 
+  if (url.pathname === '/code-agents/profiles' && req.method === 'GET') {
+    await runtimeJsonResponse(res, runtime, 'listCodeAgentProfiles', [])
+    return
+  }
+
+  if (url.pathname === '/code-agents/dispatch' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'dispatchCodeAgentTask', [body])
+    return
+  }
+
+  if (url.pathname === '/code-agents/sessions' && req.method === 'GET') {
+    await runtimeJsonResponse(res, runtime, 'listCodeAgentSessions', [])
+    return
+  }
+
+  if (url.pathname === '/code-agents/sessions/send' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'sendCodeAgentSessionMessage', [body])
+    return
+  }
+
+  if (url.pathname === '/code-agents/sessions/stop' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'stopCodeAgentSession', [body?.sessionId])
+    return
+  }
+
   if (url.pathname === '/environment/open-path' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'openEnvironmentPath', [body])

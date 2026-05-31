@@ -7,6 +7,12 @@ import type {
   AvaInputClassifyResult,
   AvaInputDispatchRequest,
   AvaInputDispatchResult,
+  AvaCodeAgentDispatchResult,
+  AvaCodeAgentSendMessageRequest,
+  AvaCodeAgentSession,
+  AvaCodeAgentSessionListResult,
+  AvaCodeAgentTaskRequest,
+  AvaCodeAgentProfile,
   AvaTaskIntakeReplyRequest,
   AvaTaskIntakeResult,
   AvaTaskIntakeStartRequest,
@@ -144,6 +150,26 @@ export class AvaClient {
 
   async installCodeAgent<T = unknown>(agentId: string): Promise<T> {
     return this.postResult<T>('/workspace/code-agents/install', { agentId })
+  }
+
+  async listCodeAgentProfiles(): Promise<AvaCodeAgentProfile[]> {
+    return this.getResult<AvaCodeAgentProfile[]>('/code-agents/profiles')
+  }
+
+  async dispatchCodeAgentTask(request: AvaCodeAgentTaskRequest): Promise<AvaCodeAgentDispatchResult> {
+    return this.postResult<AvaCodeAgentDispatchResult>('/code-agents/dispatch', request)
+  }
+
+  async listCodeAgentSessions(): Promise<AvaCodeAgentSessionListResult> {
+    return this.getResult<AvaCodeAgentSessionListResult>('/code-agents/sessions')
+  }
+
+  async sendCodeAgentSessionMessage(request: AvaCodeAgentSendMessageRequest): Promise<AvaCodeAgentSession> {
+    return this.postResult<AvaCodeAgentSession>('/code-agents/sessions/send', request)
+  }
+
+  async stopCodeAgentSession(sessionId: string): Promise<AvaCodeAgentSession> {
+    return this.postResult<AvaCodeAgentSession>('/code-agents/sessions/stop', { sessionId })
   }
 
   async openPath(request: { path: string }): Promise<{ opened: string }> {
