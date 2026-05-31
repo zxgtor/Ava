@@ -369,12 +369,18 @@ export type AvaWorkflowImplementationStatus = 'implemented' | 'planned'
 
 export type AvaInputDispatchRequest = AvaInputClassifyRequest
 
+export type AvaActionPreview = {
+  text: string
+  requiresConfirmation: boolean
+}
+
 export type AvaInputDispatchResult = {
   classification: AvaInputClassifyResult
   action: AvaWorkflowAction
   workflow: AvaInputWorkflow
   status: AvaWorkflowImplementationStatus
   fallbackAction?: AvaWorkflowAction
+  actionPreview?: AvaActionPreview
   reason: string
 }
 

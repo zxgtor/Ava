@@ -1703,6 +1703,44 @@ button:disabled {
   border-right: 1px solid var(--line);
 }
 
+.test-category-picker {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0 0 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.test-category-picker select {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-2);
+  padding: 10px 48px 10px 0;
+  outline: none;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.test-category-picker select:focus {
+  border-color: rgba(94, 208, 165, 0.5);
+  box-shadow: 0 0 0 3px rgba(94, 208, 165, 0.1);
+}
+
+.test-category-picker option {
+  background: #0b111d;
+  color: var(--text);
+}
+
 .target-row {
   display: flex;
   align-items: center;

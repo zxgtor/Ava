@@ -4,7 +4,7 @@ import { CheckCircle2, ClipboardList, FlaskConical, HelpCircle, Play, RefreshCw,
 import { AvaClient } from '@ava/client-sdk'
 import type { AvaChatStreamEvent, AvaDaemonChatRequest } from '@ava/contracts'
 
-type TargetKind = 'daemon' | 'built-in' | 'mcp' | 'skill' | 'dev' | 'audit' | 'brain'
+type TargetKind = 'daemon' | 'intent' | 'workflow' | 'built-in' | 'mcp' | 'skill' | 'dev' | 'audit' | 'brain'
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed'
 type BackendStatus = 'checking' | 'online' | 'offline'
 type CanvasView = { x: number; y: number; scale: number }
@@ -95,6 +95,7 @@ interface DaemonRequest {
   url: string
   body?: unknown
   expectEventTypes?: string[]
+  expectJson?: Record<string, unknown>
 }
 
 interface DevProcess {
@@ -191,7 +192,7 @@ interface DevNodeMetadata {
 const DEFAULT_DAEMON_URL = 'http://127.0.0.1:17871'
 const DEFAULT_DEV_CONTROL_URL = 'http://127.0.0.1:17872'
 const NODE_POSITIONS_STORAGE_KEY = 'ava-dev-control-node-positions'
-const TEST_KINDS = ['daemon', 'built-in', 'mcp', 'skill'] as const
+const TEST_KINDS = ['daemon', 'intent', 'workflow', 'built-in', 'mcp', 'skill'] as const
 const DEFAULT_NODE_POSITIONS: Record<string, NodePosition> = {
   daemon: { x: 50, y: 50 },
   'node-runtime': { x: 50, y: 8 },
@@ -328,6 +329,8 @@ const SVG_FEATURE_HEIGHT = 23
 const SVG_FEATURE_GAP = 7
 
 function targetKindLabel(kind: TargetKind) {
+  if (kind === 'intent') return 'Intent Gate'
+  if (kind === 'workflow') return 'Workflow Dispatcher'
   if (kind === 'built-in') return 'Built-in Tools'
   if (kind === 'mcp') return 'MCP Tools'
   if (kind === 'skill') return 'Skills'
@@ -581,6 +584,590 @@ function requestJson(value: DaemonRequest): string {
   return JSON.stringify(value, null, 2)
 }
 
+function makeIntentGateTargets(baseUrl: string): TestTarget[] {
+  const normalized = baseUrl.replace(/\/+$/, '')
+  const url = `${normalized}/input/classify`
+  return [
+    {
+      id: 'intent:meta-question',
+      kind: 'intent',
+      name: 'intent.meta_question',
+      label: 'meta_question',
+      description: 'Classify an Ava capability question as a meta chat question.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'What can Ava do?' },
+        expectJson: {
+          'result.route': 'meta_question',
+          'result.workflow': 'chat',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:normal-chat',
+      kind: 'intent',
+      name: 'intent.normal_chat',
+      label: 'normal_chat',
+      description: 'Classify a regular conversational input as normal chat.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Tell me a short joke about debugging.' },
+        expectJson: {
+          'result.route': 'normal_chat',
+          'result.workflow': 'chat',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:task-intake',
+      kind: 'intent',
+      name: 'intent.task_intake',
+      label: 'task_intake',
+      description: 'Classify a large coding/design request as task intake.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a professional 3D animation site that can load a GLB model and let the user control the camera.' },
+        expectJson: {
+          'result.route': 'task_intake',
+          'result.workflow': 'intake',
+          'result.requiresTaskIntake': true,
+        },
+      }),
+    },
+    {
+      id: 'intent:intake-correction',
+      kind: 'intent',
+      name: 'intent.requirement_correction',
+      label: 'requirement_correction',
+      description: 'When intake is active, detect that the user corrected the goal instead of answering the old question.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'No, I want to check what Ava can do first.',
+          pendingIntake: true,
+          pendingIntakeStage: 'clarifying',
+        },
+        expectJson: {
+          'result.route': 'meta_question',
+          'result.workflow': 'chat',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:continue-intake',
+      kind: 'intent',
+      name: 'intent.continue_intake',
+      label: 'continue_intake',
+      description: 'When intake is active, classify a normal answer as continuing intake.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'Use React and create it in D:\\Apps\\Scene.',
+          pendingIntake: true,
+          pendingIntakeStage: 'clarifying',
+        },
+        expectJson: {
+          'result.route': 'continue_intake',
+          'result.workflow': 'intake_reply',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:task-confirmation',
+      kind: 'intent',
+      name: 'intent.task_confirmation',
+      label: 'task_confirmation',
+      description: 'When summary confirmation is pending, classify confirmation as task confirmation.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'confirm',
+          pendingIntake: true,
+          pendingIntakeStage: 'awaiting_summary_confirm',
+        },
+        expectJson: {
+          'result.route': 'task_confirmation',
+          'result.workflow': 'intake',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:requirement-correction',
+      kind: 'intent',
+      name: 'intent.requirement_correction',
+      label: 'requirement_correction',
+      description: 'When intake is active, classify a requirement correction as intake reanalysis.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'Actually change it to a desktop app first.',
+          pendingIntake: true,
+          pendingIntakeStage: 'clarifying',
+        },
+        expectJson: {
+          'result.route': 'requirement_correction',
+          'result.workflow': 'intake_reanalysis',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:cancel-or-pause',
+      kind: 'intent',
+      name: 'intent.cancel_or_pause',
+      label: 'cancel_or_pause',
+      description: 'Classify explicit cancel/stop input as cancel_or_pause.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'stop' },
+        expectJson: {
+          'result.route': 'cancel_or_pause',
+          'result.workflow': 'cancel',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:permission-response',
+      kind: 'intent',
+      name: 'intent.permission_response',
+      label: 'permission_response',
+      description: 'Classify allow/deny style replies as permission handling.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'allow this workspace access' },
+        expectJson: {
+          'result.route': 'permission_response',
+          'result.workflow': 'permission',
+        },
+      }),
+    },
+    {
+      id: 'intent:retry-or-continue',
+      kind: 'intent',
+      name: 'intent.retry_or_continue',
+      label: 'retry_or_continue',
+      description: 'Classify continue/retry replies as task recovery.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'continue' },
+        expectJson: {
+          'result.route': 'retry_or_continue',
+          'result.workflow': 'recovery',
+        },
+      }),
+    },
+    {
+      id: 'intent:small-task',
+      kind: 'intent',
+      name: 'intent.small_task',
+      label: 'small_task',
+      description: 'Classify a small file lookup as direct tool work.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Read package.json and tell me name and version.' },
+        expectJson: {
+          'result.route': 'small_task',
+          'result.workflow': 'direct_tool',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:file-or-attachment-input',
+      kind: 'intent',
+      name: 'intent.file_or_attachment_input',
+      label: 'file_or_attachment_input',
+      description: 'Classify file attachment input as file/media workflow.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'Please inspect this file.',
+          attachments: [{ kind: 'document', path: 'D:\\Apps\\Ava\\package.json', name: 'package.json' }],
+        },
+        expectJson: {
+          'result.route': 'file_or_attachment_input',
+          'result.workflow': 'file_media',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:url-input',
+      kind: 'intent',
+      name: 'intent.url_input',
+      label: 'url_input',
+      description: 'Classify URL input as browser workflow.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Check http://127.0.0.1:5179/' },
+        expectJson: {
+          'result.route': 'url_input',
+          'result.workflow': 'browser',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:agent-delegation',
+      kind: 'intent',
+      name: 'intent.agent_delegation',
+      label: 'agent_delegation',
+      description: 'Classify explicit code-agent delegation requests.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Assign this task to Claude Code.' },
+        expectJson: {
+          'result.route': 'agent_delegation',
+          'result.workflow': 'delegation',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:preference-or-setting',
+      kind: 'intent',
+      name: 'intent.preference_or_setting',
+      label: 'preference_or_setting',
+      description: 'Classify user preference or settings input.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Always answer me in Chinese by default.' },
+        expectJson: {
+          'result.route': 'preference_or_setting',
+          'result.workflow': 'settings',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
+      id: 'intent:unknown-or-ambiguous',
+      kind: 'intent',
+      name: 'intent.unknown_or_ambiguous',
+      label: 'unknown_or_ambiguous',
+      description: 'Classify a context-dependent short input as ambiguous.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'this' },
+        expectJson: {
+          'result.route': 'unknown_or_ambiguous',
+          'result.workflow': 'clarify',
+          'result.requiresTaskIntake': false,
+          'result.needsClarification': true,
+        },
+      }),
+    },
+  ]
+}
+
+function makeWorkflowDispatcherTargets(baseUrl: string): TestTarget[] {
+  const normalized = baseUrl.replace(/\/+$/, '')
+  const url = `${normalized}/input/dispatch`
+  return [
+    {
+      id: 'workflow:chat',
+      kind: 'workflow',
+      name: 'workflow.run_chat',
+      label: 'run_chat',
+      description: 'Dispatch a regular chat/meta question to chat.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'What can Ava do?' },
+        expectJson: {
+          'result.classification.route': 'meta_question',
+          'result.action': 'run_chat',
+          'result.workflow': 'chat',
+          'result.status': 'implemented',
+        },
+      }),
+    },
+    {
+      id: 'workflow:task-intake',
+      kind: 'workflow',
+      name: 'workflow.start_task_intake',
+      label: 'start_task_intake',
+      description: 'Dispatch a big coding/design request to task intake.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a professional 3D animation site that can load a GLB model and let the user control the camera.' },
+        expectJson: {
+          'result.classification.route': 'task_intake',
+          'result.action': 'start_task_intake',
+          'result.workflow': 'intake',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:continue-intake',
+      kind: 'workflow',
+      name: 'workflow.continue_intake',
+      label: 'continue_intake',
+      description: 'Dispatch an answer during active intake to continue intake.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'Use React and create it in D:\\Apps\\Scene.',
+          pendingIntake: true,
+          pendingIntakeStage: 'clarifying',
+        },
+        expectJson: {
+          'result.classification.route': 'continue_intake',
+          'result.action': 'continue_intake',
+          'result.workflow': 'intake_reply',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:confirm-task',
+      kind: 'workflow',
+      name: 'workflow.confirm_task',
+      label: 'confirm_task',
+      description: 'Dispatch summary confirmation to confirmed task start.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'confirm',
+          pendingIntake: true,
+          pendingIntakeStage: 'awaiting_summary_confirm',
+        },
+        expectJson: {
+          'result.classification.route': 'task_confirmation',
+          'result.action': 'confirm_task',
+          'result.workflow': 'intake',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:reanalyze-intake',
+      kind: 'workflow',
+      name: 'workflow.reanalyze_intake',
+      label: 'reanalyze_intake',
+      description: 'Dispatch requirement corrections to intake reanalysis.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'Actually change it to a desktop app first.',
+          pendingIntake: true,
+          pendingIntakeStage: 'clarifying',
+        },
+        expectJson: {
+          'result.classification.route': 'requirement_correction',
+          'result.action': 'reanalyze_intake',
+          'result.workflow': 'intake_reanalysis',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:cancel-intake',
+      kind: 'workflow',
+      name: 'workflow.cancel_intake',
+      label: 'cancel_intake',
+      description: 'Dispatch explicit cancel/stop input to cancel intake.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'stop' },
+        expectJson: {
+          'result.classification.route': 'cancel_or_pause',
+          'result.action': 'cancel_intake',
+          'result.workflow': 'cancel',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:recovery',
+      kind: 'workflow',
+      name: 'workflow.recover_task',
+      label: 'recover_task',
+      description: 'Dispatch retry/continue replies to task recovery.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'retry' },
+        expectJson: {
+          'result.classification.route': 'retry_or_continue',
+          'result.action': 'recover_task',
+          'result.workflow': 'recovery',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:permission',
+      kind: 'workflow',
+      name: 'workflow.handle_permission',
+      label: 'handle_permission',
+      description: 'Dispatch permission replies to permission handling.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'approve file access' },
+        expectJson: {
+          'result.classification.route': 'permission_response',
+          'result.action': 'handle_permission',
+          'result.workflow': 'permission',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:direct-tool',
+      kind: 'workflow',
+      name: 'workflow.run_direct_tool',
+      label: 'run_direct_tool',
+      description: 'Dispatch a small file-info request to direct tool execution.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Read package.json and tell me name and version.' },
+        expectJson: {
+          'result.classification.route': 'small_task',
+          'result.action': 'run_direct_tool',
+          'result.workflow': 'direct_tool',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:file-media',
+      kind: 'workflow',
+      name: 'workflow.handle_file_media',
+      label: 'handle_file_media',
+      description: 'Dispatch file or media attachments to file/media handling.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: {
+          content: 'Please inspect this file.',
+          attachments: [{ kind: 'document', path: 'D:\\Apps\\Ava\\package.json', name: 'package.json' }],
+        },
+        expectJson: {
+          'result.classification.route': 'file_or_attachment_input',
+          'result.action': 'handle_file_media',
+          'result.workflow': 'file_media',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:url',
+      kind: 'workflow',
+      name: 'workflow.handle_url',
+      label: 'handle_url',
+      description: 'Dispatch URL inputs to browser handling.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Check http://127.0.0.1:5179/' },
+        expectJson: {
+          'result.classification.route': 'url_input',
+          'result.action': 'handle_url',
+          'result.workflow': 'browser',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:delegate-agent',
+      kind: 'workflow',
+      name: 'workflow.delegate_to_code_agent',
+      label: 'delegate_to_code_agent',
+      description: 'Dispatch explicit code-agent delegation to the delegation workflow.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Assign this task to Claude Code.' },
+        expectJson: {
+          'result.classification.route': 'agent_delegation',
+          'result.action': 'delegate_to_code_agent',
+          'result.workflow': 'delegation',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:update-preference',
+      kind: 'workflow',
+      name: 'workflow.update_preference',
+      label: 'update_preference',
+      description: 'Dispatch user preference or settings input to preference handling.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Always answer me in Chinese by default.' },
+        expectJson: {
+          'result.classification.route': 'preference_or_setting',
+          'result.action': 'update_preference',
+          'result.workflow': 'settings',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:ask-clarifying-question',
+      kind: 'workflow',
+      name: 'workflow.ask_clarifying_question',
+      label: 'ask_clarifying_question',
+      description: 'Dispatch ambiguous input to a clarification workflow.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'this' },
+        expectJson: {
+          'result.classification.route': 'unknown_or_ambiguous',
+          'result.action': 'ask_clarifying_question',
+          'result.workflow': 'clarify',
+          'result.status': 'implemented',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+  ]
+}
+
 function makeDaemonTargets(baseUrl: string): TestTarget[] {
   const normalized = baseUrl.replace(/\/+$/, '')
   return [
@@ -643,6 +1230,36 @@ function parseSseEventTypes(text: string): string[] {
     .split(/\r?\n/)
     .filter(line => line.startsWith('event:'))
     .map(line => line.slice('event:'.length).trim())
+}
+
+function getJsonPath(value: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (!current || typeof current !== 'object') return undefined
+    return (current as Record<string, unknown>)[key]
+  }, value)
+}
+
+function assertExpectedJson(fullContent: string, expected?: Record<string, unknown>): string[] {
+  if (!expected || Object.keys(expected).length === 0) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(fullContent)
+  } catch (err) {
+    throw new Error(`Expected JSON response but parse failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  const matched: string[] = []
+  const missing: string[] = []
+  for (const [path, expectedValue] of Object.entries(expected)) {
+    const actual = getJsonPath(parsed, path)
+    if (actual === expectedValue) {
+      matched.push(`${path}=${String(expectedValue)}`)
+    } else {
+      missing.push(`${path}: expected ${JSON.stringify(expectedValue)}, got ${JSON.stringify(actual)}`)
+    }
+  }
+  if (missing.length > 0) throw new Error(`JSON expectation failed: ${missing.join('; ')}`)
+  return matched
 }
 
 function statusIcon(status: TestStatus) {
@@ -816,8 +1433,14 @@ export function App() {
   }, [])
 
   const visibleTargets = useMemo(() => targets.filter(target => target.kind === kind), [kind, targets])
-  const selected = targets.find(target => target.id === selectedId) ?? visibleTargets[0] ?? targets[0]
+  const selected = visibleTargets.find(target => target.id === selectedId) ?? visibleTargets[0] ?? targets[0]
   const selectedState = selected ? tests[selected.id] : undefined
+
+  const changeTestKind = (nextKind: typeof TEST_KINDS[number]) => {
+    setKind(nextKind)
+    const nextTarget = targets.find(target => target.kind === nextKind)
+    if (nextTarget) setSelectedId(nextTarget.id)
+  }
 
   useEffect(() => {
     const element = canvasRef.current
@@ -1007,7 +1630,14 @@ export function App() {
       description: skill.sourcePath,
       defaultRequest: makeSkillRequest(skill.name, skill.pluginName),
     }))
-    const nextTargets = [...makeDaemonTargets(baseUrl), ...builtIns, ...mcp, ...skills]
+    const nextTargets = [
+      ...makeDaemonTargets(baseUrl),
+      ...makeIntentGateTargets(baseUrl),
+      ...makeWorkflowDispatcherTargets(baseUrl),
+      ...builtIns,
+      ...mcp,
+      ...skills,
+    ]
     setTargets(nextTargets)
     setTests(prev => {
       const next = { ...prev }
@@ -1182,9 +1812,14 @@ export function App() {
       const eventTypes = parseSseEventTypes(fullContent)
       const missing = (request.expectEventTypes ?? []).filter(type => !eventTypes.includes(type))
       if (missing.length > 0) throw new Error(`Missing expected SSE events: ${missing.join(', ')}`)
+      const matchedJson = assertExpectedJson(fullContent, request.expectJson)
 
       const durationMs = Date.now() - startedAt
-      const message = `Passed in ${durationMs}ms${eventTypes.length ? `; events: ${eventTypes.join(', ')}` : ''}`
+      const details = [
+        eventTypes.length ? `events: ${eventTypes.join(', ')}` : '',
+        matchedJson.length ? `json: ${matchedJson.join(', ')}` : '',
+      ].filter(Boolean).join('; ')
+      const message = `Passed in ${durationMs}ms${details ? `; ${details}` : ''}`
       setTests(prev => ({ ...prev, [target.id]: { request: requestText, status: 'passed', message, durationMs, completedAt: Date.now(), fullContent } }))
       writeLog({ id: target.id, kind: target.kind, name: target.name, status: 'passed', message, durationMs, request: requestText, fullContent })
     } catch (err) {
@@ -1316,7 +1951,7 @@ export function App() {
   }
 
   const runTarget = async (target: TestTarget) => {
-    if (target.kind === 'daemon') await runDaemonTarget(target)
+    if (target.kind === 'daemon' || target.kind === 'intent' || target.kind === 'workflow') await runDaemonTarget(target)
     else await runLlmRoutingTarget(target)
   }
 
@@ -1494,6 +2129,8 @@ export function App() {
     : 'unavailable'
   const testSummariesByKind = useMemo(() => ({
     daemon: summarizeTestTargets(targets.filter(target => target.kind === 'daemon'), tests),
+    intent: summarizeTestTargets(targets.filter(target => target.kind === 'intent'), tests),
+    workflow: summarizeTestTargets(targets.filter(target => target.kind === 'workflow'), tests),
     'built-in': summarizeTestTargets(targets.filter(target => target.kind === 'built-in'), tests),
     mcp: summarizeTestTargets(targets.filter(target => target.kind === 'mcp'), tests),
     skill: summarizeTestTargets(targets.filter(target => target.kind === 'skill'), tests),
@@ -1700,14 +2337,6 @@ export function App() {
           ) : (
             <div className="actions">
               <button className="ghost" onClick={() => setKind('dev')}>Back</button>
-              <div className="section-tabs">
-                {TEST_KINDS.map(item => (
-                  <button key={item} className={kind === item ? 'active' : ''} onClick={() => setKind(item)}>
-                    {targetKindLabel(item)}
-                    <span>{targets.filter(target => target.kind === item).length}</span>
-                  </button>
-                ))}
-              </div>
               <button className="ghost" onClick={refresh} disabled={loading}>
                 <RefreshCw size={14} className={loading ? 'spin' : ''} />
                 Refresh
@@ -1968,6 +2597,8 @@ export function App() {
                       </div>
                       <ul>
                         <li><strong>Daemon</strong><span>{testSummariesByKind.daemon.label}</span></li>
+                        <li><strong>Intent Gate</strong><span>{testSummariesByKind.intent.label}</span></li>
+                        <li><strong>Workflow</strong><span>{testSummariesByKind.workflow.label}</span></li>
                         <li><strong>Built-in</strong><span>{testSummariesByKind['built-in'].label}</span></li>
                         <li><strong>MCP</strong><span>{testSummariesByKind.mcp.label}</span></li>
                         <li><strong>Skill</strong><span>{testSummariesByKind.skill.label}</span></li>
@@ -2134,6 +2765,16 @@ export function App() {
         ) : (
           <section className="content">
           <div className="target-list">
+            <label className="test-category-picker">
+              <span>Test category</span>
+              <select value={kind} onChange={event => changeTestKind(event.target.value as typeof TEST_KINDS[number])}>
+                {TEST_KINDS.map(item => (
+                  <option key={item} value={item}>
+                    {targetKindLabel(item)} ({targets.filter(target => target.kind === item).length})
+                  </option>
+                ))}
+              </select>
+            </label>
             {loading ? (
               <div className="empty">Loading daemon context...</div>
             ) : visibleTargets.length === 0 ? (

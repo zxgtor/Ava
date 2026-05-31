@@ -219,6 +219,10 @@ type InputDispatchResult = {
   workflow?: string
   status?: 'implemented' | 'planned'
   fallbackAction?: string
+  actionPreview?: {
+    text?: string
+    requiresConfirmation?: boolean
+  }
   reason?: string
 }
 
@@ -343,6 +347,16 @@ function makeCompletedAssistantMessage(taskId: string, text: string): Message {
     runPhase: 'completed',
     createdAt: Date.now(),
   }
+}
+
+function makeActionPreviewMessage(taskId: string, inputDecision: InputDispatchResult): Message | null {
+  const text = inputDecision.actionPreview?.text?.trim()
+  if (!text || inputDecision.actionPreview?.requiresConfirmation) return null
+  return makeCompletedAssistantMessage(taskId, text)
+}
+
+function maybeWithPreview(messages: Message[], preview: Message | null): Message[] {
+  return preview ? [...messages, preview] : messages
 }
 
 async function runDaemonAnalyzePhase(input: {
@@ -1542,6 +1556,7 @@ export function ChatView() {
       if (!pendingTaskIntake && inputDecision.action === 'handle_url') {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const url = extractUrlFromText(content)
         const urlContext = workflowSystemMessage(taskId, [
@@ -1553,9 +1568,10 @@ export function ChatView() {
         ].filter(Boolean).join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
         await driveStream(
-          { ...conversation, messages: [...conversation.messages, userMsg, urlContext] },
+          { ...conversation, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), urlContext] },
           conversation.id,
           placeholder.id,
           taskId,
@@ -1566,6 +1582,7 @@ export function ChatView() {
       if (!pendingTaskIntake && inputDecision.action === 'handle_file_media') {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const attachmentList = (attachments ?? []).map(path => `- ${path}`).join('\n') || '- (attachment metadata only)'
         const fileMediaContext = workflowSystemMessage(taskId, [
@@ -1577,9 +1594,10 @@ export function ChatView() {
         ].join('\n'))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
         await driveStream(
-          { ...conversation, messages: [...conversation.messages, userMsg, fileMediaContext] },
+          { ...conversation, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), fileMediaContext] },
           conversation.id,
           placeholder.id,
           taskId,
@@ -1590,6 +1608,7 @@ export function ChatView() {
       if (!pendingTaskIntake && inputDecision.action === 'update_preference') {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const preferenceContext = workflowSystemMessage(taskId, [
           'Workflow action: update_preference.',
@@ -1599,9 +1618,10 @@ export function ChatView() {
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
         await driveStream(
-          { ...conversation, messages: [...conversation.messages, userMsg, preferenceContext] },
+          { ...conversation, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), preferenceContext] },
           conversation.id,
           placeholder.id,
           taskId,
@@ -1612,6 +1632,7 @@ export function ChatView() {
       if (!pendingTaskIntake && inputDecision.action === 'delegate_to_code_agent') {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const delegationContext = workflowSystemMessage(taskId, [
           'Workflow action: delegate_to_code_agent.',
@@ -1622,9 +1643,10 @@ export function ChatView() {
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
         await driveStream(
-          { ...conversation, messages: [...conversation.messages, userMsg, delegationContext] },
+          { ...conversation, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), delegationContext] },
           conversation.id,
           placeholder.id,
           taskId,
@@ -1641,6 +1663,7 @@ export function ChatView() {
 
         const taskId = plan.taskId
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const retryPlan = plan
         const recoveryContext = workflowSystemMessage(taskId, [
@@ -1651,9 +1674,10 @@ export function ChatView() {
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
         await driveStream(
-          { ...conversation, activeTaskPlan: retryPlan, messages: [...conversation.messages, userMsg, recoveryContext] },
+          { ...conversation, activeTaskPlan: retryPlan, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), recoveryContext] },
           conversation.id,
           placeholder.id,
           taskId,
@@ -1687,6 +1711,7 @@ export function ChatView() {
 
         const grantedPath = extractWorkingDirectoryFromText(content)
         const retryPlan = existingPlan
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const nextConversation = grantedPath
           ? { ...conversation, folderPath: grantedPath }
@@ -1701,9 +1726,10 @@ export function ChatView() {
         if (grantedPath) {
           dispatch({ type: 'SET_CONVERSATION_FOLDER', id: conversation.id, path: grantedPath })
         }
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
         await driveStream(
-          { ...nextConversation, activeTaskPlan: retryPlan, messages: [...conversation.messages, userMsg, permissionContext] },
+          { ...nextConversation, activeTaskPlan: retryPlan, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), permissionContext] },
           conversation.id,
           placeholder.id,
           taskId,
@@ -1715,6 +1741,7 @@ export function ChatView() {
       if (!pendingTaskIntake && inputDecision.action === 'run_direct_tool') {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const directToolContext = workflowSystemMessage(taskId, [
           'Workflow action: run_direct_tool.',
@@ -1723,9 +1750,10 @@ export function ChatView() {
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
         await driveStream(
-          { ...conversation, messages: [...conversation.messages, userMsg, directToolContext] },
+          { ...conversation, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), directToolContext] },
           conversation.id,
           placeholder.id,
           taskId,
@@ -1736,10 +1764,12 @@ export function ChatView() {
       if (!pendingTaskIntake && (inputDecision.action === 'start_task_intake' || inputDecision.classification?.requiresTaskIntake)) {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const intakeMsg = makeAssistantPlaceholder(taskId)
         const conversationId = conversation.id
 
         dispatch({ type: 'ADD_MESSAGE', conversationId, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId, message: previewMsg })
         dispatch({
           type: 'ADD_MESSAGE',
           conversationId,
