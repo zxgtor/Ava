@@ -1,22 +1,26 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Download, ExternalLink, Loader2, RefreshCw, Search, Sparkles } from 'lucide-react'
-import type { DiscoveredPlugin, MarketplaceCatalog, MarketplaceItem, MarketplaceItemSource, MarketplaceItemType, Settings } from '../../types'
+import { ChevronDown, ChevronRight, Download, ExternalLink, Loader2, RefreshCw, Search, Sparkles, X } from 'lucide-react'
+import type { AddOnSource, DiscoveredPlugin, MarketplaceCatalog, MarketplaceItem, MarketplaceItemSource, MarketplaceItemType, Settings } from '../../types'
+import { SPEECH_PLUGIN_ID } from '../../lib/speechPlugin'
+import { LabeledInput, Toggle } from './shared'
 
-type MarketTab = 'plugin' | 'skill'
-const MARKETPLACE_SOURCES: Array<{ id: MarketplaceItemSource; label: string; detail: string }> = [
-  { id: 'claude', label: 'Claude Official', detail: 'Official Claude Code plugin marketplace' },
-  { id: 'codex', label: 'Codex Marketplace', detail: 'codex-marketplace.com community catalog' },
-  { id: 'ava', label: 'Ava Local', detail: 'Installed local plugins and skills' },
+type MarketTab = MarketplaceItemType
+const ADD_SOURCE_OPTION = '__add_source__'
+const BUILT_IN_SOURCES: Array<{ id: MarketplaceItemSource; group: 'third-party'; label: string; detail: string }> = [
+  { id: 'claude', group: 'third-party', label: 'Claude Official', detail: 'Official Claude Code plugin catalog' },
+  { id: 'codex', group: 'third-party', label: 'Codex Catalog', detail: 'codex-marketplace.com community catalog' },
 ]
 
 export function MarketplaceSection({
   settings,
+  update,
   localPlugins,
   onInstall,
 }: {
   settings: Settings
+  update: (p: (s: Settings) => Settings) => void
   localPlugins: DiscoveredPlugin[]
   onInstall: (url: string) => Promise<void>
   onUninstall: (id: string) => Promise<void>
@@ -28,13 +32,41 @@ export function MarketplaceSection({
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<MarketTab>('plugin')
   const [query, setQuery] = useState('')
-  const [enabledSources, setEnabledSources] = useState<MarketplaceItemSource[]>(['claude', 'codex', 'ava'])
+  const [enabledSources, setEnabledSources] = useState<MarketplaceItemSource[]>(['ava'])
+  const [selectedCustomSourceIds, setSelectedCustomSourceIds] = useState<string[]>([])
+  const [sourcePick, setSourcePick] = useState('')
+  const [addingSource, setAddingSource] = useState(false)
+  const [sourceUrlDraft, setSourceUrlDraft] = useState('')
+  const [runtime, setRuntime] = useState<Record<string, Awaited<ReturnType<typeof window.ava.mcp.listServers>>[number]>>({})
+  const [expandedPluginIds, setExpandedPluginIds] = useState<Record<string, boolean>>({})
+
+  const selectedCustomSources = useMemo(
+    () => settings.addOnSources.filter(source => selectedCustomSourceIds.includes(source.id)),
+    [settings.addOnSources, selectedCustomSourceIds],
+  )
+  const selectedBuiltInSourceIds = useMemo(
+    () => enabledSources.filter((source): source is 'claude' | 'codex' => source === 'claude' || source === 'codex'),
+    [enabledSources],
+  )
+  const hasSelectedExternalSources = selectedBuiltInSourceIds.length > 0 || selectedCustomSources.length > 0
+  const requestSources = useMemo<MarketplaceItemSource[]>(
+    () => {
+      const sources: MarketplaceItemSource[] = hasSelectedExternalSources ? [...selectedBuiltInSourceIds] : ['ava']
+      return selectedCustomSources.length > 0
+        ? [...sources, 'custom']
+        : sources
+    },
+    [hasSelectedExternalSources, selectedBuiltInSourceIds, selectedCustomSources.length],
+  )
 
   const refresh = async () => {
     setLoading(true)
     setError(null)
     try {
-      const next = await window.ava.plugins.getMarketplaceCatalog(settings.pluginStates, { sources: enabledSources }) as MarketplaceCatalog
+      const next = await window.ava.plugins.getMarketplaceCatalog(settings.pluginStates, {
+        sources: requestSources,
+        customSources: selectedCustomSources.map(source => ({ ...source, enabled: true })),
+      }) as MarketplaceCatalog
       setCatalog(next)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -46,17 +78,105 @@ export function MarketplaceSection({
   useEffect(() => {
     refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.pluginStates, enabledSources])
+  }, [settings.pluginStates, requestSources, selectedCustomSources])
+
+  useEffect(() => {
+    window.ava.mcp.listServers()
+      .then(list => setRuntime(Object.fromEntries(list.map(item => [item.id, item]))))
+      .catch(() => { /* noop */ })
+    const off = window.ava.mcp.onStatus(server => {
+      setRuntime(prev => ({ ...prev, [server.id]: server }))
+    })
+    return off
+  }, [])
+
+  const selectThirdPartySource = (value: string) => {
+    if (!value) return
+    if (value === ADD_SOURCE_OPTION) {
+      setAddingSource(true)
+      setSourcePick('')
+      return
+    }
+    if (value === 'claude' || value === 'codex') {
+      setEnabledSources(prev => prev.includes(value) ? prev : [...prev, value])
+    } else if (value.startsWith('custom:')) {
+      const id = value.slice('custom:'.length)
+      setSelectedCustomSourceIds(prev => prev.includes(id) ? prev : [...prev, id])
+    }
+    setSourcePick('')
+  }
+
+  const removeThirdPartySource = (value: string) => {
+    if (value === 'claude' || value === 'codex') {
+      setEnabledSources(prev => prev.filter(source => source !== value))
+    } else {
+      setSelectedCustomSourceIds(prev => prev.filter(id => id !== value))
+    }
+  }
+
+  const addCustomSource = () => {
+    const url = sourceUrlDraft.trim()
+    if (!url) return
+    if (!/^https?:\/\//i.test(url)) {
+      setError('Custom source must be an http(s) JSON catalog URL.')
+      return
+    }
+    const existing = settings.addOnSources.find(source => source.url.toLowerCase() === url.toLowerCase())
+    if (existing) {
+      setSelectedCustomSourceIds(prev => prev.includes(existing.id) ? prev : [...prev, existing.id])
+      setSourceUrlDraft('')
+      setAddingSource(false)
+      return
+    }
+    const id = `custom-${Date.now().toString(36)}`
+    update(s => {
+      const next: AddOnSource = {
+        id,
+        label: inferSourceName(url),
+        url,
+        enabled: true,
+      }
+      return { ...s, addOnSources: [...s.addOnSources, next] }
+    })
+    setSelectedCustomSourceIds(prev => [...prev, id])
+    setSourceUrlDraft('')
+    setAddingSource(false)
+  }
 
   const items = catalog?.items ?? []
+  const visibleItems = useMemo(
+    () => items.filter(item => {
+      if (item.installedPluginId === 'bundled-ava-core' || /^ava:(plugin|skill|mcp):bundled-ava-core\b/.test(item.id)) {
+        return false
+      }
+      if (!hasSelectedExternalSources) {
+        return item.source === 'ava'
+      }
+      if (item.source === 'custom') {
+        return selectedCustomSources.length > 0
+      }
+      return selectedBuiltInSourceIds.includes(item.source as 'claude' | 'codex')
+    }),
+    [hasSelectedExternalSources, items, selectedBuiltInSourceIds, selectedCustomSources.length],
+  )
   const counts = useMemo(() => ({
-    plugin: items.filter(item => item.type === 'plugin').length,
-    skill: items.filter(item => item.type === 'skill').length,
-  }), [items])
+    plugin: visibleItems.filter(item => item.type === 'plugin').length,
+    skill: visibleItems.filter(item => item.type === 'skill').length,
+    mcp: visibleItems.filter(item => item.type === 'mcp').length,
+  }), [visibleItems])
+  const selectedBuiltInThirdPartySources = BUILT_IN_SOURCES.filter(
+    source => (source.id === 'claude' || source.id === 'codex') && selectedBuiltInSourceIds.includes(source.id),
+  )
+  const thirdPartyOptions = BUILT_IN_SOURCES
+    .filter(source => source.group === 'third-party' && !enabledSources.includes(source.id))
+    .map(source => ({ value: source.id, label: source.label }))
+  const customOptions = settings.addOnSources
+    .filter(source => !selectedCustomSourceIds.includes(source.id))
+    .map(source => ({ value: `custom:${source.id}`, label: source.label }))
 
   const categories = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const filtered = items.filter(item => {
+    const filtered = visibleItems.filter(item => {
       if (item.type !== tab) return false
       if (!q) return true
       return `${item.name} ${item.description} ${item.author} ${item.category} ${item.sourceBadges.join(' ')}`.toLowerCase().includes(q)
@@ -69,7 +189,27 @@ export function MarketplaceSection({
     return Array.from(grouped.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([category, list]) => [category, list.sort((a, b) => scoreItem(b) - scoreItem(a) || a.name.localeCompare(b.name))] as const)
-  }, [items, query, tab])
+  }, [visibleItems, query, tab])
+
+  const setPluginEnabled = (pluginId: string, enabled: boolean) => {
+    const plugin = localPlugins.find(item => item.id === pluginId)
+    if (enabled && plugin?.permissions.length) {
+      const ok = window.confirm([
+        `启用插件 "${plugin.manifest?.name ?? plugin.id}"？`,
+        '',
+        '它会获得这些能力：',
+        ...plugin.permissions.map(item => `- ${item}`),
+      ].join('\n'))
+      if (!ok) return
+    }
+    update(s => ({
+      ...s,
+      pluginStates: {
+        ...s.pluginStates,
+        [pluginId]: { enabled },
+      },
+    }))
+  }
 
   const install = async (item: MarketplaceItem) => {
     if (!item.installUrl || item.installKind !== 'git') return
@@ -90,9 +230,9 @@ export function MarketplaceSection({
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h3 className="text-lg font-semibold tracking-tight text-text">{t('settings.marketplace_title', 'Marketplace')}</h3>
+          <h3 className="text-lg font-semibold tracking-tight text-text">{t('settings.marketplace_title', 'Add-ons')}</h3>
           <div className="mt-1 text-xs text-text-3">
-            {t('settings.marketplace_desc', 'Discover plugins and skills from Claude Code, Codex, and Ava local catalogs.')}
+            {t('settings.marketplace_desc', 'Add optional plugins, skills, and MCP servers from Ava local catalogs and trusted external sources.')}
           </div>
         </div>
         <button
@@ -107,46 +247,105 @@ export function MarketplaceSection({
       </div>
 
       <div className="rounded-2xl border border-border-subtle bg-surface/80 p-3">
-        <div className="mb-3">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-3">Marketplace Sources</div>
-          <div className="grid gap-2 md:grid-cols-3">
-            {MARKETPLACE_SOURCES.map(item => (
-              <SourcePick
-                key={item.id}
-                source={item}
-                active={enabledSources.includes(item.id)}
-                disabled={enabledSources.length === 1 && enabledSources.includes(item.id)}
-                onToggle={() => {
-                  setEnabledSources(prev => {
-                    if (prev.includes(item.id)) {
-                      return prev.length === 1 ? prev : prev.filter(source => source !== item.id)
+        <div className="mb-3 space-y-3">
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-3">Add-on Sources</div>
+            </div>
+            <div className="space-y-2">
+              <select
+                value={sourcePick}
+                onChange={e => selectThirdPartySource(e.target.value)}
+                className="w-full cursor-pointer appearance-none rounded-lg border border-border-subtle bg-black/40 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%236b7280%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px_20px] bg-[right_0.5rem_center] bg-no-repeat px-3 py-1.5 pr-8 text-sm text-text shadow-sm outline-none transition-all hover:border-text-3 focus:border-accent focus:ring-2 focus:ring-accent/20"
+              >
+                <option value="" className="bg-[#1a1b1e] text-white">Select or add add-on source...</option>
+                {thirdPartyOptions.map(option => (
+                  <option key={option.value} value={option.value} className="bg-[#1a1b1e] text-white">{option.label}</option>
+                ))}
+                {customOptions.map(option => (
+                  <option key={option.value} value={option.value} className="bg-[#1a1b1e] text-white">{option.label}</option>
+                ))}
+                <option value={ADD_SOURCE_OPTION} className="bg-[#1a1b1e] text-white">+ Add source URL...</option>
+              </select>
+              <div className="flex min-h-[28px] flex-wrap items-center gap-2">
+                {selectedBuiltInThirdPartySources.map(source => (
+                  <SelectedSourceChip
+                    key={source.id}
+                    label={source.label}
+                    detail={source.detail}
+                    onRemove={() => removeThirdPartySource(source.id)}
+                  />
+                ))}
+                {selectedCustomSources.map(source => (
+                  <SelectedSourceChip
+                    key={source.id}
+                    label={source.label}
+                    detail={source.url}
+                    onRemove={() => removeThirdPartySource(source.id)}
+                  />
+                ))}
+              </div>
+            </div>
+            {addingSource && (
+              <div className="mt-2 flex flex-col gap-2 rounded-xl border border-border-subtle bg-bg/50 p-2 md:flex-row md:items-center">
+                <input
+                  value={sourceUrlDraft}
+                  onChange={e => setSourceUrlDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') addCustomSource()
+                    if (e.key === 'Escape') {
+                      setAddingSource(false)
+                      setSourceUrlDraft('')
                     }
-                    return [...prev, item.id]
-                  })
-                }}
-              />
-            ))}
+                  }}
+                  placeholder="Paste add-on catalog URL..."
+                  autoFocus
+                  className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-black/40 px-3 py-1.5 text-sm text-text outline-none transition-all placeholder:text-text-3 hover:border-text-3 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={addCustomSource}
+                    className="rounded-lg border border-accent/40 bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20"
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddingSource(false)
+                      setSourceUrlDraft('')
+                    }}
+                    className="rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-xs text-text-2 hover:bg-surface-2"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <TabButton active={tab === 'plugin'} onClick={() => setTab('plugin')}>
-            Plugin Marketplace <span className="text-text-3">{counts.plugin}</span>
-          </TabButton>
-          <TabButton active={tab === 'skill'} onClick={() => setTab('skill')}>
-            Skill Market <span className="text-text-3">{counts.skill}</span>
-          </TabButton>
-        </div>
-
-        <div className="mt-3">
-          <div className="flex items-center gap-2 rounded-xl border border-border-subtle bg-bg px-3 py-2">
+        <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border-subtle bg-bg px-3 py-2 md:flex-row md:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <Search size={14} className="text-text-3" />
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Search marketplace..."
+              placeholder="Search add-ons..."
               className="min-w-0 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-text-3"
             />
+          </div>
+          <div className="flex flex-wrap justify-end gap-1.5 md:flex-nowrap">
+            <TabButton active={tab === 'plugin'} onClick={() => setTab('plugin')}>
+              Plugins <span className="text-text-3">{counts.plugin}</span>
+            </TabButton>
+            <TabButton active={tab === 'skill'} onClick={() => setTab('skill')}>
+              Skills <span className="text-text-3">{counts.skill}</span>
+            </TabButton>
+            <TabButton active={tab === 'mcp'} onClick={() => setTab('mcp')}>
+              MCP Servers <span className="text-text-3">{counts.mcp}</span>
+            </TabButton>
           </div>
         </div>
       </div>
@@ -161,11 +360,11 @@ export function MarketplaceSection({
       {loading && !catalog ? (
         <div className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-border-subtle p-8 text-xs text-text-3">
           <Loader2 size={14} className="animate-spin" />
-          {t('settings.marketplace_loading', 'Loading Marketplace...')}
+          {t('settings.marketplace_loading', 'Loading Add-ons...')}
         </div>
       ) : categories.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border-subtle p-8 text-center text-xs text-text-3">
-          No marketplace items match the current filters.
+          No add-ons match the current filters.
         </div>
       ) : (
         <div className="space-y-6">
@@ -184,6 +383,15 @@ export function MarketplaceSection({
                     key={item.id}
                     item={item}
                     localPlugins={localPlugins}
+                    settings={settings}
+                    update={update}
+                    runtimeServers={Object.values(runtime)}
+                    expanded={item.installedPluginId ? Boolean(expandedPluginIds[item.installedPluginId]) : false}
+                    onToggleExpanded={() => {
+                      if (!item.installedPluginId) return
+                      setExpandedPluginIds(prev => ({ ...prev, [item.installedPluginId!]: !prev[item.installedPluginId!] }))
+                    }}
+                    onTogglePlugin={setPluginEnabled}
                     loading={loadingId === item.id}
                     onInstall={() => install(item)}
                   />
@@ -200,32 +408,64 @@ export function MarketplaceSection({
 function MarketplaceCard({
   item,
   localPlugins,
+  settings,
+  update,
+  runtimeServers,
+  expanded,
+  onToggleExpanded,
+  onTogglePlugin,
   loading,
   onInstall,
 }: {
   item: MarketplaceItem
   localPlugins: DiscoveredPlugin[]
+  settings: Settings
+  update: (p: (s: Settings) => Settings) => void
+  runtimeServers: Awaited<ReturnType<typeof window.ava.mcp.listServers>>
+  expanded: boolean
+  onToggleExpanded: () => void
+  onTogglePlugin: (pluginId: string, enabled: boolean) => void
   loading: boolean
   onInstall: () => void
 }) {
   const installed = Boolean(item.installedPluginId) || isInstalledByRepo(item, localPlugins)
+  const localPlugin = item.installedPluginId
+    ? localPlugins.find(plugin => plugin.id === item.installedPluginId)
+    : undefined
+  const manageablePlugin = item.type === 'plugin' && localPlugin && localPlugin.id !== 'bundled-ava-core'
   const canInstall = item.installKind === 'git' && Boolean(item.installUrl) && !installed
   return (
     <article className="group overflow-hidden rounded-2xl border border-border-subtle bg-surface transition-colors hover:border-accent/35">
-      <div className={`relative h-20 ${thumbnailClass(item)}`}>
+      <div className={`relative h-14 ${thumbnailClass(item)}`}>
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,.22),transparent_28%)]" />
-        <div className="absolute bottom-2 right-3 text-2xl font-black tracking-tighter text-white/90">
-          {glyph(item)}
+        <div className="absolute left-3 right-24 top-1/2 -translate-y-1/2">
+          <div className="truncate text-sm font-semibold text-white">{item.name}</div>
+          <div className="truncate text-[11px] text-white/65">{item.author}</div>
         </div>
+        {manageablePlugin && (
+          <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleExpanded}
+              className="rounded-md bg-black/20 p-1 text-white/80 backdrop-blur hover:bg-black/35 hover:text-white"
+              title={expanded ? 'Collapse plugin details' : 'Expand plugin details'}
+            >
+              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            <Toggle
+              value={localPlugin.enabled}
+              disabled={!localPlugin.valid}
+              onChange={v => onTogglePlugin(localPlugin.id, v)}
+            />
+          </div>
+        )}
+        {!manageablePlugin && (
+          <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-2">
+            <ActionButton installed={installed} canInstall={canInstall} loading={loading} note={item.installNote} onInstall={onInstall} />
+          </div>
+        )}
       </div>
       <div className="space-y-3 p-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-text">{item.name}</div>
-            <div className="truncate text-[11px] text-text-3">{item.author}</div>
-          </div>
-          <ActionButton installed={installed} canInstall={canInstall} loading={loading} note={item.installNote} onInstall={onInstall} />
-        </div>
         <p className="line-clamp-3 min-h-[48px] text-xs leading-relaxed text-text-2">{item.description}</p>
         <div className="flex flex-wrap gap-1.5">
           {item.sourceBadges.map(badge => <Badge key={badge}>{badge}</Badge>)}
@@ -244,44 +484,210 @@ function MarketplaceCard({
             </button>
           )}
         </div>
+        {manageablePlugin && expanded && (
+          <PluginDetails
+            plugin={localPlugin}
+            settings={settings}
+            update={update}
+            runtimeServers={runtimeServers.filter(server => server.pluginId === localPlugin.id)}
+          />
+        )}
       </div>
     </article>
   )
 }
 
-function SourcePick({
-  source,
-  active,
-  disabled,
-  onToggle,
+function PluginDetails({
+  plugin,
+  settings,
+  update,
+  runtimeServers,
 }: {
-  source: { id: MarketplaceItemSource; label: string; detail: string }
-  active: boolean
-  disabled: boolean
-  onToggle: () => void
+  plugin: DiscoveredPlugin
+  settings: Settings
+  update: (p: (s: Settings) => Settings) => void
+  runtimeServers: Awaited<ReturnType<typeof window.ava.mcp.listServers>>
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={disabled}
-      className={`flex min-w-0 items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
-        active
-          ? 'border-accent/30 bg-accent/10'
-          : 'border-border-subtle bg-surface-2 hover:bg-surface-3'
-      } ${disabled ? 'cursor-not-allowed opacity-70' : ''}`}
-      title={disabled ? 'At least one marketplace source must stay enabled.' : undefined}
-    >
-      <span className={`mt-0.5 flex h-4 w-4 flex-none items-center justify-center rounded border ${
-        active ? 'border-accent bg-accent text-bg' : 'border-border-subtle bg-bg'
-      }`}>
-        {active ? '✓' : ''}
-      </span>
-      <span className="min-w-0">
-        <span className="block truncate text-xs font-medium text-text">{source.label}</span>
-        <span className="block truncate text-[11px] text-text-3">{source.detail}</span>
-      </span>
-    </button>
+    <div className="space-y-2 border-t border-border-subtle pt-3">
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="rounded bg-surface-2 px-2 py-1.5 text-text-2">MCP: {plugin.mcpServerCount}</div>
+        <div className="rounded bg-surface-2 px-2 py-1.5 text-text-2">Skills: {plugin.skillCount}</div>
+        <div className="rounded bg-surface-2 px-2 py-1.5 text-text-2">Commands: {plugin.commandCount}</div>
+      </div>
+      {plugin.id === SPEECH_PLUGIN_ID && (
+        <SpeechPluginSettings settings={settings} update={update} disabled={!plugin.enabled} />
+      )}
+      <div className="text-xs text-text-3 break-all">{plugin.rootPath}</div>
+      {plugin.source.uri && (
+        <div className="text-xs text-text-3 break-all">Source: {plugin.source.uri}</div>
+      )}
+      <PluginDetailList
+        title="Permissions"
+        empty="No extra permissions declared."
+        items={plugin.permissions.map(item => ({ key: item, label: item, tone: 'normal' as const }))}
+      />
+      <PluginDetailList
+        title="MCP Servers"
+        empty="No MCP servers."
+        items={plugin.mcpServers.map(server => {
+          const runtime = server.id ? runtimeServers.find(item => item.id === server.id) : undefined
+          const details = [
+            server.command ? `command: ${server.command}` : null,
+            server.args?.length ? `args: ${server.args.join(' ')}` : null,
+            server.cwd ? `cwd: ${server.cwd}` : null,
+            server.cwdInsidePlugin === false ? 'cwd blocked: outside plugin root' : null,
+            server.envKeys?.length ? `env keys: ${server.envKeys.join(', ')}` : null,
+            runtime?.tools?.length ? `runtime tools: ${runtime.tools.map(tool => tool.name).join(', ')}` : null,
+            runtime?.lastError ? `runtime error: ${runtime.lastError}` : null,
+            server.error ? `error: ${server.error}` : null,
+          ].filter((item): item is string => Boolean(item))
+          return {
+            key: server.name,
+            label: `${server.name} · ${server.type} · ${server.status}${runtime?.status ? ` · runtime ${runtime.status}` : ''}`,
+            detail: details.join('\n'),
+            tone: (server.status === 'loaded' && runtime?.status !== 'error' && server.cwdInsidePlugin !== false) ? 'normal' as const : 'warning' as const,
+          }
+        })}
+      />
+      <PluginDetailList
+        title="Skills"
+        empty="No skills."
+        items={plugin.skills.map(skill => ({
+          key: skill.sourcePath,
+          label: `${skill.name} · ${skill.status}`,
+          detail: skill.sourcePath,
+          tone: skill.status === 'loaded' ? 'normal' as const : 'warning' as const,
+        }))}
+      />
+      <PluginDetailList
+        title="Commands"
+        empty="No commands."
+        items={plugin.commands.map(command => ({
+          key: command.sourcePath,
+          label: `${command.name} · ${command.status}`,
+          detail: command.sourcePath,
+          tone: command.status === 'loaded' ? 'normal' as const : 'warning' as const,
+        }))}
+      />
+      {plugin.errors.map(err => <div key={err} className="text-xs text-error">{err}</div>)}
+      {plugin.warnings.map(warning => <div key={warning} className="text-xs text-warning">{warning}</div>)}
+    </div>
+  )
+}
+
+function SpeechPluginSettings({
+  settings,
+  update,
+  disabled,
+}: {
+  settings: Settings
+  update: (p: (s: Settings) => Settings) => void
+  disabled: boolean
+}) {
+  const { voice } = settings
+  return (
+    <div className={`space-y-3 rounded-lg border border-border-subtle bg-bg/60 p-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-medium text-text">Speech runtime config</div>
+          <div className="text-xs text-text-3">One plugin exposes separate speech.stt and speech.tts capabilities.</div>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-text-2">
+          <span>Chat controls</span>
+          <Toggle
+            value={voice.enabled}
+            onChange={v => update(s => ({ ...s, voice: { ...s.voice, enabled: v } }))}
+          />
+        </div>
+      </div>
+      <div className={`space-y-3 ${voice.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
+        <div className="grid grid-cols-2 gap-3">
+          <LabeledInput
+            label="STT Server URL (WebSocket)"
+            value={voice.sttServerUrl}
+            onChange={v => update(s => ({ ...s, voice: { ...s.voice, sttServerUrl: v } }))}
+            placeholder="ws://127.0.0.1:8000/ws"
+          />
+          <LabeledInput
+            label="TTS Server URL (HTTP)"
+            value={voice.ttsServerUrl}
+            onChange={v => update(s => ({ ...s, voice: { ...s.voice, ttsServerUrl: v } }))}
+            placeholder="http://127.0.0.1:8002/tts"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <LabeledInput
+            label="Default Voice ID"
+            value={voice.voiceId}
+            onChange={v => update(s => ({ ...s, voice: { ...s.voice, voiceId: v } }))}
+            placeholder="e.g. Chinese Female"
+          />
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-2 px-3 py-2">
+            <span className="text-xs text-text-2">Auto-read replies</span>
+            <Toggle
+              value={voice.autoRead}
+              onChange={v => update(s => ({ ...s, voice: { ...s.voice, autoRead: v } }))}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PluginDetailList({
+  title,
+  empty,
+  items,
+}: {
+  title: string
+  empty: string
+  items: Array<{ key: string; label: string; detail?: string; tone: 'normal' | 'warning' }>
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-xs text-text-3">{title}</div>
+      {items.length === 0 ? (
+        <div className="text-xs text-text-3">{empty}</div>
+      ) : (
+        <div className="space-y-1">
+          {items.map(item => (
+            <div key={item.key} className="rounded bg-surface-2 px-2 py-1.5 text-xs">
+              <div className={item.tone === 'warning' ? 'text-warning' : 'text-text-2'}>{item.label}</div>
+              {item.detail && <div className="break-all whitespace-pre-wrap text-text-3">{item.detail}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SelectedSourceChip({
+  label,
+  detail,
+  onRemove,
+}: {
+  label: string
+  detail: string
+  onRemove: () => void
+}) {
+  return (
+    <div className="flex max-w-full items-center gap-2 rounded-xl border border-accent/25 bg-accent/10 px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-medium text-text">{label}</div>
+        <div className="truncate text-[11px] text-text-3">{detail}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="rounded-md p-1 text-text-3 hover:bg-error/10 hover:text-error"
+        title="Remove source"
+      >
+        <X size={13} />
+      </button>
+    </div>
   )
 }
 
@@ -345,15 +751,26 @@ function normalizeRepo(url: string): string {
   return url.trim().toLowerCase().replace(/\.git$/, '').replace(/\/$/, '')
 }
 
-function titleCase(value: string): string {
-  return value.replace(/[-_]+/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
+function inferSourceName(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.replace(/^www\./i, '')
+    const pathName = parsed.pathname
+      .split('/')
+      .filter(Boolean)
+      .at(-1)
+      ?.replace(/\.(json|txt)$/i, '')
+      .replace(/[-_]+/g, ' ')
+      .trim()
+    const base = pathName && !/^ava add?ons?$/i.test(pathName) ? `${host} ${pathName}` : host
+    return titleCase(base)
+  } catch {
+    return url
+  }
 }
 
-function glyph(item: MarketplaceItem): string {
-  const words = item.name.split(/\s|-/).filter(Boolean)
-  if (item.type === 'skill') return words[0]?.slice(0, 2).toUpperCase() || 'SK'
-  if (words.length >= 2) return `${words[0][0]}${words[1][0]}`.toUpperCase()
-  return item.name.slice(0, 2).toUpperCase()
+function titleCase(value: string): string {
+  return value.replace(/[-_]+/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
 }
 
 function thumbnailClass(item: MarketplaceItem): string {

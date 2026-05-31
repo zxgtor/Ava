@@ -7,6 +7,7 @@ import { ToolCallBubble } from './ToolCallBubble'
 import { ProjectAnalysisCard } from './ProjectAnalysisCard'
 import { useStore } from '../store'
 import { playTTS } from '../lib/voiceClient'
+import { isSpeechEnabled } from '../lib/speechPlugin'
 
 interface Props {
   message: Message
@@ -387,7 +388,7 @@ function MessageBubbleImpl({
   }
 
   const handlePlayTTS = async () => {
-    if (!state.settings.voice?.enabled || !textContent.trim()) return
+    if (!isSpeechEnabled(state.settings) || !textContent.trim()) return
     
     if (isPlaying && audioRef.current) {
       audioRef.current.pause()
@@ -414,7 +415,7 @@ function MessageBubbleImpl({
 
   // Auto-read logic when streaming finishes
   useEffect(() => {
-    if (!isUser && !message.error && !message.aborted && state.settings.voice?.enabled && state.settings.voice?.autoRead) {
+    if (!isUser && !message.error && !message.aborted && isSpeechEnabled(state.settings) && state.settings.voice?.autoRead) {
       const justFinished = prevStreaming.current && !message.streaming
       if (justFinished && !hasAutoPlayed.current && textContent.trim()) {
         hasAutoPlayed.current = true
@@ -422,7 +423,7 @@ function MessageBubbleImpl({
       }
     }
     prevStreaming.current = message.streaming
-  }, [message.streaming, isUser, message.error, message.aborted, textContent, state.settings.voice])
+  }, [message.streaming, isUser, message.error, message.aborted, textContent, state.settings])
 
   // Cleanup on unmount
   useEffect(() => {

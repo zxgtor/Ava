@@ -257,6 +257,17 @@ export interface McpServerConfig {
   url?: string
 }
 
+// ── Workspaces ──────────────────────────────────────────────────────
+
+export interface WorkspaceConfig {
+  id: string
+  name: string
+  kind: 'local-pc' | 'pc'
+  fileAccess: boolean
+  pcControl: boolean
+  builtin?: boolean
+}
+
 /** Per-model detected tool-call format, cached so we do not re-probe every request. */
 export type ToolCallFormat = 'openai' | 'hermes' | 'none'
 
@@ -273,6 +284,13 @@ export interface ModelCapabilityProfile {
 }
 
 export interface PluginState {
+  enabled: boolean
+}
+
+export interface AddOnSource {
+  id: string
+  label: string
+  url: string
   enabled: boolean
 }
 
@@ -328,8 +346,8 @@ export interface PluginCapabilityView {
   error?: string
 }
 
-export type MarketplaceItemType = 'plugin' | 'skill'
-export type MarketplaceItemSource = 'claude' | 'codex' | 'ava'
+export type MarketplaceItemType = 'plugin' | 'skill' | 'mcp'
+export type MarketplaceItemSource = 'claude' | 'codex' | 'ava' | 'custom'
 
 export interface MarketplaceItem {
   id: string
@@ -359,6 +377,7 @@ export interface MarketplaceCatalog {
 
 export interface MarketplaceCatalogOptions {
   sources?: MarketplaceItemSource[]
+  customSources?: AddOnSource[]
 }
 
 export interface PluginCommand {
@@ -412,7 +431,9 @@ export interface Settings {
     assistantName: string
   }
   mcpServers: McpServerConfig[]
+  workspaces: WorkspaceConfig[]
   pluginStates: Record<string, PluginState>
+  addOnSources: AddOnSource[]
   /** Key = `${providerId}:${modelId}` → detected format. */
   modelToolFormatMap: Record<string, ToolCallFormat>
   /** Key = `${providerId}:${modelId}` → detected or inferred model capabilities. */

@@ -296,13 +296,14 @@ function compactMessagesText(messages: LlmMessage[], maxChars = 12_000): string 
   return chunks.reverse().join('\n').slice(-maxChars)
 }
 
-function extractPathScopes(text: string): string[] {
+export function extractPathScopes(text: string): string[] {
   const scopes = new Set<string>()
   for (const match of text.matchAll(WINDOWS_PATH_RE)) {
     scopes.add(match[0].replace(/[),.;:，。；：、]+$/, '').toLowerCase())
   }
   for (const match of text.matchAll(WINDOWS_DRIVE_SCOPE_RE)) {
-    scopes.add(match[0].replace(/\\?$/, ':').toLowerCase())
+    const drive = match[0].replace(/[\\/:]+$/, '').toLowerCase()
+    if (/^[a-z]$/.test(drive)) scopes.add(`${drive}:`)
   }
   return Array.from(scopes)
 }
@@ -319,7 +320,7 @@ function isPathWithinScope(path: string, scope: string): boolean {
   return p === s || p.startsWith(`${s}\\`)
 }
 
-function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask: string): string | null {
+export function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask: string): string | null {
   if (!toolCall.name.startsWith('filesystem.')) return null
   const path = pathArgFromToolCall(toolCall)
   if (!path) {
@@ -338,6 +339,42 @@ function validateToolAgainstCurrentTask(toolCall: ToolCallCandidate, currentTask
   return `Blocked stale filesystem tool call. The requested path "${path}" is outside the latest user request scope: ${scopes.join(', ')}.`
 }
 
+function validateSensitiveLocalMutation(toolCall: ToolCallCandidate, currentTask: string): string | null {
+  if (toolCall.name !== 'file.write_text' && toolCall.name !== 'file.patch' && toolCall.name !== 'file.create_dir') {
+    return null
+  }
+  const path = pathArgFromToolCall(toolCall)
+  if (!path || !isSensitiveSystemPath(path)) return null
+  if (/\b(allow|approve|approved|grant|permission|yes|ok|go ahead)\b|允许|同意|批准|授权|可以|确认/i.test(currentTask)) {
+    return null
+  }
+  return [
+    `Permission required before modifying system-sensitive path "${path}".`,
+    'Ask the user to confirm this exact system path change before retrying.',
+  ].join(' ')
+}
+
+function isSensitiveSystemPath(path: string): boolean {
+  const resolved = normalizePath(resolvePath(path))
+  const roots = [
+    process.env.SystemRoot,
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.ProgramData,
+    'C:\\Windows',
+    'C:\\Program Files',
+    'C:\\Program Files (x86)',
+    'C:\\ProgramData',
+  ]
+    .filter((item): item is string => Boolean(item?.trim()))
+    .map(item => normalizePath(resolvePath(item)))
+  return roots.some(root => resolved === root || resolved.startsWith(`${root}\\`))
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+}
+
 function shouldExposeTools(currentTask: string, activeCommandInvocation?: ToolAuditCommandInvocation, forceToolExposure = false): boolean {
   if (forceToolExposure) return true
   if (activeCommandInvocation) return true
@@ -353,10 +390,13 @@ function allowedFilesystemDirs(): string[] {
     .filter(dir => typeof dir === 'string' && dir.trim().length > 0)
 }
 
+const FULL_LOCAL_PC_ACCESS_DIR = '__AVA_FULL_LOCAL_PC__'
+
 function taskScopedAllowedDirs(activeFolderPath?: string, taskAllowedDirs?: string[]): string[] {
   const dirs = new Set<string>()
   for (const dir of allowedFilesystemDirs()) {
-    if (dir?.trim()) dirs.add(resolvePath(dir))
+    if (!dir?.trim()) continue
+    dirs.add(dir === FULL_LOCAL_PC_ACCESS_DIR ? FULL_LOCAL_PC_ACCESS_DIR : resolvePath(dir))
   }
   for (const dir of [activeFolderPath, ...(taskAllowedDirs ?? [])]) {
     if (!dir?.trim()) continue
@@ -2043,7 +2083,7 @@ async function runToolLoop(
           : null
       const staleReason = duplicateToolCall
         ? null
-        : finalReportBudgetReason ?? disallowedStepToolReason ?? unknownToolReason ?? validateToolAgainstCurrentTask(toolCall, currentTask)
+        : finalReportBudgetReason ?? disallowedStepToolReason ?? unknownToolReason ?? validateSensitiveLocalMutation(toolCall, currentTask) ?? validateToolAgainstCurrentTask(toolCall, currentTask)
       const startedAt = Date.now()
       const toolPart: ToolCallPart = {
         type: 'tool_call',

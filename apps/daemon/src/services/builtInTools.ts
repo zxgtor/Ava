@@ -35,6 +35,7 @@ const DEFAULT_PREVIEW_WAIT_MS = 1_000
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 10 * 60_000
 const DEVSERVER_READY_TIMEOUT_MS = 20_000
+const FULL_LOCAL_PC_ACCESS_DIR = '__AVA_FULL_LOCAL_PC__'
 
 const PROJECT_MAP_IGNORED_DIRS = new Set([
   '.git',
@@ -2090,6 +2091,7 @@ function isAllowedCwd(cwd: string, context: RunContext): boolean {
   ].filter((item): item is string => Boolean(item?.trim()))
 
   if (allowedRoots.length === 0) return false
+  if (allowedRoots.includes(FULL_LOCAL_PC_ACCESS_DIR)) return true
   const resolvedCwd = normalizePath(resolvePath(cwd))
   return allowedRoots.some(root => {
     const resolvedRoot = normalizePath(resolvePath(root))

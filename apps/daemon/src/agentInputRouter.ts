@@ -9,7 +9,7 @@ const TASK_CONFIRMATION_RE = /^\s*(ok|okay|yes|y|go|start|continue|proceed|confi
 const PERMISSION_RESPONSE_RE = /\b(allow|approve|approved|deny|denied|reject|permission|grant access)\b|允许|同意|批准|拒绝|不同意|授权|权限/i
 const REQUIREMENT_CORRECTION_RE = /\b(not what i mean|misunderstood|misunderstand|actually|instead|change|i want to|i need to|first)\b|不是|不对|误解|理解错|我的意思|其实|改成|先看看|先看|先确认/i
 const URL_RE = /\bhttps?:\/\/[^\s<>"']+|\b(?:localhost|127\.0\.0\.1):\d+\b/i
-const CODE_AGENT_DELEGATION_RE = /\b(codex|claude code|claude-code|open code|cursor|delegate|assign|handoff|use .*agent|run .*agent)\b|交给|委派|分配给|调用.*(codex|claude|代码代理|agent)|代码代理/i
+const CODE_AGENT_DELEGATION_RE = /\b(codex|claude code|claude-code|gemini|open code|cursor|delegate|assign|handoff|use .*agent|run .*agent)\b|交给|委派|分配给|调用.*(codex|claude|gemini|代码代理|agent)|代码代理/i
 const PREFERENCE_OR_SETTING_RE = /\b(always|never|prefer|preference|setting|settings|remember|default|use .* by default)\b|以后|总是|不要再|偏好|设置|默认|记住/i
 const SMALL_TASK_RE = /\b(read|show|get|list|check|tell me|what is|find)\b.{0,80}\b(file|package\.json|name|version|status|info|content|directory|folder)\b|读取|查看|列出|告诉我|是什么|状态|内容|目录/i
 const AMBIGUOUS_RE = /^\s*(this|that|it|这个|那个|它|看看|继续刚才|刚才那个)\s*$/i
@@ -201,7 +201,7 @@ export function classifyInput(request: AvaInputClassifyRequest): AvaInputClassif
       route: 'agent_delegation',
       workflow: 'delegation',
       requiresTaskIntake: false,
-      reason: 'The user appears to be asking Ava to delegate work to a code agent such as Codex or Claude Code.',
+      reason: 'The user appears to be asking Ava to delegate work to a code agent such as Codex, Claude Code, or Gemini CLI.',
       confidence: 0.84,
     })
   }
@@ -377,7 +377,7 @@ async function classifyInputWithLlm(
     'Return only compact JSON with keys: route, workflow, requiresTaskIntake, needsClarification, reason, confidence.',
     `Allowed routes: ${[...LLM_CLASSIFIER_ROUTES].join(', ')}`,
     'Use task_intake only for coding/design execution tasks that need planning.',
-    'Use agent_delegation when the user asks to use/delegate to Codex, Claude Code, Cursor, or another code agent.',
+    'Use agent_delegation when the user asks to use/delegate to Codex, Claude Code, Gemini CLI, Cursor, or another code agent.',
     'Use file_or_attachment_input when attachments are central to the request.',
     'Use preference_or_setting when the user asks Ava to remember/default/prefer behavior.',
     '',

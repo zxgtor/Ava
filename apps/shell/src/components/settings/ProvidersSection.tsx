@@ -3,39 +3,48 @@ import { useTranslation } from 'react-i18next'
 import { Brain, ChevronDown, ChevronRight, Eye, HelpCircle, Wrench } from 'lucide-react'
 import type { ModelCapabilityProfile, ModelProvider, Settings } from '../../types'
 import { LabeledInput, ModelChips, Toggle } from './shared'
+import { ChainSection } from './ChainSection'
 
 export function ProvidersSection({ settings, update }: { settings: Settings; update: (p: (s: Settings) => Settings) => void }) {
   const { t } = useTranslation()
   return (
-    <section>
-      <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-3">{t('settings.llm', 'LLM Providers')}</h2>
-      <div className="space-y-2">
-        {settings.modelProviders.map(provider => (
-          <ProviderRow
-            key={provider.id}
-            provider={provider}
-            capability={settings.modelCapabilityMap[`${provider.id}:${provider.defaultModel}`]}
-            onChange={next => update(s => ({
-              ...s,
-              modelProviders: s.modelProviders.map(p => p.id === provider.id ? mergeProviderUpdate(p, next, provider) : p),
-            }))}
-            onCapability={profile => update(s => ({
-              ...s,
-              modelCapabilityMap: {
-                ...s.modelCapabilityMap,
-                [`${profile.providerId}:${profile.model}`]: profile,
-              },
-              modelToolFormatMap:
-                profile.toolFormat === 'openai' || profile.toolFormat === 'hermes' || profile.toolFormat === 'none'
-                  ? {
-                      ...s.modelToolFormatMap,
-                      [`${profile.providerId}:${profile.model}`]: profile.toolFormat,
-                    }
-                  : s.modelToolFormatMap,
-            }))}
-          />
-        ))}
+    <section className="space-y-6">
+      <div>
+        <h2 className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">
+          {t('settings.llm_routing', 'LLM Providers & Routing')}
+        </h2>
+        <p className="mb-3 text-xs text-text-3">
+          {t('settings.llm_routing_desc', 'Configure provider endpoints, selected models, model capabilities, and fallback order in one place.')}
+        </p>
+        <div className="space-y-2">
+          {settings.modelProviders.map(provider => (
+            <ProviderRow
+              key={provider.id}
+              provider={provider}
+              capability={settings.modelCapabilityMap[`${provider.id}:${provider.defaultModel}`]}
+              onChange={next => update(s => ({
+                ...s,
+                modelProviders: s.modelProviders.map(p => p.id === provider.id ? mergeProviderUpdate(p, next, provider) : p),
+              }))}
+              onCapability={profile => update(s => ({
+                ...s,
+                modelCapabilityMap: {
+                  ...s.modelCapabilityMap,
+                  [`${profile.providerId}:${profile.model}`]: profile,
+                },
+                modelToolFormatMap:
+                  profile.toolFormat === 'openai' || profile.toolFormat === 'hermes' || profile.toolFormat === 'none'
+                    ? {
+                        ...s.modelToolFormatMap,
+                        [`${profile.providerId}:${profile.model}`]: profile.toolFormat,
+                      }
+                    : s.modelToolFormatMap,
+              }))}
+            />
+          ))}
+        </div>
       </div>
+      <ChainSection settings={settings} update={update} />
     </section>
   )
 }

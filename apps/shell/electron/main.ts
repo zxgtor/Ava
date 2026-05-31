@@ -319,6 +319,14 @@ function registerIpc(): void {
     return daemonRuntimeClient.listWorkspaceDir({ path })
   })
 
+  ipcMain.handle('ava:workspace:probeCodeAgents', async () => {
+    return daemonRuntimeClient.probeCodeAgents()
+  })
+
+  ipcMain.handle('ava:workspace:installCodeAgent', async (_e, agentId: string) => {
+    return daemonRuntimeClient.installCodeAgent(agentId)
+  })
+
   ipcMain.handle('ava:environment:openTerminal', async (_e, path: string) => {
     return daemonRuntimeClient.openTerminal({ path })
   })

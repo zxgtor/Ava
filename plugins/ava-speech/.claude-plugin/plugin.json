@@ -1,0 +1,5 @@
+{
+  "name": "Ava Speech",
+  "version": "0.1.0",
+  "description": "Speech capability plugin that groups voice input and spoken responses as speech.stt and speech.tts."
+}

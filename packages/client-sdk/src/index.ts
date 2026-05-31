@@ -138,6 +138,14 @@ export class AvaClient {
     return this.postResult<AvaWorkspaceListEntry[]>('/workspace/list-dir', request)
   }
 
+  async probeCodeAgents<T = unknown>(): Promise<T> {
+    return this.getResult<T>('/workspace/code-agents')
+  }
+
+  async installCodeAgent<T = unknown>(agentId: string): Promise<T> {
+    return this.postResult<T>('/workspace/code-agents/install', { agentId })
+  }
+
   async openPath(request: { path: string }): Promise<{ opened: string }> {
     return this.postResult<{ opened: string }>('/environment/open-path', request)
   }

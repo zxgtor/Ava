@@ -65,8 +65,15 @@ export interface PluginCapabilityView {
   error?: string
 }
 
-export type MarketplaceItemType = 'plugin' | 'skill'
-export type MarketplaceItemSource = 'claude' | 'codex' | 'ava'
+export type MarketplaceItemType = 'plugin' | 'skill' | 'mcp'
+export type MarketplaceItemSource = 'claude' | 'codex' | 'ava' | 'custom'
+
+export interface AddOnSource {
+  id: string
+  label: string
+  url: string
+  enabled: boolean
+}
 
 export interface MarketplaceItem {
   id: string
@@ -96,6 +103,7 @@ export interface MarketplaceCatalog {
 
 export interface MarketplaceCatalogOptions {
   sources?: MarketplaceItemSource[]
+  customSources?: AddOnSource[]
 }
 
 export interface PluginSkill {
@@ -262,6 +270,7 @@ interface ClaudeMarketplacePlugin {
 }
 
 function pluginToMarketplaceItems(plugin: LoadedPlugin): MarketplaceItem[] {
+  if (plugin.id === 'bundled-ava-core') return []
   const pluginName = plugin.manifest?.name ?? basename(plugin.rootPath)
   const category = plugin.bundled ? 'bundled' : 'installed'
   const pluginItem: MarketplaceItem = {
@@ -297,7 +306,24 @@ function pluginToMarketplaceItems(plugin: LoadedPlugin): MarketplaceItem[] {
     installedPluginId: plugin.id,
     sourceBadges: ['Ava'],
   }))
-  return [pluginItem, ...skillItems]
+  const mcpItems: MarketplaceItem[] = plugin.mcpServers.map(server => ({
+    id: `ava:mcp:${plugin.id}:${sanitizeId(server.name) || 'server'}`,
+    type: 'mcp',
+    name: server.name,
+    description: `MCP server from ${pluginName}`,
+    author: pluginName,
+    category,
+    source: 'ava',
+    sourceLabel: 'Ava Local',
+    sourceUrl: plugin.rootPath,
+    repoUrl: plugin.source.uri,
+    installKind: 'parent-plugin',
+    installNote: 'Installed and enabled through its parent plugin.',
+    parentPluginName: pluginName,
+    installedPluginId: plugin.id,
+    sourceBadges: ['Ava', 'MCP'],
+  }))
+  return [pluginItem, ...skillItems, ...mcpItems]
 }
 
 async function loadClaudeMarketplace(): Promise<MarketplaceItem[]> {
@@ -337,6 +363,42 @@ async function loadCodexMarketplace(): Promise<MarketplaceItem[]> {
     loadCodexPage('skill', `${CODEX_MARKETPLACE_ORIGIN}/skills`),
   ])
   return [...plugins, ...skills]
+}
+
+async function loadCustomMarketplace(source: AddOnSource): Promise<MarketplaceItem[]> {
+  if (!source.enabled) return []
+  const response = await fetch(source.url)
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const catalog = await response.json() as { items?: unknown }
+  if (!Array.isArray(catalog.items)) throw new Error('catalog must contain an items array')
+  return catalog.items
+    .map((item, index) => parseCustomMarketplaceItem(source, item, index))
+    .filter((item): item is MarketplaceItem => Boolean(item))
+}
+
+function parseCustomMarketplaceItem(source: AddOnSource, raw: unknown, index: number): MarketplaceItem | null {
+  if (!isRecord(raw)) return null
+  const type = raw.type === 'plugin' || raw.type === 'skill' || raw.type === 'mcp' ? raw.type : undefined
+  const name = stringValue(raw.name)
+  if (!type || !name) return null
+  const installUrl = stringValue(raw.installUrl) || stringValue(raw.repoUrl)
+  return {
+    id: `custom:${sanitizeId(source.id) || 'source'}:${type}:${sanitizeId(name) || index}`,
+    type,
+    name,
+    description: stringValue(raw.description, 'Custom add-on'),
+    author: stringValue(raw.author, source.label),
+    category: stringValue(raw.category, 'custom'),
+    source: 'custom',
+    sourceLabel: source.label,
+    sourceUrl: stringValue(raw.sourceUrl, source.url),
+    repoUrl: stringValue(raw.repoUrl) || installUrl || undefined,
+    installUrl: installUrl || undefined,
+    installKind: installUrl && /^https?:\/\/|^git@|^ssh:\/\//i.test(installUrl) ? 'git' : 'unavailable',
+    installNote: installUrl ? undefined : 'Custom catalog item has no installUrl or repoUrl.',
+    thumbnailUrl: stringValue(raw.thumbnailUrl) || undefined,
+    sourceBadges: ['3rd Party', source.label],
+  }
 }
 
 async function loadCodexPage(type: MarketplaceItemType, url: string): Promise<MarketplaceItem[]> {
@@ -408,10 +470,31 @@ function mergeMarketplaceItems(items: MarketplaceItem[], localPlugins: LoadedPlu
 }
 
 function normalizeMarketplaceSources(sources?: MarketplaceItemSource[]): Set<MarketplaceItemSource> {
-  const allowed: MarketplaceItemSource[] = ['claude', 'codex', 'ava']
+  const allowed: MarketplaceItemSource[] = ['claude', 'codex', 'ava', 'custom']
   if (!Array.isArray(sources) || sources.length === 0) return new Set(allowed)
   const selected = sources.filter((source): source is MarketplaceItemSource => allowed.includes(source))
   return new Set(selected.length > 0 ? selected : allowed)
+}
+
+function normalizeCustomSources(sources?: AddOnSource[]): AddOnSource[] {
+  if (!Array.isArray(sources)) return []
+  const seen = new Set<string>()
+  const out: AddOnSource[] = []
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue
+    const url = typeof source.url === 'string' ? source.url.trim() : ''
+    if (!/^https?:\/\//i.test(url)) continue
+    const key = url.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({
+      id: typeof source.id === 'string' && source.id.trim() ? source.id.trim() : `custom-${out.length + 1}`,
+      label: typeof source.label === 'string' && source.label.trim() ? source.label.trim() : url,
+      url,
+      enabled: source.enabled !== false,
+    })
+  }
+  return out
 }
 
 function markInstalled(item: MarketplaceItem, localPlugins: LoadedPlugin[]): MarketplaceItem {
@@ -1007,13 +1090,18 @@ export class PluginManager {
   ): Promise<MarketplaceCatalog> {
     const warnings: string[] = []
     const enabledSources = normalizeMarketplaceSources(options.sources)
-    const needsLocalPlugins = enabledSources.has('ava') || enabledSources.has('claude') || enabledSources.has('codex')
+    const customSources = normalizeCustomSources(options.customSources)
+    const needsLocalPlugins =
+      enabledSources.has('ava') ||
+      enabledSources.has('claude') ||
+      enabledSources.has('codex') ||
+      enabledSources.has('custom')
     const localPlugins = needsLocalPlugins ? await this.load(states).catch(err => {
       warnings.push(`Failed to read local plugins: ${err instanceof Error ? err.message : String(err)}`)
       return [] as LoadedPlugin[]
     }) : []
     const localItems = enabledSources.has('ava') ? localPlugins.flatMap(pluginToMarketplaceItems) : []
-    const [claudeItems, codexItems] = await Promise.all([
+    const [claudeItems, codexItems, customItems] = await Promise.all([
       enabledSources.has('claude')
         ? loadClaudeMarketplace().catch(err => {
             warnings.push(`Claude marketplace unavailable: ${err instanceof Error ? err.message : String(err)}`)
@@ -1026,8 +1114,14 @@ export class PluginManager {
             return [] as MarketplaceItem[]
           })
         : Promise.resolve([]),
+      enabledSources.has('custom')
+        ? Promise.all(customSources.map(source => loadCustomMarketplace(source).catch(err => {
+            warnings.push(`${source.label} unavailable: ${err instanceof Error ? err.message : String(err)}`)
+            return [] as MarketplaceItem[]
+          }))).then(items => items.flat())
+        : Promise.resolve([]),
     ])
-    const items = mergeMarketplaceItems([...claudeItems, ...codexItems, ...localItems], localPlugins)
+    const items = mergeMarketplaceItems([...claudeItems, ...codexItems, ...customItems, ...localItems], localPlugins)
     return {
       updatedAt: Date.now(),
       items,

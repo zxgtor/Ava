@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent, WheelEvent } from 'react'
-import { CheckCircle2, FlaskConical, Play, RefreshCw, X, XCircle } from 'lucide-react'
+import { CheckCircle2, ClipboardList, FlaskConical, HelpCircle, Play, RefreshCw, Trash2, X, XCircle } from 'lucide-react'
 import { AvaClient } from '@ava/client-sdk'
 import type { AvaChatStreamEvent, AvaDaemonChatRequest } from '@ava/contracts'
 
-type TargetKind = 'daemon' | 'built-in' | 'mcp' | 'skill' | 'dev'
+type TargetKind = 'daemon' | 'built-in' | 'mcp' | 'skill' | 'dev' | 'audit' | 'brain'
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed'
 type BackendStatus = 'checking' | 'online' | 'offline'
 type CanvasView = { x: number; y: number; scale: number }
@@ -123,6 +123,28 @@ interface DevLogLine {
   line: string
 }
 
+interface ToolAuditEntry {
+  id: string
+  createdAt: number
+  providerName: string
+  model: string
+  toolName: string
+  toolCallId: string
+  streamId: string
+  taskId?: string
+  status: 'ok' | 'error' | 'aborted'
+  durationMs: number
+  serverId?: string
+  pluginId?: string
+  args: unknown
+  error?: string
+  resultPreview?: string
+  commandInvocation?: {
+    pluginName: string
+    commandName: string
+  }
+}
+
 interface DevEnvironment {
   nodeRuntime?: {
     kind: string
@@ -193,7 +215,7 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'MCP and skill context',
       'Process registry',
     ],
-    dependencies: ['Node runtime', 'Localhost ports', 'Local config', 'Local LLM runtime', 'Speech services', 'Workspace filesystem', 'MCP servers'],
+    dependencies: ['Node runtime', 'Localhost ports', 'Local config', 'Local LLM runtime', 'Ava Speech plugin', 'Workspace filesystem', 'MCP servers'],
     dependsOn: ['node-runtime', 'localhost-ports', 'local-llm', 'speech-services'],
   },
   'ava-desktop': {
@@ -225,6 +247,7 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'Daemon health monitor',
       'Unit test launcher',
       'Ava Brain map',
+      'Tool audit log',
       'Browser test surface',
     ],
     dependencies: ['Ava Dev Supervisor', 'Ava Daemon for tests', 'Node runtime', 'Localhost ports'],
@@ -278,12 +301,12 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
   'speech-services': {
     type: 'service',
     features: [
-      'Speech-to-text endpoint',
-      'Text-to-speech endpoint',
+      'speech.stt capability',
+      'speech.tts capability',
       'Audio device bridge',
       'Voice session pipeline',
     ],
-    dependencies: ['Speech model/runtime', 'Audio input/output devices', 'Localhost ports'],
+    dependencies: ['Speech model/runtime', 'Audio input/output devices', 'Localhost ports', 'Ava plugin runtime'],
     dependsOn: ['localhost-ports'],
   },
 }
@@ -309,6 +332,8 @@ function targetKindLabel(kind: TargetKind) {
   if (kind === 'mcp') return 'MCP Tools'
   if (kind === 'skill') return 'Skills'
   if (kind === 'daemon') return 'Daemon'
+  if (kind === 'audit') return 'Tool Audit'
+  if (kind === 'brain') return 'Ava Brain'
   return 'Control'
 }
 
@@ -394,8 +419,8 @@ function openExternalTab(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
-function avaBrainUrl(_devControlUrl: string) {
-  return '/ava-brain/input-flow'
+function embeddedAvaBrainUrl(_devControlUrl: string) {
+  return '/ava-brain/input-flow?embed=1'
 }
 
 function isAvaBrainFeature(nodeId: string, featureName: string) {
@@ -404,6 +429,10 @@ function isAvaBrainFeature(nodeId: string, featureName: string) {
 
 function isUnitTestFeature(nodeId: string, featureName: string) {
   return nodeId === 'daemon-test-ui' && /unit test/i.test(featureName)
+}
+
+function isToolAuditFeature(nodeId: string, featureName: string) {
+  return nodeId === 'daemon-test-ui' && /tool audit/i.test(featureName)
 }
 
 function displayDevStatus(node: DevDependencyNode, status: string, process?: DevProcess) {
@@ -657,6 +686,14 @@ function formatTestTime(timestamp?: number) {
   return new Date(timestamp).toLocaleString()
 }
 
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
 function requiredToolsForTarget(target: TestTarget): string[] | undefined {
   if (target.kind === 'skill') return undefined
   if (target.kind === 'mcp') return [target.name]
@@ -705,6 +742,10 @@ export function App() {
   const [devEnvironment, setDevEnvironment] = useState<DevEnvironment>({})
   const [devEnvironmentError, setDevEnvironmentError] = useState<string | null>(null)
   const [selectedDevNodeId, setSelectedDevNodeId] = useState<string | null>(null)
+  const [auditEntries, setAuditEntries] = useState<ToolAuditEntry[]>([])
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [auditError, setAuditError] = useState<string | null>(null)
+  const [expandedAuditId, setExpandedAuditId] = useState<string | null>(null)
   const [canvasView, setCanvasView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 })
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 1, height: 1 })
   const [isCanvasPanning, setIsCanvasPanning] = useState(false)
@@ -714,6 +755,7 @@ export function App() {
   const targetRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const devControlStatusRef = useRef<BackendStatus>('checking')
   const canvasRef = useRef<HTMLDivElement | null>(null)
+  const brainFrameRef = useRef<HTMLIFrameElement | null>(null)
   const canvasPanRef = useRef({ pointerId: -1, startX: 0, startY: 0, originX: 0, originY: 0 })
   const layoutLoadedRef = useRef(false)
   const layoutSaveTimerRef = useRef<number | null>(null)
@@ -729,6 +771,50 @@ export function App() {
   })
 
   const client = useMemo(() => new AvaClient({ baseUrl }), [baseUrl])
+  const loadToolAudit = useCallback(async () => {
+    setAuditLoading(true)
+    setAuditError(null)
+    try {
+      const entries = await client.listToolAudit<ToolAuditEntry[]>(100)
+      setAuditEntries(entries)
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAuditLoading(false)
+    }
+  }, [client])
+
+  const clearToolAudit = useCallback(async () => {
+    if (!window.confirm('Clear Tool Audit Log? This only deletes audit records.')) return
+    setAuditLoading(true)
+    setAuditError(null)
+    try {
+      await client.clearToolAudit()
+      setAuditEntries([])
+      setExpandedAuditId(null)
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAuditLoading(false)
+    }
+  }, [client])
+
+  const openToolAuditPage = useCallback(() => {
+    setKind('audit')
+    void loadToolAudit()
+  }, [loadToolAudit])
+
+  const openAvaBrainPage = useCallback(() => {
+    setOpenNodeMenuId(null)
+    setSelectedDevNodeId(null)
+    setKind('brain')
+  }, [])
+
+  const autoOrganizeAvaBrain = useCallback(() => {
+    const api = brainFrameRef.current?.contentWindow as Window & { avaBrain?: { autoOrganize?: () => void } }
+    api.avaBrain?.autoOrganize?.()
+  }, [])
+
   const visibleTargets = useMemo(() => targets.filter(target => target.kind === kind), [kind, targets])
   const selected = targets.find(target => target.id === selectedId) ?? visibleTargets[0] ?? targets[0]
   const selectedState = selected ? tests[selected.id] : undefined
@@ -750,6 +836,10 @@ export function App() {
     observer.observe(element)
     return () => observer.disconnect()
   }, [kind])
+
+  useEffect(() => {
+    if (kind === 'audit') void loadToolAudit()
+  }, [kind, loadToolAudit])
 
   const devFetch = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(`${devControlUrl.replace(/\/+$/, '')}${path}`, init)
@@ -1304,7 +1394,7 @@ export function App() {
         feature: {
           label: 'Local LLM Runtime',
           description: 'Local model server used by Ava Daemon for chat, tool routing, and reasoning profiles.',
-          status: 'external',
+          status: 'active',
           url: 'http://127.0.0.1:1234/v1',
         },
       },
@@ -1313,8 +1403,8 @@ export function App() {
         ...position('speech-services'),
         metadata: DEV_NODE_METADATA['speech-services'],
         feature: {
-          label: 'TTS / STT Services',
-          description: 'Optional local speech service layer for voice input and spoken responses.',
+          label: 'Ava Speech Plugin',
+          description: 'One plugin that exposes speech.stt for voice input and speech.tts for spoken responses.',
           status: 'external',
         },
       },
@@ -1544,13 +1634,17 @@ export function App() {
               <span className="brand-brace">{'}'}</span>
             </div>
             <div className="top-copy">
-              <h1>{kind === 'dev' ? 'Ava Dev Control Panel' : 'Unit Test'}</h1>
+              <h1>{kind === 'dev' ? 'Ava Dev Control Panel' : kind === 'audit' ? 'Tool Audit Log' : kind === 'brain' ? 'Ava Brain' : 'Unit Test'}</h1>
               <p>
                 {kind === 'dev'
                   ? <>Full-page feature orchestration for local Ava development.</>
-                  : <>{targetKindLabel(kind)} · CWD: <code>{cwd || '(not loaded)'}</code></>}
+                  : kind === 'audit'
+                    ? <>Recent daemon tool calls for debugging model/tool behavior.</>
+                    : kind === 'brain'
+                      ? <>User input routing, planning, and daemon workflow map.</>
+                      : <>{targetKindLabel(kind)} · CWD: <code>{cwd || '(not loaded)'}</code></>}
               </p>
-              {kind !== 'dev' && logPath && <p>Log: <code>{logPath}</code></p>}
+              {kind !== 'dev' && kind !== 'audit' && kind !== 'brain' && logPath && <p>Log: <code>{logPath}</code></p>}
             </div>
           </div>
           {kind === 'dev' ? (
@@ -1565,6 +1659,43 @@ export function App() {
                 {autoTestRunning ? <RefreshCw size={16} className="spin" /> : <FlaskConical size={16} />}
                 <span>Auto Test</span>
               </button>
+            </div>
+          ) : kind === 'audit' ? (
+            <div className="actions">
+              <button className="ghost" onClick={() => setKind('dev')}>Back</button>
+              <button className="ghost" onClick={loadToolAudit} disabled={auditLoading}>
+                <RefreshCw size={14} className={auditLoading ? 'spin' : ''} />
+                Refresh
+              </button>
+              <button className="ghost danger" onClick={clearToolAudit} disabled={auditLoading || auditEntries.length === 0}>
+                <Trash2 size={14} />
+                Clear
+              </button>
+            </div>
+          ) : kind === 'brain' ? (
+            <div className="actions">
+              <button className="ghost" onClick={() => setKind('dev')}>Back</button>
+              <button className="top-icon-action" onClick={autoOrganizeAvaBrain}>
+                Auto organize
+              </button>
+              <div className="brain-legend-menu">
+                <button className="top-icon-action icon-only" title="Color legend" aria-label="Color legend">
+                  <HelpCircle size={15} />
+                </button>
+                <div className="brain-legend-popover">
+                  <h2>Color meaning</h2>
+                  <div className="brain-legend-list">
+                    <div><span className="legend-dot desktop" />Yellow card/tag: Desktop shell or UI-owned state.</div>
+                    <div><span className="legend-dot daemon" />Cyan card/tag: Daemon runtime, planner, or intake logic.</div>
+                    <div><span className="legend-dot shared" />Violet card/tag: planning or shared execution structure.</div>
+                    <div><span className="legend-dot green" />Green label: entry, chat, runtime, or successful gate path.</div>
+                    <div><span className="legend-dot red" />Red: cancel, blocked, retry, or stopped path.</div>
+                    <div><span className="legend-line-dot blue" />Blue solid line: normal workflow transition.</div>
+                    <div><span className="legend-line-dot yellow" />Yellow line: correction, uncertain, or branch path.</div>
+                    <div><span className="legend-line-dot pink dashed" />Pink dashed line: prompt sent to selected LLM provider.</div>
+                  </div>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="actions">
@@ -1590,6 +1721,7 @@ export function App() {
 
         {kind !== 'dev' && error && <div className="error-banner">{error}</div>}
         {kind !== 'dev' && devError && <div className="error-banner">{devError}</div>}
+        {kind === 'audit' && auditError && <div className="error-banner">{auditError}</div>}
 
         {kind === 'dev' ? (
           <section className="dev-panel">
@@ -1744,21 +1876,24 @@ export function App() {
                           const featureSummary = testSummaryForFeature(node.id, item)
                           const isBrainFeature = isAvaBrainFeature(node.id, item)
                           const isTestFeature = isUnitTestFeature(node.id, item)
-                          const isActionFeature = isBrainFeature || isTestFeature
+                          const isAuditFeature = isToolAuditFeature(node.id, item)
+                          const isActionFeature = isBrainFeature || isTestFeature || isAuditFeature
                           return (
                             <div className={`node-feature-row ${isActionFeature ? 'actionable' : ''}`} key={item}>
                               {isActionFeature ? (
                                 <button
                                   type="button"
                                   className="node-feature-button"
-                                  title={isBrainFeature ? 'Open Ava Brain' : 'Open Unit Test'}
+                                  title={isBrainFeature ? 'Open Ava Brain' : isAuditFeature ? 'Open Tool Audit Log' : 'Open Unit Test'}
                                   disabled={isTestFeature && devBusyId === 'daemon'}
                                   onPointerDown={event => event.stopPropagation()}
                                   onClick={event => {
                                     event.preventDefault()
                                     event.stopPropagation()
                                     if (isBrainFeature) {
-                                      openExternalTab(avaBrainUrl(devControlUrl))
+                                      openAvaBrainPage()
+                                    } else if (isAuditFeature) {
+                                      openToolAuditPage()
                                     } else {
                                       void openUnitTestPage()
                                     }
@@ -1912,10 +2047,87 @@ export function App() {
                   {selectedDevNode.id === 'daemon-test-ui' && (
                     <div className="dev-actions">
                       <button className="primary" disabled={devBusyId === 'daemon'} onClick={() => { setSelectedDevNodeId(null); void openUnitTestPage() }}>Open Unit Test</button>
-                      <button className="primary" onClick={() => { setSelectedDevNodeId(null); openExternalTab(avaBrainUrl(devControlUrl)) }}>Open Ava Brain</button>
+                      <button className="primary" onClick={openAvaBrainPage}>Open Ava Brain</button>
+                      <button className="primary" onClick={() => { setSelectedDevNodeId(null); openToolAuditPage() }}>Open Tool Audit</button>
                     </div>
                   )}
                 </article>
+              </div>
+            )}
+          </section>
+        ) : kind === 'brain' ? (
+          <section className="brain-page">
+            <iframe
+              ref={brainFrameRef}
+              title="Ava Brain"
+              src={embeddedAvaBrainUrl(devControlUrl)}
+              className="brain-frame"
+            />
+          </section>
+        ) : kind === 'audit' ? (
+          <section className="audit-page">
+            <div className="audit-toolbar">
+              <div>
+                <h2>Recent Tool Calls</h2>
+                <p>Shows the latest 100 daemon tool calls, including provider, model, args, result preview, and errors.</p>
+              </div>
+              <div className="audit-count">
+                <ClipboardList size={16} />
+                {auditLoading ? 'Loading...' : `${auditEntries.length} entries`}
+              </div>
+            </div>
+            {auditEntries.length === 0 ? (
+              <div className="empty audit-empty">
+                {auditLoading ? 'Loading tool audit log...' : 'No tool call records yet.'}
+              </div>
+            ) : (
+              <div className="audit-list">
+                {auditEntries.map(entry => {
+                  const expanded = expandedAuditId === entry.id
+                  return (
+                    <article key={entry.id} className={`audit-entry ${entry.status}`}>
+                      <button
+                        type="button"
+                        className="audit-entry-head"
+                        onClick={() => setExpandedAuditId(expanded ? null : entry.id)}
+                      >
+                        <span className={`audit-status ${entry.status}`}>{entry.status}</span>
+                        <strong>{entry.toolName}</strong>
+                        <span>{new Date(entry.createdAt).toLocaleString()}</span>
+                        <span>{entry.providerName} / {entry.model}</span>
+                        <code>{entry.durationMs}ms</code>
+                      </button>
+                      {expanded && (
+                        <div className="audit-entry-detail">
+                          <div><strong>Task</strong><code>{entry.taskId ?? '(none)'}</code></div>
+                          <div><strong>Stream</strong><code>{entry.streamId}</code></div>
+                          <div><strong>Tool call</strong><code>{entry.toolCallId}</code></div>
+                          {entry.serverId && <div><strong>Server</strong><code>{entry.serverId}</code></div>}
+                          {entry.pluginId && <div><strong>Plugin</strong><code>{entry.pluginId}</code></div>}
+                          {entry.commandInvocation && (
+                            <div><strong>Command</strong><code>{entry.commandInvocation.pluginName}/{entry.commandInvocation.commandName}</code></div>
+                          )}
+                          <section>
+                            <h3>Args</h3>
+                            <pre>{prettyJson(entry.args)}</pre>
+                          </section>
+                          {entry.error && (
+                            <section>
+                              <h3>Error</h3>
+                              <pre className="error-text">{entry.error}</pre>
+                            </section>
+                          )}
+                          {entry.resultPreview && (
+                            <section>
+                              <h3>Result preview</h3>
+                              <pre>{entry.resultPreview}</pre>
+                            </section>
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  )
+                })}
               </div>
             )}
           </section>

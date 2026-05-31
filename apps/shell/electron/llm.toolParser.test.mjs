@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import ts from 'typescript'
 
-const sourcePath = new URL('./llm.ts', import.meta.url)
+const sourcePath = new URL('../../daemon/src/llm.ts', import.meta.url)
 let source = await readFile(sourcePath, 'utf8')
 const stripImportFrom = (specifier) => {
   source = source.replace(new RegExp(`import\\s+[\\s\\S]*?\\s+from\\s+['"]${specifier}['"]\\s*;?\\r?\\n`, 'g'), '')
@@ -63,7 +63,14 @@ const tempDir = await mkdtemp(join(tmpdir(), 'ava-llm-parser-'))
 const compiledPath = join(tempDir, 'llm-parser.mjs')
 await writeFile(compiledPath, compiled, 'utf8')
 
-const { hasUnterminatedToolCallMarkup, isToolAllowedForActiveStep, parseHermesToolCalls, stripResidualToolMarkup } = await import(pathToFileURL(compiledPath).href)
+const {
+  extractPathScopes,
+  hasUnterminatedToolCallMarkup,
+  isToolAllowedForActiveStep,
+  parseHermesToolCalls,
+  stripResidualToolMarkup,
+  validateToolAgainstCurrentTask,
+} = await import(pathToFileURL(compiledPath).href)
 
 test.after(async () => { await rm(tempDir, { recursive: true, force: true }) })
 
@@ -145,4 +152,19 @@ test('active step tool filter allows only required tools plus safe inspection', 
   assert.equal(isToolAllowedForActiveStep('file.write_text', ['shell.run_command']), false)
   assert.equal(isToolAllowedForActiveStep('devserver.start', ['preview.console']), true)
   assert.equal(isToolAllowedForActiveStep('devserver.status', ['preview.screenshot']), true)
+})
+
+test('windows drive scope does not add duplicate colon', () => {
+  assert.deepEqual(extractPathScopes('what folders are on D:'), ['d:'])
+  assert.deepEqual(extractPathScopes('list D:\\'), ['d:'])
+})
+
+test('filesystem stale guard allows drive root from latest request scope', () => {
+  assert.equal(
+    validateToolAgainstCurrentTask(
+      { name: 'filesystem.list_directory', args: { path: 'D:\\' } },
+      'what folders are on D:',
+    ),
+    null,
+  )
 })

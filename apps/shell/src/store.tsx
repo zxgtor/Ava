@@ -25,9 +25,11 @@ import type {
   ViewMode,
 } from './types'
 import {
+  applyWorkspaceAccessToMcpServers,
   defaultSettings,
   mergeMcpServers,
   mergeModelProviders,
+  mergeWorkspaces,
   normalizeProviderChain,
 } from './lib/llm/providers'
 
@@ -439,7 +441,7 @@ function initialState(): AppState {
     conversations: [],
     activeConversationId: null,
     settings: defaultSettings(),
-    settingsSection: 'persona',
+    settingsSection: 'general',
     viewMode: 'chat',
     sidebarOpen: true,
     rightPanelOpen: false,
@@ -468,7 +470,8 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
 
   const merged = defaultSettings()
   const providers = mergeModelProviders(src.modelProviders ?? null)
-  const mcpServers = mergeMcpServers(src.mcpServers ?? null)
+  const workspaces = mergeWorkspaces(src.workspaces ?? null)
+  const mcpServers = applyWorkspaceAccessToMcpServers(mergeMcpServers(src.mcpServers ?? null), workspaces)
   const toolFormatMap: Settings['modelToolFormatMap'] = {}
   if (src.modelToolFormatMap && typeof src.modelToolFormatMap === 'object') {
     for (const [k, v] of Object.entries(src.modelToolFormatMap)) {
@@ -509,6 +512,24 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
       pluginStates[id] = { enabled: Boolean((state as { enabled?: unknown }).enabled) }
     }
   }
+  const addOnSources: Settings['addOnSources'] = []
+  if (Array.isArray(src.addOnSources)) {
+    for (const source of src.addOnSources) {
+      if (!source || typeof source !== 'object') continue
+      const item = source as Partial<Settings['addOnSources'][number]>
+      const url = typeof item.url === 'string' ? item.url.trim() : ''
+      if (!/^https?:\/\//i.test(url)) continue
+      const id = typeof item.id === 'string' && item.id.trim()
+        ? item.id.trim()
+        : `custom-${addOnSources.length + 1}`
+      addOnSources.push({
+        id,
+        label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : url,
+        url,
+        enabled: item.enabled !== false,
+      })
+    }
+  }
 
   return {
     version: 2,
@@ -519,7 +540,9 @@ function sanitizeSettingsStrict(raw: unknown): Settings | null {
       assistantName: src.persona?.assistantName ?? merged.persona.assistantName,
     },
     mcpServers,
+    workspaces,
     pluginStates,
+    addOnSources,
     modelToolFormatMap: toolFormatMap,
     modelCapabilityMap,
     voice: {

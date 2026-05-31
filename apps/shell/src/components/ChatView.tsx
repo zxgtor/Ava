@@ -21,6 +21,7 @@ import {
 } from '../lib/agent/chat'
 import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
+import { isSpeechEnabled } from '../lib/speechPlugin'
 import { detectTraitsFromText } from '../lib/agent/traits'
 import { extractWorkingDirectoryFromText, isCodingDesignBigTask } from '../lib/agent/taskBasics'
 import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, ProjectBrief, TaskExecutionPlan, ProjectAnalysis } from '../types'
@@ -909,7 +910,7 @@ export function ChatView() {
 
 
   const toggleStt = useCallback(async () => {
-    if (!state.settings.voice?.enabled) return
+    if (!isSpeechEnabled(state.settings)) return
 
     if (isRecording) {
       sttClient?.stop()
@@ -937,7 +938,7 @@ export function ChatView() {
       console.warn('Failed to start STT:', err)
       setIsRecording(false)
     }
-  }, [isRecording, sttClient, state.settings.voice])
+  }, [isRecording, sttClient, state.settings])
 
   // Tell STT server when bot is speaking for echo cancellation
   useEffect(() => {
@@ -1614,8 +1615,8 @@ export function ChatView() {
         const placeholder = makeAssistantPlaceholder(taskId)
         const delegationContext = workflowSystemMessage(taskId, [
           'Workflow action: delegate_to_code_agent.',
-          'The user wants Ava to use or delegate to an external code agent such as Codex, Claude Code, Cursor, or another local agent.',
-          'First identify the requested target agent. If availability is uncertain, use safe shell.run_command checks such as `codex --version` or `claude --version` when tools are available.',
+          'The user wants Ava to use or delegate to an external code agent such as Codex, Claude Code, Gemini CLI, Cursor, or another local agent.',
+          'First identify the requested target agent. If availability is uncertain, use safe shell.run_command checks such as `codex --version`, `claude --version`, or `gemini --version` when tools are available.',
           'If no target is available, explain the missing dependency and suggest how to connect it. Do not silently fall back to Ava doing the whole coding task unless the user asks.',
           'If the user only asks a question about delegation, answer directly without starting task intake.',
         ].join(' '))
@@ -2088,7 +2089,7 @@ export function ChatView() {
           commands={commands}
           commandsLoading={commandsLoading}
           onRefreshCommands={refreshCommands}
-          voiceEnabled={state.settings.voice?.enabled}
+          voiceEnabled={isSpeechEnabled(state.settings)}
           isRecording={isRecording}
           onSttToggle={toggleStt}
           sttText={sttText}

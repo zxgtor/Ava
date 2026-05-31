@@ -42,6 +42,24 @@
       padding: 26px 34px 38px;
     }
 
+    body.embedded .shell {
+      padding: 0;
+    }
+
+    body.embedded .top {
+      display: none;
+    }
+
+    body.embedded .brain {
+      min-height: 100vh;
+      border-top: 0;
+    }
+
+    body.embedded .canvas {
+      height: 100vh;
+      min-height: 100vh;
+    }
+
     .top {
       display: flex;
       align-items: center;
@@ -849,6 +867,10 @@
     </section>
   </main>
   <script>
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.body.classList.add('embedded')
+    }
+
     const devPanelBackLink = document.querySelector('#devPanelBackLink')
     if (devPanelBackLink && location.port === '17872') {
       devPanelBackLink.href = `${location.protocol}//${location.hostname}:5179/`
@@ -1049,6 +1071,15 @@
       view = { x: 0, y: 0, scale: 1 }
       renderView()
       saveLayout()
+    }
+
+    window.avaBrain = {
+      autoOrganize,
+      toggleColorLegend() {
+        const nextOpen = colorLegendPopover.hidden
+        colorLegendPopover.hidden = !nextOpen
+        colorLegendButton.setAttribute('aria-expanded', String(nextOpen))
+      },
     }
 
     canvas.addEventListener('wheel', event => {

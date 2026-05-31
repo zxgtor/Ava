@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { 
   Settings, Trash2, Edit2, X,
   MoreVertical, Pin, Archive, FolderPlus, ChevronDown, ChevronRight,
-  ListFilter, Plus, User, Palette, GitBranch, Server, ClipboardList,
-  Store, Puzzle, Mic, Info, Brain, ArrowLeft,
+  ListFilter, Plus, Server,
+  Store, Brain, ArrowLeft,
   CirclePlus, RefreshCw, MessageCircle, ArchiveRestore,
   FlaskConical,
 } from 'lucide-react'
@@ -34,16 +34,10 @@ interface SidebarGroup {
 }
 
 const SETTINGS_CATEGORIES = [
-  { id: 'persona', labelKey: 'settings.persona', fallback: 'Persona', icon: User },
-  { id: 'appearance', labelKey: 'settings.theme', fallback: 'Appearance', icon: Palette },
+  { id: 'general', labelKey: 'settings.general', fallback: 'General', icon: Settings },
   { id: 'providers', labelKey: 'settings.llm', fallback: 'LLM Providers', icon: Brain },
-  { id: 'chain', labelKey: 'settings.fallback_chain', fallback: 'Fallback Chain', icon: GitBranch },
-  { id: 'mcp', labelKey: 'settings.mcp', fallback: 'MCP Servers', icon: Server },
-  { id: 'audit', labelKey: 'settings.audit_title', fallback: 'Tool Audit Log', icon: ClipboardList },
-  { id: 'marketplace', labelKey: 'settings.marketplace_title', fallback: 'Marketplace', icon: Store },
-  { id: 'plugins', labelKey: 'settings.plugins', fallback: 'Plugins', icon: Puzzle },
-  { id: 'voice', labelKey: 'settings.voice', fallback: 'Voice & STT', icon: Mic },
-  { id: 'about', labelKey: 'settings.about', fallback: 'About', icon: Info },
+  { id: 'mcp', labelKey: 'settings.mcp', fallback: 'Workspace', icon: Server },
+  { id: 'marketplace', labelKey: 'settings.marketplace_title', fallback: 'Add-ons', icon: Store },
 ]
 
 export function ConversationSidebar() {

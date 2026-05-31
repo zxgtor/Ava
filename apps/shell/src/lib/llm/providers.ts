@@ -1,6 +1,8 @@
-import type { McpServerConfig, ModelProvider, Settings } from '../../types'
+import type { McpServerConfig, ModelProvider, Settings, WorkspaceConfig } from '../../types'
 
 export const DEFAULT_MODEL_CHAIN = ['lmstudio', 'openai']
+export const FULL_LOCAL_PC_ACCESS_DIR = '__AVA_FULL_LOCAL_PC__'
+export const LOCAL_WORKSPACE_ID = 'local-pc'
 
 const LM_STUDIO_DEFAULT_MODEL = 'qwen2.5-7b-instruct'
 const LM_STUDIO_MODEL_CANDIDATES = [
@@ -216,7 +218,7 @@ export const DEFAULT_MCP_SERVERS: McpServerConfig[] = [
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-filesystem'],
     enabled: false,
-    allowedDirs: [],
+    allowedDirs: [FULL_LOCAL_PC_ACCESS_DIR],
     builtin: true,
   },
   {
@@ -230,7 +232,71 @@ export const DEFAULT_MCP_SERVERS: McpServerConfig[] = [
   },
 ]
 
+export const DEFAULT_WORKSPACES: WorkspaceConfig[] = [
+  {
+    id: LOCAL_WORKSPACE_ID,
+    name: 'Local PC',
+    kind: 'local-pc',
+    fileAccess: true,
+    pcControl: true,
+    builtin: true,
+  },
+]
+
+export function mergeWorkspaces(overrides?: WorkspaceConfig[] | null): WorkspaceConfig[] {
+  const byId = new Map<string, WorkspaceConfig>()
+  for (const workspace of DEFAULT_WORKSPACES) {
+    byId.set(workspace.id, { ...workspace })
+  }
+  for (const raw of overrides ?? []) {
+    if (!raw?.id) continue
+    const existing = byId.get(raw.id)
+    if (existing?.builtin) {
+      byId.set(raw.id, {
+        ...existing,
+        name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : existing.name,
+        fileAccess: Boolean(raw.fileAccess),
+        pcControl: Boolean(raw.pcControl),
+      })
+      continue
+    }
+    byId.set(raw.id, {
+      id: String(raw.id),
+      name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : String(raw.id),
+      kind: raw.kind === 'local-pc' ? 'local-pc' : 'pc',
+      fileAccess: Boolean(raw.fileAccess),
+      pcControl: Boolean(raw.pcControl),
+      builtin: false,
+    })
+  }
+  return Array.from(byId.values())
+}
+
+export function applyWorkspaceAccessToMcpServers(
+  servers: McpServerConfig[],
+  workspaces: WorkspaceConfig[],
+): McpServerConfig[] {
+  const local = workspaces.find(workspace => workspace.id === LOCAL_WORKSPACE_ID) ?? DEFAULT_WORKSPACES[0]
+  return servers.map(server => {
+    if (server.id === 'filesystem') {
+      return {
+        ...server,
+        enabled: false,
+        allowedDirs: local.fileAccess ? [FULL_LOCAL_PC_ACCESS_DIR] : [],
+      }
+    }
+    if (server.id === 'windows-mcp') {
+      return {
+        ...server,
+        enabled: local.pcControl,
+      }
+    }
+    return server
+  })
+}
+
 export function defaultSettings(): Settings {
+  const workspaces = DEFAULT_WORKSPACES.map(workspace => ({ ...workspace }))
   return {
     version: 2,
     modelProviders: mergeModelProviders(),
@@ -239,8 +305,13 @@ export function defaultSettings(): Settings {
       userName: 'Jason',
       assistantName: 'Ava',
     },
-    mcpServers: DEFAULT_MCP_SERVERS.map(s => ({ ...s, args: [...s.args], allowedDirs: [...(s.allowedDirs ?? [])] })),
+    mcpServers: applyWorkspaceAccessToMcpServers(
+      DEFAULT_MCP_SERVERS.map(s => ({ ...s, args: [...s.args], allowedDirs: [...(s.allowedDirs ?? [])] })),
+      workspaces,
+    ),
+    workspaces,
     pluginStates: {},
+    addOnSources: [],
     modelToolFormatMap: {},
     modelCapabilityMap: {},
     voice: {

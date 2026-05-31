@@ -410,6 +410,8 @@ export type AvaDaemonApiPath =
   | '/workspace/write-text'
   | '/workspace/create-dir'
   | '/workspace/list-dir'
+  | '/workspace/code-agents'
+  | '/workspace/code-agents/install'
   | '/environment/open-path'
   | '/environment/open-terminal'
   | '/environment/open-vscode'

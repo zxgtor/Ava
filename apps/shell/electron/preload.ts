@@ -46,6 +46,20 @@ interface ModelCapabilityProfile {
   error?: string
 }
 
+interface CodeAgentProbeResult {
+  id: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'openclaw'
+  name: string
+  command: string
+  status: 'ready' | 'missing' | 'error'
+  version?: string
+  error?: string
+  install?: {
+    packageName: string
+    label: string
+  }
+  checkedAt: number
+}
+
 interface LlmAttempt {
   providerId: string
   providerName: string
@@ -633,6 +647,8 @@ const ava = {
     createDir: (path: string): Promise<boolean> => ipcRenderer.invoke('ava:workspace:createDir', path),
     listDir: (path: string): Promise<Array<{ name: string; isDirectory: boolean; size: number }>> =>
       ipcRenderer.invoke('ava:workspace:listDir', path),
+    probeCodeAgents: (): Promise<CodeAgentProbeResult[]> => ipcRenderer.invoke('ava:workspace:probeCodeAgents'),
+    installCodeAgent: (agentId: CodeAgentProbeResult['id']): Promise<unknown> => ipcRenderer.invoke('ava:workspace:installCodeAgent', agentId),
     openPath: (path: string): Promise<string> => ipcRenderer.invoke('ava:environment:openPath', path),
     openInTerminal: (path: string): Promise<void> => ipcRenderer.invoke('ava:environment:openTerminal', path),
     openInVSCode: (path: string): Promise<void> => ipcRenderer.invoke('ava:environment:openVSCode', path),

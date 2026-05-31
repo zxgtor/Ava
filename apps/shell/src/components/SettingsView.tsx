@@ -1,22 +1,18 @@
 import { useCallback, useState, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import {
+  applyWorkspaceAccessToMcpServers,
   mergeMcpServers,
   mergeModelProviders,
+  mergeWorkspaces,
   normalizeProviderChain,
 } from '../lib/llm/providers'
 import type { Settings } from '../types'
 
-import { PersonaSection } from './settings/PersonaSection'
-import { AppearanceSection } from './settings/AppearanceSection'
-import { ChainSection } from './settings/ChainSection'
+import { GeneralSettingsSection } from './settings/GeneralSettingsSection'
 import { ProvidersSection } from './settings/ProvidersSection'
-import { McpSection } from './settings/McpSection'
-import { ToolAuditSection } from './settings/ToolAuditSection'
-import { PluginsSection } from './settings/PluginsSection'
+import { WorkspaceSection } from './settings/WorkspaceSection'
 import { MarketplaceSection } from './settings/MarketplaceSection'
-import { VoiceSection } from './settings/VoiceSection'
-import { AboutSection } from './settings/AboutSection'
 
 export function SettingsView() {
   const { state, dispatch } = useStore()
@@ -46,7 +42,8 @@ export function SettingsView() {
       // Re-sanitize providers + chain
       next.modelProviders = mergeModelProviders(next.modelProviders)
       next.primaryModelChain = normalizeProviderChain(next.primaryModelChain, next.modelProviders)
-      next.mcpServers = mergeMcpServers(next.mcpServers)
+      next.workspaces = mergeWorkspaces(next.workspaces)
+      next.mcpServers = applyWorkspaceAccessToMcpServers(mergeMcpServers(next.mcpServers), next.workspaces)
       next.pluginStates = next.pluginStates ?? {}
       settingsRef.current = next
       dispatch({ type: 'UPDATE_SETTINGS', settings: next })
@@ -57,23 +54,20 @@ export function SettingsView() {
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6">
-        {state.settingsSection === 'persona' && <PersonaSection settings={state.settings} update={update} />}
-        {state.settingsSection === 'appearance' && <AppearanceSection settings={state.settings} update={update} />}
-        {state.settingsSection === 'chain' && <ChainSection settings={state.settings} update={update} />}
-        {state.settingsSection === 'providers' && <ProvidersSection settings={state.settings} update={update} />}
-        {state.settingsSection === 'mcp' && <McpSection settings={state.settings} update={update} />}
-        {state.settingsSection === 'audit' && <ToolAuditSection />}
+        {(state.settingsSection === 'general' || state.settingsSection === 'persona' || state.settingsSection === 'appearance' || state.settingsSection === 'about') && (
+          <GeneralSettingsSection settings={state.settings} update={update} />
+        )}
+        {(state.settingsSection === 'providers' || state.settingsSection === 'chain') && <ProvidersSection settings={state.settings} update={update} />}
+        {state.settingsSection === 'mcp' && <WorkspaceSection settings={state.settings} update={update} />}
         {state.settingsSection === 'marketplace' && (
           <MarketplaceSection
             settings={state.settings}
+            update={update}
             localPlugins={localPlugins}
             onInstall={refreshPlugins}
             onUninstall={refreshPlugins}
           />
         )}
-        {state.settingsSection === 'plugins' && <PluginsSection settings={state.settings} update={update} />}
-        {state.settingsSection === 'voice' && <VoiceSection settings={state.settings} update={update} />}
-        {state.settingsSection === 'about' && <AboutSection />}
       </div>
     </div>
   )

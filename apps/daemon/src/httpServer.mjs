@@ -449,6 +449,17 @@ async function routeRequest(req, res, runtime) {
     return
   }
 
+  if (url.pathname === '/workspace/code-agents' && req.method === 'GET') {
+    await runtimeJsonResponse(res, runtime, 'probeCodeAgents', [])
+    return
+  }
+
+  if (url.pathname === '/workspace/code-agents/install' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'installCodeAgent', [body?.agentId])
+    return
+  }
+
   if (url.pathname === '/environment/open-path' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'openEnvironmentPath', [body])
