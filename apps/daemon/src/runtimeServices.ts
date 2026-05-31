@@ -52,6 +52,7 @@ import {
   listCodeAgentProfiles,
   listCodeAgentSessions,
   sendCodeAgentSessionMessage,
+  startCodeAgentSession,
   stopCodeAgentSession,
 } from './services/codeAgentDispatcher'
 
@@ -344,6 +345,7 @@ export function createDaemonRuntimeServices() {
     listCodeAgentProfiles,
     dispatchCodeAgentTask,
     listCodeAgentSessions,
+    startCodeAgentSession,
     sendCodeAgentSessionMessage,
     stopCodeAgentSession,
     openEnvironmentPath,

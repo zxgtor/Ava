@@ -216,6 +216,7 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'Built-in tools runtime',
       'MCP and skill context',
       'Process registry',
+      'Code agent dispatcher events',
     ],
     dependencies: ['Node runtime', 'Localhost ports', 'Local config', 'Local LLM runtime', 'Ava Speech plugin', 'Workspace filesystem', 'MCP servers'],
     dependsOn: ['node-runtime', 'localhost-ports', 'local-llm', 'speech-services'],
@@ -251,6 +252,7 @@ const DEV_NODE_METADATA: Record<string, DevNodeMetadata> = {
       'Ava Brain map',
       'Tool audit log',
       'Browser test surface',
+      'Code agent routing tests',
     ],
     dependencies: ['Ava Dev Supervisor', 'Ava Daemon for tests', 'Node runtime', 'Localhost ports'],
     dependsOn: ['dev-control-backend', 'daemon', 'node-runtime', 'localhost-ports'],
@@ -1199,6 +1201,7 @@ function makeCodeAgentDispatcherTargets(baseUrl: string): TestTarget[] {
           taskKind: 'debug',
           constraints: ['Do not modify unrelated files.', 'Run typecheck after edits.'],
           validationCommands: ['npm run typecheck --workspace=@ava/shell'],
+          startImmediately: false,
         },
         expectJsonOneOf: {
           'result.status': ['assigned', 'blocked'],

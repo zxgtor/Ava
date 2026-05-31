@@ -164,6 +164,10 @@ export class AvaClient {
     return this.getResult<AvaCodeAgentSessionListResult>('/code-agents/sessions')
   }
 
+  async startCodeAgentSession(sessionId: string): Promise<AvaCodeAgentSession> {
+    return this.postResult<AvaCodeAgentSession>('/code-agents/sessions/start', { sessionId })
+  }
+
   async sendCodeAgentSessionMessage(request: AvaCodeAgentSendMessageRequest): Promise<AvaCodeAgentSession> {
     return this.postResult<AvaCodeAgentSession>('/code-agents/sessions/send', request)
   }

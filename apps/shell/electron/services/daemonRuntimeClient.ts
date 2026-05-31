@@ -21,6 +21,7 @@ export const daemonRuntimeClient = {
   clearActiveTaskPlan: (request: any) => client().clearActiveTaskPlan(request),
   dispatchCodeAgentTask: (request: any) => client().dispatchCodeAgentTask(request),
   listCodeAgentSessions: () => client().listCodeAgentSessions(),
+  startCodeAgentSession: (sessionId: string) => client().startCodeAgentSession(sessionId),
   sendCodeAgentSessionMessage: (request: any) => client().sendCodeAgentSessionMessage(request),
   stopCodeAgentSession: (sessionId: string) => client().stopCodeAgentSession(sessionId),
   probeModels: (request: any) => client().probeModels(request),

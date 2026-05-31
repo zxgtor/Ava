@@ -3,7 +3,7 @@ import { startDaemonServer } from './httpServer.mjs'
 const daemon = await startDaemonServer()
 
 console.log(`[ava-daemon] listening on ${daemon.url}`)
-console.log('[ava-daemon] endpoints: /health, /runtime/status, /code-agents/dispatch, /mcp/servers, /chat/stream, /chat/ws')
+console.log('[ava-daemon] endpoints: /health, /runtime/status, /code-agents/dispatch, /code-agents/sessions/start, /mcp/servers, /chat/stream, /chat/ws')
 
 async function shutdown(signal) {
   console.log(`[ava-daemon] received ${signal}; shutting down`)

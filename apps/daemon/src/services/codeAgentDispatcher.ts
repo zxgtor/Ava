@@ -2,6 +2,7 @@ import type {
   AvaCodeAgentDispatchResult,
   AvaCodeAgentEvent,
   AvaCodeAgentId,
+  AvaCodeAgentProcessInfo,
   AvaCodeAgentProfile,
   AvaCodeAgentSelection,
   AvaCodeAgentSendMessageRequest,
@@ -10,6 +11,7 @@ import type {
   AvaCodeAgentTaskKind,
   AvaCodeAgentTaskRequest,
 } from '@ava/contracts'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { probeCodeAgents, type CodeAgentProbeResult } from './codeAgentProbe'
 
 export interface CodeAgentDriver {
@@ -60,6 +62,7 @@ const CODE_AGENT_PROFILES: AvaCodeAgentProfile[] = [
 ]
 
 const sessions = new Map<string, AvaCodeAgentSession>()
+const runningProcesses = new Map<string, ChildProcessWithoutNullStreams>()
 
 export function listCodeAgentProfiles(): AvaCodeAgentProfile[] {
   return CODE_AGENT_PROFILES
@@ -83,8 +86,11 @@ export async function dispatchCodeAgentTask(raw: AvaCodeAgentTaskRequest): Promi
 
   const session = createSession(request, selected)
   sessions.set(session.sessionId, session)
+  const nextSession = request.startImmediately === true
+    ? await startCodeAgentSession(session.sessionId)
+    : session
   return {
-    session,
+    session: nextSession,
     candidates,
     status: 'assigned',
     reason: `Assigned task to ${selected.agent.name}.`,
@@ -97,6 +103,132 @@ export function listCodeAgentSessions(): AvaCodeAgentSessionListResult {
   }
 }
 
+export async function startCodeAgentSession(sessionId: unknown): Promise<AvaCodeAgentSession> {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('sessionId is required.')
+  const session = sessions.get(sessionId)
+  if (!session) throw new Error(`Unknown code agent session: ${sessionId}`)
+  if (runningProcesses.has(sessionId)) return session
+  if (session.status === 'completed' || session.status === 'failed' || session.status === 'stopped') return session
+
+  const invocation = buildAgentInvocation(session)
+  const starting = updateSession(sessionId, current => ({
+    ...current,
+    status: 'starting',
+    process: {
+      command: invocation.command,
+      args: invocation.args,
+      cwd: invocation.cwd,
+    },
+    events: [
+      ...current.events,
+      createEvent(sessionId, 'starting', `Starting ${current.selected.agent.name}: ${formatCommand(invocation.command, invocation.args)}`),
+    ],
+    updatedAt: Date.now(),
+  }))
+
+  try {
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      env: process.env,
+      shell: process.platform === 'win32',
+      windowsHide: true,
+    })
+    runningProcesses.set(sessionId, child)
+    const startedAt = Date.now()
+    updateSession(sessionId, current => ({
+      ...current,
+      status: 'running',
+      process: {
+        ...(current.process ?? {
+          command: invocation.command,
+          args: invocation.args,
+          cwd: invocation.cwd,
+        }),
+        pid: child.pid,
+        startedAt,
+      },
+      events: [
+        ...current.events,
+        createEvent(sessionId, 'started', `Started ${current.selected.agent.name} process${child.pid ? ` pid ${child.pid}` : ''}.`),
+      ],
+      updatedAt: startedAt,
+    }))
+
+    child.stdout.on('data', chunk => appendProcessEvent(sessionId, 'stdout', chunk))
+    child.stderr.on('data', chunk => appendProcessEvent(sessionId, 'stderr', chunk))
+    child.on('error', error => {
+      runningProcesses.delete(sessionId)
+      updateSession(sessionId, current => ({
+        ...current,
+        status: 'failed',
+        process: {
+          ...processInfoFor(current, invocation),
+          exitedAt: Date.now(),
+        },
+        events: [
+          ...current.events,
+          createEvent(sessionId, 'failed', summarizeProcessError(error)),
+        ],
+        updatedAt: Date.now(),
+      }))
+    })
+    child.on('close', (exitCode, signal) => {
+      runningProcesses.delete(sessionId)
+      const ok = exitCode === 0
+      const now = Date.now()
+      updateSession(sessionId, current => ({
+        ...current,
+        status: current.status === 'stopped' ? 'stopped' : ok ? 'completed' : 'failed',
+        process: {
+          ...processInfoFor(current, invocation),
+          exitedAt: now,
+          exitCode,
+          signal,
+        },
+        events: [
+          ...current.events,
+          createEvent(sessionId, 'exit', `Process exited with code ${exitCode ?? 'null'}${signal ? ` and signal ${signal}` : ''}.`),
+          ...(current.status === 'stopped'
+            ? []
+            : [createEvent(sessionId, ok ? 'completed' : 'failed', ok
+              ? `${current.selected.agent.name} completed.`
+              : `${current.selected.agent.name} failed. Check stdout/stderr events for details.`)]),
+        ],
+        updatedAt: now,
+      }))
+    })
+
+    if (session.task.timeoutMs && Number.isFinite(session.task.timeoutMs) && session.task.timeoutMs > 0) {
+      setTimeout(() => {
+        const processForSession = runningProcesses.get(sessionId)
+        if (!processForSession) return
+        processForSession.kill()
+        updateSession(sessionId, current => ({
+          ...current,
+          status: 'failed',
+          events: [
+            ...current.events,
+            createEvent(sessionId, 'failed', `Code agent timed out after ${session.task.timeoutMs}ms.`),
+          ],
+          updatedAt: Date.now(),
+        }))
+      }, session.task.timeoutMs).unref()
+    }
+
+    return sessions.get(sessionId) ?? starting
+  } catch (error) {
+    return updateSession(sessionId, current => ({
+      ...current,
+      status: 'failed',
+      events: [
+        ...current.events,
+        createEvent(sessionId, 'failed', summarizeProcessError(error)),
+      ],
+      updatedAt: Date.now(),
+    }))
+  }
+}
+
 export async function sendCodeAgentSessionMessage(raw: AvaCodeAgentSendMessageRequest): Promise<AvaCodeAgentSession> {
   if (!raw || typeof raw !== 'object') throw new Error('session message request is required.')
   const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : ''
@@ -106,7 +238,13 @@ export async function sendCodeAgentSessionMessage(raw: AvaCodeAgentSendMessageRe
   const session = sessions.get(sessionId)
   if (!session) throw new Error(`Unknown code agent session: ${sessionId}`)
 
-  const event = createEvent(sessionId, 'message_queued', message)
+  const processForSession = runningProcesses.get(sessionId)
+  const event = processForSession?.stdin?.writable
+    ? createEvent(sessionId, 'message_sent', message)
+    : createEvent(sessionId, 'message_queued', message)
+  if (processForSession?.stdin?.writable) {
+    processForSession.stdin.write(`${message}\n`)
+  }
   const next: AvaCodeAgentSession = {
     ...session,
     status: session.status === 'created' ? 'running' : session.status,
@@ -121,6 +259,11 @@ export async function stopCodeAgentSession(sessionId: unknown): Promise<AvaCodeA
   if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('sessionId is required.')
   const session = sessions.get(sessionId)
   if (!session) throw new Error(`Unknown code agent session: ${sessionId}`)
+  const processForSession = runningProcesses.get(session.sessionId)
+  if (processForSession) {
+    processForSession.kill()
+    runningProcesses.delete(session.sessionId)
+  }
   const event = createEvent(session.sessionId, 'stopped', `Stopped ${session.selected.agent.name} session.`)
   const next: AvaCodeAgentSession = {
     ...session,
@@ -143,6 +286,8 @@ function normalizeTaskRequest(raw: AvaCodeAgentTaskRequest): AvaCodeAgentTaskReq
     preferredAgentId: normalizeAgentId(raw.preferredAgentId),
     constraints: Array.isArray(raw.constraints) ? raw.constraints.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : [],
     validationCommands: Array.isArray(raw.validationCommands) ? raw.validationCommands.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : [],
+    startImmediately: typeof raw.startImmediately === 'boolean' ? raw.startImmediately : undefined,
+    timeoutMs: typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs) && raw.timeoutMs > 0 ? raw.timeoutMs : undefined,
   }
 }
 
@@ -243,6 +388,84 @@ function createEvent(sessionId: string, type: AvaCodeAgentEvent['type'], message
     message,
     createdAt: Date.now(),
   }
+}
+
+function updateSession(sessionId: string, updater: (session: AvaCodeAgentSession) => AvaCodeAgentSession): AvaCodeAgentSession {
+  const current = sessions.get(sessionId)
+  if (!current) throw new Error(`Unknown code agent session: ${sessionId}`)
+  const next = updater(current)
+  sessions.set(sessionId, next)
+  return next
+}
+
+function appendProcessEvent(sessionId: string, type: 'stdout' | 'stderr', chunk: Buffer): void {
+  updateSession(sessionId, current => ({
+    ...current,
+    events: [
+      ...current.events,
+      createEvent(sessionId, type, normalizeProcessChunk(chunk)),
+    ],
+    updatedAt: Date.now(),
+  }))
+}
+
+function normalizeProcessChunk(chunk: Buffer): string {
+  const text = chunk.toString('utf8').replace(/\r\n/g, '\n').trimEnd()
+  if (text.length <= 8_000) return text
+  return `${text.slice(0, 8_000)}\n...[truncated ${text.length - 8_000} chars]`
+}
+
+function processInfoFor(
+  session: AvaCodeAgentSession,
+  invocation: CodeAgentInvocation,
+): AvaCodeAgentProcessInfo {
+  return {
+    command: invocation.command,
+    args: invocation.args,
+    cwd: invocation.cwd,
+    ...session.process,
+  }
+}
+
+type CodeAgentInvocation = {
+  command: string
+  args: string[]
+  cwd?: string
+}
+
+function buildAgentInvocation(session: AvaCodeAgentSession): CodeAgentInvocation {
+  const command = session.selected.agent.command
+  const prompt = session.taskPackage
+  const cwd = session.task.workingDirectory || process.cwd()
+
+  switch (session.selected.agent.id) {
+    case 'claude-code':
+      return { command, args: ['-p', prompt], cwd }
+    case 'codex':
+      return { command, args: ['exec', prompt], cwd }
+    case 'gemini':
+      return { command, args: ['-p', prompt], cwd }
+    case 'opencode':
+      return { command, args: ['run', prompt], cwd }
+    case 'openclaw':
+      return { command, args: ['run', prompt], cwd }
+    default:
+      return { command, args: [prompt], cwd }
+  }
+}
+
+function formatCommand(command: string, args: string[]): string {
+  const preview = [command, ...args.map(arg => arg.length > 80 ? `${arg.slice(0, 80)}...` : arg)]
+  return preview.join(' ')
+}
+
+function summarizeProcessError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(Boolean)
+    ?.slice(0, 500) ?? 'Code agent process failed.'
 }
 
 function buildTaskPackage(task: AvaCodeAgentTaskRequest, selected: AvaCodeAgentSelection): string {

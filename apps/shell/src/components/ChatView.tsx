@@ -235,6 +235,8 @@ type CodeAgentDispatchResult = {
   session?: {
     sessionId: string
     status: string
+    process?: { pid?: number; command?: string; args?: string[] }
+    events?: CodeAgentEvent[]
     selected: {
       agent: { id: CodeAgentId; name: string }
       score: number
@@ -249,6 +251,20 @@ type CodeAgentDispatchResult = {
     reasons: string[]
     probe?: { status: string; version?: string; error?: string }
   }>
+}
+
+type CodeAgentEvent = {
+  id: string
+  sessionId: string
+  type: string
+  message: string
+  createdAt: number
+}
+
+type CodeAgentSession = NonNullable<CodeAgentDispatchResult['session']>
+
+type CodeAgentSessionListResult = {
+  sessions?: CodeAgentSession[]
 }
 
 type IntakeSessionResult = {
@@ -373,24 +389,7 @@ function inferCodeAgentTaskKind(content: string): CodeAgentTaskKind {
 
 function formatCodeAgentDispatchMessage(result: CodeAgentDispatchResult): string {
   if (result.status === 'assigned' && result.session) {
-    const session = result.session
-    const selected = session.selected
-    const probe = selected.probe?.version ? `（${selected.probe.version}）` : ''
-    const reasons = selected.reasons.length
-      ? selected.reasons.map(item => `- ${item}`).join('\n')
-      : '- no selection reason returned'
-    return [
-      '已创建 Code Agent 任务会话。',
-      '',
-      `代理：${selected.agent.name}${probe}`,
-      `会话：${session.sessionId}`,
-      `状态：${session.status}`,
-      '',
-      '选择原因：',
-      reasons,
-      '',
-      '当前阶段：Ava 已完成代理选择和任务打包。下一步需要由 daemon 启动该代理进程、监听事件，并把最终结果回填到聊天。'
-    ].join('\n')
+    return formatCodeAgentSessionMessage(result.session, result.reason)
   }
 
   const candidates = (result.candidates ?? []).slice(0, 5)
@@ -414,6 +413,48 @@ function formatCodeAgentDispatchMessage(result: CodeAgentDispatchResult): string
   ].join('\n')
 }
 
+function formatCodeAgentSessionMessage(session: CodeAgentSession, reason?: string): string {
+  const selected = session.selected
+  const probe = selected.probe?.version ? `（${selected.probe.version}）` : ''
+  const pid = session.process?.pid ? `\n进程：pid ${session.process.pid}` : ''
+  const reasons = selected.reasons.length
+    ? selected.reasons.map(item => `- ${item}`).join('\n')
+    : '- no selection reason returned'
+  const events = formatCodeAgentEvents(session.events ?? [])
+  return [
+    'Code Agent 任务会话',
+    '',
+    `代理：${selected.agent.name}${probe}`,
+    `会话：${session.sessionId}`,
+    `状态：${session.status}${pid}`,
+    reason ? `说明：${reason}` : '',
+    '',
+    '选择原因：',
+    reasons,
+    '',
+    events ? `事件：\n${events}` : '事件：等待 daemon 返回进度...',
+  ].filter(Boolean).join('\n')
+}
+
+function formatCodeAgentEvents(events: CodeAgentEvent[]): string {
+  return events
+    .slice(-12)
+    .map(event => {
+      const time = new Date(event.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      const message = event.message.length > 500 ? `${event.message.slice(0, 500)}...` : event.message
+      return `- ${time} [${event.type}] ${message}`
+    })
+    .join('\n')
+}
+
+function isCodeAgentTerminalStatus(status?: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'stopped' || status === 'blocked'
+}
+
+async function listCodeAgentSessionsViaDaemon(): Promise<CodeAgentSessionListResult> {
+  return window.ava.agent.listCodeAgentSessions() as Promise<CodeAgentSessionListResult>
+}
+
 async function dispatchCodeAgentTaskViaDaemon(input: {
   content: string
   conversation: Conversation
@@ -427,6 +468,7 @@ async function dispatchCodeAgentTaskViaDaemon(input: {
       'Do not modify unrelated files.',
       'Report changed files and validation results.',
     ],
+    startImmediately: true,
   }) as Promise<CodeAgentDispatchResult>
 }
 
@@ -460,6 +502,43 @@ function makeActionPreviewMessage(taskId: string, inputDecision: InputDispatchRe
 
 function maybeWithPreview(messages: Message[], preview: Message | null): Message[] {
   return preview ? [...messages, preview] : messages
+}
+
+async function pollCodeAgentSessionUpdates(input: {
+  sessionId: string
+  conversationId: string
+  messageId: string
+  dispatch: (action: any) => void
+}): Promise<void> {
+  const maxPolls = 1_200
+  for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 800 : 1_500))
+    const list = await listCodeAgentSessionsViaDaemon()
+    const session = (list.sessions ?? []).find(item => item.sessionId === input.sessionId)
+    if (!session) continue
+    input.dispatch({
+      type: 'UPDATE_MESSAGE',
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      patch: {
+        content: [{ type: 'text', text: formatCodeAgentSessionMessage(session) }],
+        streaming: !isCodeAgentTerminalStatus(session.status),
+        runPhase: isCodeAgentTerminalStatus(session.status)
+          ? session.status === 'completed' ? 'completed' : 'error'
+          : 'generating',
+      },
+    })
+    if (isCodeAgentTerminalStatus(session.status)) return
+  }
+  input.dispatch({
+    type: 'UPDATE_MESSAGE',
+    conversationId: input.conversationId,
+    messageId: input.messageId,
+    patch: {
+      streaming: false,
+      runPhase: 'completed',
+    },
+  })
 }
 
 async function runDaemonAnalyzePhase(input: {
@@ -1736,29 +1815,53 @@ export function ChatView() {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
+        const placeholder = makeAssistantPlaceholder(taskId)
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
         if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
 
         try {
           const result = await dispatchCodeAgentTaskViaDaemon({ content, conversation })
+          const codeAgentSession = result.session
           dispatch({
-            type: 'ADD_MESSAGE',
+            type: 'UPDATE_MESSAGE',
             conversationId: conversation.id,
-            message: makeCompletedAssistantMessage(taskId, formatCodeAgentDispatchMessage(result)),
+            messageId: placeholder.id,
+            patch: {
+              content: [{ type: 'text', text: formatCodeAgentDispatchMessage(result) }],
+              streaming: result.status === 'assigned' && Boolean(codeAgentSession) && !isCodeAgentTerminalStatus(codeAgentSession?.status),
+              runPhase: result.status === 'assigned' ? 'generating' : 'error',
+            },
           })
+          if (result.status === 'assigned' && codeAgentSession) {
+            await pollCodeAgentSessionUpdates({
+              sessionId: codeAgentSession.sessionId,
+              conversationId: conversation.id,
+              messageId: placeholder.id,
+              dispatch,
+            })
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           dispatch({
-            type: 'ADD_MESSAGE',
+            type: 'UPDATE_MESSAGE',
             conversationId: conversation.id,
-            message: makeCompletedAssistantMessage(taskId, [
-              'Code Agent Dispatcher 调用失败。',
-              '',
-              `错误：${message}`,
-              '',
-              '请确认 Ava Daemon 正在运行，然后重试。',
-            ].join('\n')),
+            messageId: placeholder.id,
+            patch: {
+              content: [{
+                type: 'text',
+                text: [
+                  'Code Agent Dispatcher 调用失败。',
+                  '',
+                  `错误：${message}`,
+                  '',
+                  '请确认 Ava Daemon 正在运行，然后重试。',
+                ].join('\n'),
+              }],
+              streaming: false,
+              runPhase: 'error',
+            },
           })
         }
         return

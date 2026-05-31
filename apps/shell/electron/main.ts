@@ -179,6 +179,7 @@ function registerIpc(): void {
   ipcMain.handle('ava:agent:clearActiveTaskPlan', async (_e, request: unknown) => daemonRuntimeClient.clearActiveTaskPlan(request))
   ipcMain.handle('ava:agent:dispatchCodeAgentTask', async (_e, request: unknown) => daemonRuntimeClient.dispatchCodeAgentTask(request))
   ipcMain.handle('ava:agent:listCodeAgentSessions', async () => daemonRuntimeClient.listCodeAgentSessions())
+  ipcMain.handle('ava:agent:startCodeAgentSession', async (_e, sessionId: string) => daemonRuntimeClient.startCodeAgentSession(sessionId))
   ipcMain.handle('ava:agent:sendCodeAgentSessionMessage', async (_e, request: unknown) => daemonRuntimeClient.sendCodeAgentSessionMessage(request))
   ipcMain.handle('ava:agent:stopCodeAgentSession', async (_e, sessionId: string) => daemonRuntimeClient.stopCodeAgentSession(sessionId))
   ipcMain.handle('ava:agent:getProjectBrief', async (_e, request: unknown) => daemonRuntimeClient.getProjectBrief(request))

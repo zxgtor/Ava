@@ -388,7 +388,7 @@ export type AvaCodeAgentId = 'claude-code' | 'codex' | 'gemini' | 'opencode' | '
 
 export type AvaCodeAgentTaskKind = 'scaffold' | 'feature' | 'debug' | 'refactor' | 'research' | 'design' | 'unknown'
 
-export type AvaCodeAgentSessionStatus = 'created' | 'running' | 'blocked' | 'completed' | 'failed' | 'stopped'
+export type AvaCodeAgentSessionStatus = 'created' | 'starting' | 'running' | 'blocked' | 'completed' | 'failed' | 'stopped'
 
 export type AvaCodeAgentProfile = {
   id: AvaCodeAgentId
@@ -405,6 +405,8 @@ export type AvaCodeAgentTaskRequest = {
   preferredAgentId?: AvaCodeAgentId
   constraints?: string[]
   validationCommands?: string[]
+  startImmediately?: boolean
+  timeoutMs?: number
 }
 
 export type AvaCodeAgentSelection = {
@@ -421,9 +423,20 @@ export type AvaCodeAgentSelection = {
 export type AvaCodeAgentEvent = {
   id: string
   sessionId: string
-  type: 'selected' | 'task_packaged' | 'message_queued' | 'blocked' | 'stopped'
+  type: 'selected' | 'task_packaged' | 'starting' | 'started' | 'stdout' | 'stderr' | 'message_sent' | 'message_queued' | 'exit' | 'completed' | 'failed' | 'blocked' | 'stopped'
   message: string
   createdAt: number
+}
+
+export type AvaCodeAgentProcessInfo = {
+  pid?: number
+  command: string
+  args: string[]
+  cwd?: string
+  startedAt?: number
+  exitedAt?: number
+  exitCode?: number | null
+  signal?: string | null
 }
 
 export type AvaCodeAgentSession = {
@@ -432,6 +445,7 @@ export type AvaCodeAgentSession = {
   selected: AvaCodeAgentSelection
   task: AvaCodeAgentTaskRequest
   taskPackage: string
+  process?: AvaCodeAgentProcessInfo
   events: AvaCodeAgentEvent[]
   createdAt: number
   updatedAt: number
@@ -490,6 +504,7 @@ export type AvaDaemonApiPath =
   | '/code-agents/profiles'
   | '/code-agents/dispatch'
   | '/code-agents/sessions'
+  | '/code-agents/sessions/start'
   | '/code-agents/sessions/send'
   | '/code-agents/sessions/stop'
   | '/environment/open-path'

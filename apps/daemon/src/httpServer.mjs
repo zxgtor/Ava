@@ -476,6 +476,12 @@ async function routeRequest(req, res, runtime) {
     return
   }
 
+  if (url.pathname === '/code-agents/sessions/start' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    await runtimeJsonResponse(res, runtime, 'startCodeAgentSession', [body?.sessionId])
+    return
+  }
+
   if (url.pathname === '/code-agents/sessions/send' && req.method === 'POST') {
     const body = await readJsonBody(req)
     await runtimeJsonResponse(res, runtime, 'sendCodeAgentSessionMessage', [body])
