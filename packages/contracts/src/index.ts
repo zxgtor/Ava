@@ -301,6 +301,7 @@ export type AvaInputRoute =
   | 'url_input'
   | 'agent_delegation'
   | 'preference_or_setting'
+  | 'new_capability_needed'
   | 'unknown_or_ambiguous'
 
 export type AvaInputWorkflow =
@@ -316,9 +317,18 @@ export type AvaInputWorkflow =
   | 'browser'
   | 'delegation'
   | 'settings'
+  | 'capability_gap'
   | 'clarify'
 
 export type AvaInputClassifySource = 'rule' | 'llm' | 'fallback'
+
+export type AvaInputClassifyTrace = {
+  hardPrecheck: boolean
+  ruleRoute: AvaInputRoute
+  llmRoute?: AvaInputRoute
+  finalRoute: AvaInputRoute
+  postcheckApplied: boolean
+}
 
 export type AvaInputAttachment = {
   kind?: 'image' | 'video' | 'audio' | 'document' | 'archive' | 'code' | 'url' | 'unknown'
@@ -347,6 +357,7 @@ export type AvaInputClassifyResult = {
   source: AvaInputClassifySource
   reason: string
   confidence: number
+  trace?: AvaInputClassifyTrace
 }
 
 export type AvaWorkflowAction =

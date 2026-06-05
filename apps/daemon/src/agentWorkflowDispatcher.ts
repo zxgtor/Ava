@@ -51,6 +51,8 @@ function actionForRoute(classification: AvaInputClassifyResult): AvaWorkflowActi
       return 'delegate_to_code_agent'
     case 'preference_or_setting':
       return 'update_preference'
+    case 'new_capability_needed':
+      return 'ask_clarifying_question'
     case 'unknown_or_ambiguous':
       return 'ask_clarifying_question'
     case 'normal_chat':

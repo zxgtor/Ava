@@ -23,7 +23,7 @@ import { getEnabledProviders } from '../lib/llm/providers'
 import { STTClient } from '../lib/voiceClient'
 import { isSpeechEnabled } from '../lib/speechPlugin'
 import { detectTraitsFromText } from '../lib/agent/traits'
-import { extractWorkingDirectoryFromText, isCodingDesignBigTask } from '../lib/agent/taskBasics'
+import { extractWorkingDirectoryFromText, hasStrongCodingDesignTaskIntent, isCodingDesignBigTask } from '../lib/agent/taskBasics'
 import type { CommandInvocation, ContentPart, Conversation, InitiativeTrait, Message, PluginCommand, ProjectBrief, TaskExecutionPlan, ProjectAnalysis } from '../types'
 
 function hasFailedToolCall(conversation: Conversation, messageId: string): boolean {
@@ -53,14 +53,12 @@ interface PendingTaskIntake {
   clarificationAnswers?: Array<{ question: string; answer: string }>
 }
 
-const TASK_INTAKE_INTENT_RE = /\b(build|create|make|generate|implement|fix|debug|refactor|modify|update|edit|write|add|remove|delete|site|app|component|page|feature|bug|code|html|css|javascript|typescript|react|three\.?js|3d)\b|创建|生成|实现|修复|调试|重构|修改|更新|添加|删除|网站|应用|组件|页面|功能|代码|三维|3d/i
-const LARGE_TASK_INTENT_RE = /\b(3d|three\.?js|animation|animated|site|website|landing page|app|full app|project|professional|production ready|complete|responsive|dashboard|frontend|ui|ux|migrate|refactor|implement feature|create|build|generate)\b|三维|动画|网站|站点|落地页|应用|完整|专业|响应式|前端|界面|迁移|重构|项目/i
 const ENGLISH_CONFIRM_TASK_RE = /^(ok|okay|yes|y|go|start|continue|proceed|confirm|do it|looks good|run)\b/i
 const CHINESE_CONFIRM_TASK_RE = /^(执行|开始|继续|确认|可以|好的|好|没问题|就这样)$/i
 const FEATURE_TEST_RE = /^\s*\[AVA-FEATURE-TEST:([A-Za-z0-9_.-]+)\]/i
 function localShouldRequireTaskIntake(content: string, commandInvocation?: CommandInvocation): boolean {
   if (commandInvocation) return true
-  return TASK_INTAKE_INTENT_RE.test(content)
+  return hasStrongCodingDesignTaskIntent(content)
 }
 
 function isTaskConfirmation(content: string): boolean {

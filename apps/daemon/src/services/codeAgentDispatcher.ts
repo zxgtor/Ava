@@ -79,6 +79,7 @@ const CODE_AGENT_ADAPTERS: Record<AvaCodeAgentId, CodeAgentAdapter> = {
         '--print',
         '--output-format',
         'stream-json',
+        '--verbose',
         '--include-partial-messages',
         '--permission-mode',
         'auto',
