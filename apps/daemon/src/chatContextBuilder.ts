@@ -205,8 +205,10 @@ function findLatestUserIndex(messages: AvaChatMessage[]): number {
 }
 
 function normalizeMessage(message: AvaChatMessage, includeImages: boolean): LlmMessage | null {
-  if (message.role === 'system') return null
   const text = partsToText(message.content).trim()
+  if (message.role === 'system') {
+    return text ? { role: 'system', content: text, taskId: message.taskId } : null
+  }
   const imageParts = Array.isArray(message.content)
     ? message.content.filter(part => part.type === 'image_url')
     : []

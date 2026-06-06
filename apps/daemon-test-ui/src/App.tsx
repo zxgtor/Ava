@@ -676,6 +676,23 @@ function makeIntentGateTargets(baseUrl: string): TestTarget[] {
       }),
     },
     {
+      id: 'intent:video-assets-save',
+      kind: 'intent',
+      name: 'intent.video_assets_save',
+      label: 'video_assets_save',
+      description: 'Classify explicit saved video asset package requests as video_creation.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a short video package about LLM training and save the script, storyboard, captions, and prompts to D:\\Apps\\VideoPlan.' },
+        expectJson: {
+          'result.route': 'video_creation',
+          'result.workflow': 'video_creation',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
       id: 'intent:video-explain-chat',
       kind: 'intent',
       name: 'intent.video_explain_chat',
@@ -1036,6 +1053,24 @@ function makeWorkflowDispatcherTargets(baseUrl: string): TestTarget[] {
         method: 'POST',
         url,
         body: { content: 'I want to create a short video about how to train large language model, can you help me with that?' },
+        expectJson: {
+          'result.classification.route': 'video_creation',
+          'result.action': 'start_video_creation',
+          'result.workflow': 'video_creation',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:video-assets-save',
+      kind: 'workflow',
+      name: 'workflow.video_assets_save',
+      label: 'video_assets_save',
+      description: 'Dispatch saved video asset package requests to the video_creation workflow.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a short video package about LLM training and save the script, storyboard, captions, and prompts to D:\\Apps\\VideoPlan.' },
         expectJson: {
           'result.classification.route': 'video_creation',
           'result.action': 'start_video_creation',

@@ -521,6 +521,10 @@ function workflowSystemMessage(taskId: string, text: string): Message {
   }
 }
 
+function hasExplicitVideoAssetSaveRequest(content: string): boolean {
+  return /\b(save|write|export|create files?|generate files?|put (?:it|them) (?:in|under)|to files?|as files?|folder|directory)\b|保存|写入|导出|生成文件|创建文件|放到|目录|文件夹/i.test(content)
+}
+
 function makeCompletedAssistantMessage(taskId: string, text: string): Message {
   return {
     id: makeMessageId(),
@@ -1855,13 +1859,21 @@ export function ChatView() {
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
+        const shouldSaveVideoAssets = hasExplicitVideoAssetSaveRequest(content)
         const videoContext = workflowSystemMessage(taskId, [
           'Workflow action: start_video_creation.',
           'The user wants help creating a short-form video or video assets.',
           'Do not start coding task intake and do not claim an MP4/video file was generated.',
           'First determine whether enough information exists for a useful first draft. If one key detail is missing, ask only one question with concise options.',
           'If enough information exists, produce a practical V1 package: target platform assumption, hook, 3-6 beat outline, storyboard/shot list, voiceover script, captions/subtitle draft, visual asset prompts, and optional next production paths.',
-          'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
+          shouldSaveVideoAssets
+            ? [
+                'The latest user request explicitly asks to save/export/write video assets.',
+                'If no target folder or file path is specified, ask one concise question for the target folder before calling file tools.',
+                'If a target folder/path is specified, create a small durable asset package with file.write_text. Prefer these files: script.md, storyboard.md, captions.srt, visual-prompts.md, production-notes.md.',
+                'Do not write binary video/audio files. Do not claim a playable video was generated. After writing, report the created paths and any assumptions.',
+              ].join(' ')
+            : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
