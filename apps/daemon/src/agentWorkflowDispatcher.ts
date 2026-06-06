@@ -69,6 +69,29 @@ function implementationStatus(action: AvaWorkflowAction): AvaWorkflowImplementat
   return IMPLEMENTED_ACTIONS.has(action) ? 'implemented' : 'planned'
 }
 
+function hasExplicitVideoAssetSaveRequest(content: string): boolean {
+  return /\b(save|write|export|create files?|generate files?|put (?:it|them) (?:in|under)|to files?|as files?|folder|directory)\b|保存|写入|导出|生成文件|创建文件|放到|目录|文件夹/i.test(content)
+}
+
+function videoOutputTargetFor(content: string): string {
+  if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
+  if (/\b(remotion|editable\s+video|react\s+video|video\s+project)\b|可编辑视频|视频项目/i.test(content)) return 'remotion_project'
+  if (/\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt)\b|视频提示词|生成视频提示词/i.test(content)) return 'video_prompts'
+  if (/\b(tts|voiceover|narration|audio|mp3|wav|spoken)\b|旁白|配音|音频|语音/i.test(content)) return 'tts_voiceover'
+  return 'chat_draft'
+}
+
+function videoOutputTargetLabel(target: string): string {
+  switch (target) {
+    case 'file_assets': return '保存为脚本/分镜/字幕/提示词文件'
+    case 'remotion_project': return '准备 Remotion 可编辑视频项目'
+    case 'video_prompts': return '生成 Sora/Runway/Kling/Veo 视频提示词'
+    case 'tts_voiceover': return '生成 TTS/旁白素材'
+    case 'chat_draft':
+    default: return '先在聊天里生成 V1 草稿'
+  }
+}
+
 function previewForAction(
   action: AvaWorkflowAction,
   request: AvaInputDispatchRequest,
@@ -147,15 +170,18 @@ function previewForAction(
         requiresConfirmation: false,
         text: '我会把这条输入当作偏好或设置处理，先判断是当前会话生效、已有设置可保存，还是需要新增设置能力。',
       }
-    case 'start_video_creation':
+    case 'start_video_creation': {
+      const videoTarget = videoOutputTargetFor(request.content)
       return {
         requiresConfirmation: false,
         text: [
           '我会按短视频创作流程处理，不会直接启动代码项目或生成视频文件。',
           `主题：${shortGoal}`,
-          '我会先确认平台、时长、风格和输出目标；信息足够时生成脚本、分镜、旁白、字幕和素材清单。',
+          `输出路径：${videoOutputTargetLabel(videoTarget)}`,
+          '我会先确认平台、时长、风格和输出目标；信息足够时按该输出路径生成脚本、分镜、旁白、字幕和素材清单。',
         ].join('\n'),
       }
+    }
     case 'ask_clarifying_question':
       return {
         requiresConfirmation: false,

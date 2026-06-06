@@ -525,6 +525,14 @@ function hasExplicitVideoAssetSaveRequest(content: string): boolean {
   return /\b(save|write|export|create files?|generate files?|put (?:it|them) (?:in|under)|to files?|as files?|folder|directory)\b|保存|写入|导出|生成文件|创建文件|放到|目录|文件夹/i.test(content)
 }
 
+function videoOutputTargetFor(content: string): string {
+  if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
+  if (/\b(remotion|editable\s+video|react\s+video|video\s+project)\b|可编辑视频|视频项目/i.test(content)) return 'remotion_project'
+  if (/\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt)\b|视频提示词|生成视频提示词/i.test(content)) return 'video_prompts'
+  if (/\b(tts|voiceover|narration|audio|mp3|wav|spoken)\b|旁白|配音|音频|语音/i.test(content)) return 'tts_voiceover'
+  return 'chat_draft'
+}
+
 function makeCompletedAssistantMessage(taskId: string, text: string): Message {
   return {
     id: makeMessageId(),
@@ -1860,12 +1868,15 @@ export function ChatView() {
         const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
         const shouldSaveVideoAssets = hasExplicitVideoAssetSaveRequest(content)
+        const videoOutputTarget = videoOutputTargetFor(content)
         const videoContext = workflowSystemMessage(taskId, [
           'Workflow action: start_video_creation.',
           'The user wants help creating a short-form video or video assets.',
+          `Selected video output target: ${videoOutputTarget}.`,
           'Do not start coding task intake and do not claim an MP4/video file was generated.',
-          'First determine whether enough information exists for a useful first draft. If one key detail is missing, ask only one question with concise options.',
-          'If enough information exists, produce a practical V1 package: target platform assumption, hook, 3-6 beat outline, storyboard/shot list, voiceover script, captions/subtitle draft, visual asset prompts, and optional next production paths.',
+          'Use this output target policy: chat_draft means answer in chat with a practical V1 package; file_assets means write markdown/SRT asset files when a target folder is provided; remotion_project means ask for or confirm a target folder before starting a coding/project workflow; video_prompts means produce prompts for Sora/Runway/Kling/Veo-style tools; tts_voiceover means produce voiceover-ready text and ask before using any speech tool.',
+          'First determine whether enough information exists for the selected output target. If one key detail is missing, ask only one question with concise options.',
+          'If enough information exists, produce the selected output: target platform assumption, hook, 3-6 beat outline, storyboard/shot list, voiceover script, captions/subtitle draft, visual asset prompts, and optional next production paths.',
           shouldSaveVideoAssets
             ? [
                 'The latest user request explicitly asks to save/export/write video assets.',

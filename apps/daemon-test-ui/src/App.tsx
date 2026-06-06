@@ -693,6 +693,23 @@ function makeIntentGateTargets(baseUrl: string): TestTarget[] {
       }),
     },
     {
+      id: 'intent:video-prompts',
+      kind: 'intent',
+      name: 'intent.video_prompts',
+      label: 'video_prompts',
+      description: 'Classify Sora/video prompt package requests as video_creation.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Generate Sora video prompts for a short explainer about training large language models.' },
+        expectJson: {
+          'result.route': 'video_creation',
+          'result.workflow': 'video_creation',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
       id: 'intent:video-explain-chat',
       kind: 'intent',
       name: 'intent.video_explain_chat',
@@ -1071,6 +1088,24 @@ function makeWorkflowDispatcherTargets(baseUrl: string): TestTarget[] {
         method: 'POST',
         url,
         body: { content: 'Create a short video package about LLM training and save the script, storyboard, captions, and prompts to D:\\Apps\\VideoPlan.' },
+        expectJson: {
+          'result.classification.route': 'video_creation',
+          'result.action': 'start_video_creation',
+          'result.workflow': 'video_creation',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:video-remotion-target',
+      kind: 'workflow',
+      name: 'workflow.video_remotion_target',
+      label: 'video_remotion_target',
+      description: 'Dispatch explicit Remotion video project requests to video_creation instead of coding intake.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Help me make this LLM training short as an editable Remotion video project.' },
         expectJson: {
           'result.classification.route': 'video_creation',
           'result.action': 'start_video_creation',

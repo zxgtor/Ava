@@ -659,7 +659,9 @@
             <path class="primary" data-edge="input,router" />
             <path class="primary" data-edge="router,dispatcher" />
             <path class="primary" data-edge="dispatcher,task" />
+            <path class="primary" data-edge="dispatcher,videoOutput" />
             <path data-edge="dispatcher,normal" />
+            <path data-edge="videoOutput,normal" />
             <path class="primary" data-edge="task,intake" />
             <path class="warn" data-edge="intake,classifier" />
             <path data-edge="task,normal" />
@@ -749,7 +751,21 @@
           <small>/input/dispatch</small>
         </article>
 
-        <article class="node daemon" data-node="intake" style="left: 760px; top: 90px;">
+        <article class="node daemon cyan" data-node="videoOutput" style="left: 500px; top: 1080px; width: 340px;">
+          <div class="runtime-tag daemon">daemon</div>
+          <h2>Video Output Selector</h2>
+          <p>For video_creation, choose the execution shape before prompting the model. This prevents all creative video requests from becoming the same generic chat answer.</p>
+          <div class="intent-type-grid" aria-label="Video output targets">
+            <span>chat_draft</span>
+            <span>file_assets</span>
+            <span>remotion_project</span>
+            <span>video_prompts</span>
+            <span>tts_voiceover</span>
+          </div>
+          <small>start_video_creation output policy</small>
+        </article>
+
+        <article class="node daemon" data-node="intake" style="left: 900px; top: 90px;">
           <div class="runtime-tag daemon">daemon</div>
           <h2>3. Task Intake</h2>
           <p>Daemon owns the intake session: stage, current question, answers, summary confirmation, cancellation, and correction reanalysis.</p>
