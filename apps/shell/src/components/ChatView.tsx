@@ -1850,6 +1850,32 @@ export function ChatView() {
         return
       }
 
+      if (!pendingTaskIntake && inputDecision.action === 'start_video_creation') {
+        const taskId = makeTaskId()
+        const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
+        const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
+        const placeholder = makeAssistantPlaceholder(taskId)
+        const videoContext = workflowSystemMessage(taskId, [
+          'Workflow action: start_video_creation.',
+          'The user wants help creating a short-form video or video assets.',
+          'Do not start coding task intake and do not claim an MP4/video file was generated.',
+          'First determine whether enough information exists for a useful first draft. If one key detail is missing, ask only one question with concise options.',
+          'If enough information exists, produce a practical V1 package: target platform assumption, hook, 3-6 beat outline, storyboard/shot list, voiceover script, captions/subtitle draft, visual asset prompts, and optional next production paths.',
+          'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
+        ].join(' '))
+
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
+        if (previewMsg) dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: previewMsg })
+        dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: placeholder })
+        await driveStream(
+          { ...conversation, messages: [...maybeWithPreview([...conversation.messages, userMsg], previewMsg), videoContext] },
+          conversation.id,
+          placeholder.id,
+          taskId,
+        )
+        return
+      }
+
       if (!pendingTaskIntake && inputDecision.action === 'delegate_to_code_agent') {
         const taskId = makeTaskId()
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])

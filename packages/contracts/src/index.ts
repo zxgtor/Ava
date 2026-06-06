@@ -301,6 +301,8 @@ export type AvaInputRoute =
   | 'url_input'
   | 'agent_delegation'
   | 'preference_or_setting'
+  | 'creative_content'
+  | 'video_creation'
   | 'new_capability_needed'
   | 'unknown_or_ambiguous'
 
@@ -317,6 +319,8 @@ export type AvaInputWorkflow =
   | 'browser'
   | 'delegation'
   | 'settings'
+  | 'creative'
+  | 'video_creation'
   | 'capability_gap'
   | 'clarify'
 
@@ -374,6 +378,7 @@ export type AvaWorkflowAction =
   | 'handle_url'
   | 'delegate_to_code_agent'
   | 'update_preference'
+  | 'start_video_creation'
   | 'ask_clarifying_question'
 
 export type AvaWorkflowImplementationStatus = 'implemented' | 'planned'

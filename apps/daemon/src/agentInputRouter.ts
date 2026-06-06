@@ -7,6 +7,8 @@ const LOCAL_EXECUTION_SIGNAL_RE = /\b[A-Z]:\\|\/[A-Za-z0-9_.-]+\/|package\.json|
 const CODE_SCRIPT_RE = /\b(?:python|javascript|typescript|node|bash|shell|powershell|sql)\s+script\b|\bscript\s+(?:in|with)\s+(?:python|javascript|typescript|node|bash|shell|powershell|sql)\b|Python\s*脚本|脚本.*(?:Python|JavaScript|TypeScript|Shell|PowerShell)/i
 const WEAK_CREATE_HELP_RE = /\b(create|make|generate|write|draft|help me with|can you help me)\b|创建|生成|写|草拟|帮我|可以帮我/i
 const CREATIVE_OR_ADVICE_OBJECT_RE = /\b(video|short video|youtube|reel|script|storyboard|voiceover|narration|story|article|post|presentation|lesson|course|outline|plan|strategy|idea|ideas)\b|视频|短视频|脚本|分镜|旁白|故事|文章|帖子|演示|课程|大纲|计划|策略|想法/i
+const VIDEO_CREATION_OBJECT_RE = /\b(short\s*video|video|youtube\s*shorts?|tiktok|reels?|bilibili|storyboard|voiceover|narration|captions?|subtitle|shot\s*list|video\s*script)\b|短视频|视频|分镜|旁白|字幕|镜头清单|视频脚本/i
+const CREATIVE_EXECUTION_VERB_RE = /\b(create|make|generate|write|draft|produce|plan|help me with|can you help me)\b|创建|生成|写|草拟|制作|策划|帮我|可以帮我/i
 const AVA_META_QUESTION_RE = /\b(what can ava do|what.*ava.*do|ava.*status|how.*ava|why.*ask|capabilit|check what ava can do|what.*this app.*can do)\b|Ava.*能做|能做什么|检查.*Ava|看看.*Ava|先看看|先了解|为什么.*问/i
 const CANCEL_OR_PAUSE_RE = /^\s*(stop|cancel|pause|abort|never mind|not now|先别|不要继续|取消|停止|暂停|算了)\s*[.!。！]*\s*$/i
 const RETRY_OR_CONTINUE_RE = /^\s*(retry|try again|continue|resume|go on|继续|重试|再试|接着做)\s*[.!。！]*\s*$/i
@@ -33,6 +35,11 @@ function hasExplicitExecutionRequest(content: string): boolean {
 
 function hasWeakCreateOrAdviceSignal(content: string): boolean {
   return WEAK_CREATE_HELP_RE.test(content) || CREATIVE_OR_ADVICE_OBJECT_RE.test(content)
+}
+
+function hasVideoCreationIntent(content: string): boolean {
+  if (ADVICE_QUESTION_RE.test(content) && !/\b(write|draft|create|make|generate|produce)\b|写|创建|生成|制作/i.test(content)) return false
+  return VIDEO_CREATION_OBJECT_RE.test(content) && CREATIVE_EXECUTION_VERB_RE.test(content)
 }
 
 function isWeakCreateRuleResult(result: AvaInputClassifyResult): boolean {
@@ -84,7 +91,11 @@ function postcheckClassification(
     && !request.hasCommandInvocation
     && !hasExplicitExecutionRequest(content)
   ) {
-    const route: AvaInputRoute = hasWeakCreateOrAdviceSignal(content) ? 'normal_chat' : 'unknown_or_ambiguous'
+    const route: AvaInputRoute = hasVideoCreationIntent(content)
+      ? 'video_creation'
+      : hasWeakCreateOrAdviceSignal(content)
+        ? 'normal_chat'
+        : 'unknown_or_ambiguous'
     return normalizeFinalClassification({
       ...candidate,
       route,
@@ -115,6 +126,16 @@ function postcheckClassification(
     })
   }
 
+  if (candidate.route === 'video_creation' && !hasVideoCreationIntent(content)) {
+    return normalizeFinalClassification({
+      ...candidate,
+      route: 'normal_chat',
+      requiresTaskIntake: false,
+      reason: `${candidate.reason} Postcheck blocked video_creation because the user is not explicitly asking Ava to create or draft video assets.`,
+      confidence: Math.min(candidate.confidence, 0.64),
+    })
+  }
+
   if (
     (candidate.route === 'task_confirmation' || candidate.route === 'continue_intake' || candidate.route === 'requirement_correction')
     && !request.pendingIntake
@@ -137,6 +158,18 @@ function postcheckClassification(
     return normalizeFinalClassification({
       ...ruleResult,
       reason: `${ruleResult.reason} Postcheck kept task_intake because the input has explicit local execution evidence.`,
+      confidence: Math.max(ruleResult.confidence, 0.82),
+    })
+  }
+
+  if (
+    ruleResult.route === 'video_creation'
+    && candidate.route !== 'video_creation'
+    && hasVideoCreationIntent(content)
+  ) {
+    return normalizeFinalClassification({
+      ...ruleResult,
+      reason: `${ruleResult.reason} Postcheck kept video_creation because the input explicitly asks Ava to create short-form video assets.`,
       confidence: Math.max(ruleResult.confidence, 0.82),
     })
   }
@@ -182,6 +215,8 @@ const LLM_CLASSIFIER_ROUTES = new Set<AvaInputRoute>([
   'url_input',
   'agent_delegation',
   'preference_or_setting',
+  'creative_content',
+  'video_creation',
   'new_capability_needed',
   'unknown_or_ambiguous',
 ])
@@ -199,6 +234,8 @@ const LLM_CLASSIFIER_WORKFLOWS = new Set<AvaInputWorkflow>([
   'browser',
   'delegation',
   'settings',
+  'creative',
+  'video_creation',
   'capability_gap',
   'clarify',
 ])
@@ -228,6 +265,10 @@ function workflowForRoute(route: AvaInputRoute): AvaInputWorkflow {
       return 'delegation'
     case 'preference_or_setting':
       return 'settings'
+    case 'creative_content':
+      return 'creative'
+    case 'video_creation':
+      return 'video_creation'
     case 'new_capability_needed':
       return 'capability_gap'
     case 'unknown_or_ambiguous':
@@ -398,6 +439,16 @@ export function classifyInput(request: AvaInputClassifyRequest): AvaInputClassif
     })
   }
 
+  if (hasVideoCreationIntent(content)) {
+    return result({
+      route: 'video_creation',
+      workflow: 'video_creation',
+      requiresTaskIntake: false,
+      reason: 'The user is asking Ava to help create short-form video assets such as script, storyboard, voiceover, captions, or production plan.',
+      confidence: 0.78,
+    })
+  }
+
   if (SMALL_TASK_RE.test(content) && !hasStrongTaskIntent(content)) {
     return result({
       route: 'small_task',
@@ -557,6 +608,8 @@ async function classifyInputWithLlm(
     'Do not use task_intake just because the user says create, make, generate, or write.',
     'Use task_intake only when the user asks Ava to create/modify/debug a code project, local files, app/site/component, or execute tools.',
     'If the user asks for creative help, advice, script/storyboard/video planning, or "can you help me", classify as normal_chat unless they explicitly ask to create files/projects or use tools.',
+    'Use video_creation when the user asks Ava to create, draft, plan, or produce a short video, video script, storyboard, voiceover, captions, or shot list.',
+    'Use creative_content for non-video creative production such as posts, articles, stories, outlines, or presentations.',
     'If no existing workflow fits and execution is implied but capability is missing, prefer unknown_or_ambiguous with needsClarification=true and explain the missing capability.',
     'Use agent_delegation when the user asks to use/delegate to Codex, Claude Code, Gemini CLI, Cursor, or another code agent.',
     'Use file_or_attachment_input when attachments are central to the request.',

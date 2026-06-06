@@ -22,6 +22,7 @@ const IMPLEMENTED_ACTIONS = new Set<AvaWorkflowAction>([
   'handle_url',
   'delegate_to_code_agent',
   'update_preference',
+  'start_video_creation',
   'ask_clarifying_question',
 ])
 
@@ -51,6 +52,8 @@ function actionForRoute(classification: AvaInputClassifyResult): AvaWorkflowActi
       return 'delegate_to_code_agent'
     case 'preference_or_setting':
       return 'update_preference'
+    case 'video_creation':
+      return 'start_video_creation'
     case 'new_capability_needed':
       return 'ask_clarifying_question'
     case 'unknown_or_ambiguous':
@@ -143,6 +146,15 @@ function previewForAction(
       return {
         requiresConfirmation: false,
         text: '我会把这条输入当作偏好或设置处理，先判断是当前会话生效、已有设置可保存，还是需要新增设置能力。',
+      }
+    case 'start_video_creation':
+      return {
+        requiresConfirmation: false,
+        text: [
+          '我会按短视频创作流程处理，不会直接启动代码项目或生成视频文件。',
+          `主题：${shortGoal}`,
+          '我会先确认平台、时长、风格和输出目标；信息足够时生成脚本、分镜、旁白、字幕和素材清单。',
+        ].join('\n'),
       }
     case 'ask_clarifying_question':
       return {
