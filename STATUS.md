@@ -1,6 +1,6 @@
 # Ava — Current Status
 
-_Last updated: 2026-05-03 · Project Map + Local LLM Planning_
+_Last updated: 2026-06-06 · Daemon runtime + workflow routing + video workflow_
 
 > 这个文件是"当前进度"的事实清单。要长期方案看 `ARCHITECTURE.md`。
 > 新 code agent 接手：**先读这个文件**，再读 ARCHITECTURE.md，再看代码。
@@ -215,6 +215,37 @@ _Last updated: 2026-05-03 · Project Map + Local LLM Planning_
   - [x] P0.5 tool result compaction 递归处理嵌套大输出，避免 nested logs 重新塞回上下文
   - [x] P0.6 持久化工具产物默认写入 Ava app data，避免污染用户项目 `.ava`
 
+- [x] **Daemon / Client Split（当前架构方向）**：
+  - `apps/daemon` 已成为 Node daemon runtime package，负责 runtime HTTP/SSE API、config/model router、built-in tools、MCP/skill context、intent gate、workflow dispatcher、code-agent orchestration。
+  - Desktop renderer 不再保留 local runtime fallback；通过 daemon client 访问 runtime。
+  - Web UI 已接入 daemon client path，目标是 desktop / web / mobile 共享同一 runtime。
+  - `apps/dev-control` 提供 Ava Dev Control Panel，用于启动/观察 Ava Desktop、Ava Daemon、Ava Dev Supervisor、Unit Test、Ava Brain 等开发服务。
+  - Dev Control Panel 的 card layout 已迁到 dev-control backend 持久化，避免不同浏览器 localStorage 布局不一致。
+
+- [x] **Intent Gate + Workflow Dispatcher（输入路由）**：
+  - daemon 侧负责 input classification / dispatch：`normal_chat`、`task_intake`、`continue_intake`、`task_confirmation`、`requirement_correction`、`cancel_or_pause`、`retry_or_continue`、`permission_response`、`small_task`、`file_or_attachment_input`、`url_input`、`agent_delegation`、`preference_or_setting`、`video_creation`、`new_capability_needed`、`unknown_or_ambiguous`。
+  - 使用 deterministic rule guardrail + LLM semantic classify + postcheck policy，避免纯关键词路由。
+  - Workflow Dispatcher 已把 `retry_or_continue -> recovery`、`permission_response -> permission`、`small_task -> direct_tool` 等路线落到 action。
+  - Dev Control Panel 的 Unit Test 页面已加入 Intent Gate / Workflow Dispatcher 测试类别。
+
+- [x] **Code Agent Orchestrator（代码代理委派）**：
+  - Workspace 页面可 probe 本机 code agents：Claude Code、OpenAI Codex、OpenCode、OpenClaw、Gemini 等。
+  - daemon 可根据 agent profile / availability / task kind 选择 code agent，创建 task package，启动 agent process，收集事件、退出状态、变更文件证据、验证证据和 final report evidence。
+  - 对 code-agent meta question 和显式 delegation 做了路由区分；只有明确委派才启动外部 code agent。
+
+- [x] **P16 Creative / Video Creation Workflow**：
+  - P16.1：`video_creation` route 可处理“创建短视频 / 脚本 / 分镜 / 旁白 / 字幕 / shot list”等创作请求，不再误走 coding task intake。
+  - P16.2：Workflow preview 会显示 video output target，包含 Chat Draft、File Assets、Remotion Project、Prompt Pack Files、Voiceover / SSML。
+  - P16.3：支持 Remotion editable project workflow；有目标目录时可 scaffold/write Remotion project，没目录先问。
+  - P16.5：Sora / Runway / Kling / Veo prompt pack 可文件化输出。
+  - P16.6：Voiceover pack 可文件化输出：`voiceover-script.md`、`voiceover-ssml.xml`、`pronunciation-notes.md`、`captions.srt`。
+  - P16.7：聊天中展示 video workflow preview card，明确 next step 和 limitations。
+  - P16.8：新增 daemon built-in tool `speech.tts_save`，可调用配置的 TTS HTTP endpoint 并保存音频文件；未配置 TTS 时返回明确错误；Unit Test 使用 `dryRun` 生成 tiny silent WAV，不依赖真实 TTS 服务。
+
+- [x] **Ava Brain / Architecture Visualization**：
+  - `apps/dev-control/ava-brain/input-flow` 展示 User Input Flow：Desktop shell/UI、daemon Intent Gate、Workflow Dispatcher、Task Intake、Execution Plan、Agent Loop、Model Call、Evidence Gate、Final Report。
+  - 页面支持 pan / zoom / auto organize / color legend，并可从 Dev Control Panel 打开。
+
 ---
 
 ## 怎么跑
@@ -387,12 +418,13 @@ window.ava.plugins.list(pluginStates): Promise<DiscoveredPlugin[]>
 
 ## 下一步 — 后续候选
 
-主线 P1–P17.3 已落地。后续候选：
+主线 P1–P17.3 与近期 daemon/runtime/video workflow 主线已落地。后续候选：
 
-- **P16 Plugin Marketplace 远端 Catalog 完善**：现在的 catalog 是静态 JSON，缺签名 / 版本兼容性 / 评分。
-- **Preview runtime polish**：后续可增加 `preview.accessibility`、截图缩略图 UI、以及失败截图自动附加到最终报告。
-- **E2E 测试覆盖率扩展**：P10 只验证了核心 UI 加载；插件 / MCP / tool-call / auto-continue 流程缺自动化覆盖。
-- **Auto-update GitHub Release 流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
+- **P16.9 Workflow context 迁移到 daemon**：`start_video_creation` 的 workflow prompt/context 仍有一部分硬编码在 Desktop `ChatView.tsx`，应迁到 daemon，desktop/web/mobile 统一复用。
+- **Workflow E2E 扩展**：为 `video_creation`、`speech.tts_save`、code-agent delegation、permission/recovery routes 增加端到端测试。
+- **Preview runtime polish**：后续可增加 `preview.accessibility`、截图缩略图 UI、失败截图自动附加到最终报告。
+- **Add-ons source 安全完善**：第三方 add-on source 仍需要签名、版本兼容性、信任策略和更清晰的安装前权限展示。
+- **Auto-update 发布流水线**：P14 接好 SDK，但发布流程（签名 / changelog / staged rollout）还要梳理。
 
 ---
 

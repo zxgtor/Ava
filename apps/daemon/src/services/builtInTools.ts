@@ -8,6 +8,7 @@ import { resolve as resolvePath, basename, dirname } from 'node:path'
 import type { McpToolDescriptor, CallToolError, CallToolResult } from './mcpSupervisor'
 import { COMMAND_ALLOWLIST, DEVSERVER_COMMAND_ALLOWLIST } from './runtimeEnvironment'
 import { processRegistry, type ProcessRecordView } from './processRegistry'
+import { loadSettings } from '../storage'
 
 // Bundled ripgrep — works regardless of whether the user has `rg` on PATH.
 // Resolved lazily so a missing/corrupt install surfaces as a clear error
@@ -433,6 +434,30 @@ const PREVIEW_TOOLS: McpToolDescriptor[] = [
   },
 ]
 
+const SPEECH_TOOLS: McpToolDescriptor[] = [
+  {
+    rawName: 'tts_save',
+    name: 'speech.tts_save',
+    description: [
+      'Call the configured TTS HTTP endpoint and save the returned audio to a file.',
+      'Use only when the user explicitly asks to create/save/export voiceover audio.',
+      'Do not claim MP3/WAV audio exists unless this tool returns ok.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        text: { type: 'string', description: 'Voiceover text to synthesize.' },
+        outputPath: { type: 'string', description: 'Audio output file path inside the active project or allowed directories, for example voiceover.wav.' },
+        voiceId: { type: 'string', description: 'Optional voice id. Defaults to Settings voice.voiceId.' },
+        ttsServerUrl: { type: 'string', description: 'Optional TTS endpoint override. Defaults to Settings voice.ttsServerUrl.' },
+        dryRun: { type: 'boolean', description: 'Unit-test mode only: write a tiny silent WAV without calling an external TTS service.' },
+      },
+      required: ['text', 'outputPath'],
+    },
+  },
+]
+
 interface RunCommandArgs {
   command: string
   args: string[]
@@ -533,7 +558,7 @@ class BuiltInTools {
   private devServers = new Map<string, DevServerProcess>()
 
   listTools(): McpToolDescriptor[] {
-    return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS, ...PROCESS_TOOLS, ...PREVIEW_TOOLS]
+    return [SHELL_TOOL, ...FILE_TOOLS, ...CODING_TOOLS, ...PROCESS_TOOLS, ...PREVIEW_TOOLS, ...SPEECH_TOOLS]
   }
 
   /**
@@ -588,6 +613,7 @@ class BuiltInTools {
       if (name === 'preview.open') return this.openPreview(rawArgs)
       if (name === 'preview.console') return this.previewConsole(rawArgs)
       if (name === 'preview.screenshot') return this.previewScreenshot(rawArgs, context)
+      if (name === 'speech.tts_save') return this.ttsSave(rawArgs, context)
       return { ok: false, error: `unknown built-in tool: ${name}` }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -1122,6 +1148,89 @@ class BuiltInTools {
     }
   }
 
+  private async ttsSave(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
+    const text = typeof rawArgs.text === 'string' ? rawArgs.text.trim() : ''
+    if (!text) return { ok: false, error: 'speech.tts_save requires "text" as a non-empty string.' }
+
+    const outputPath = typeof rawArgs.outputPath === 'string' ? rawArgs.outputPath.trim() : ''
+    if (!outputPath) return { ok: false, error: 'speech.tts_save requires "outputPath" as a string.' }
+    const guard = validatePathAccess(outputPath, context)
+    if (guard) return { ok: false, error: guard }
+
+    const absolutePath = resolvePath(outputPath)
+    await mkdir(dirname(absolutePath), { recursive: true })
+
+    const settings = await loadSettings()
+    const voice = settings && typeof settings === 'object' && !Array.isArray(settings)
+      ? (settings as { voice?: unknown }).voice
+      : undefined
+    const voiceRecord = voice && typeof voice === 'object' && !Array.isArray(voice)
+      ? voice as Record<string, unknown>
+      : {}
+    const voiceId = typeof rawArgs.voiceId === 'string' && rawArgs.voiceId.trim()
+      ? rawArgs.voiceId.trim()
+      : typeof voiceRecord.voiceId === 'string'
+        ? voiceRecord.voiceId
+        : 'default'
+
+    if (rawArgs.dryRun === true) {
+      const buffer = createSilentWavBuffer()
+      await writeFile(absolutePath, buffer)
+      return {
+        ok: true,
+        content: {
+          path: absolutePath,
+          bytes: buffer.byteLength,
+          contentType: 'audio/wav',
+          voiceId,
+          dryRun: true,
+          note: 'Dry-run wrote a tiny silent WAV for tool-routing tests; no external TTS service was called.',
+        },
+      }
+    }
+
+    const ttsServerUrl = typeof rawArgs.ttsServerUrl === 'string' && rawArgs.ttsServerUrl.trim()
+      ? rawArgs.ttsServerUrl.trim()
+      : typeof voiceRecord.ttsServerUrl === 'string'
+        ? voiceRecord.ttsServerUrl.trim()
+        : ''
+    if (!ttsServerUrl) {
+      return {
+        ok: false,
+        error: 'TTS server URL is not configured. Enable Ava Speech and set Settings > Add-ons > Ava Speech > TTS Server URL, or pass ttsServerUrl explicitly.',
+      }
+    }
+
+    const response = await fetch(ttsServerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice_id: voiceId }),
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      return {
+        ok: false,
+        error: `TTS request failed with HTTP ${response.status}${detail ? `: ${detail.slice(0, 500)}` : ''}`,
+      }
+    }
+
+    const arrayBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+    if (buffer.byteLength === 0) return { ok: false, error: 'TTS server returned an empty audio response.' }
+
+    await writeFile(absolutePath, buffer)
+    return {
+      ok: true,
+      content: {
+        path: absolutePath,
+        bytes: buffer.byteLength,
+        contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+        voiceId,
+        dryRun: false,
+      },
+    }
+  }
+
   private async stopDevServer(rawArgs: Record<string, unknown>, context: RunContext): Promise<CallToolResult | CallToolError> {
     const server = this.findDevServerFromArgs(rawArgs, context)
     if (!server.ok) return server
@@ -1460,6 +1569,26 @@ function normalizeWriteTextContent(content: unknown, path: string): string | nul
     return `${JSON.stringify(content, null, 2)}\n`
   }
   return null
+}
+
+function createSilentWavBuffer(durationMs = 120, sampleRate = 8_000): Buffer {
+  const sampleCount = Math.max(1, Math.floor(sampleRate * durationMs / 1000))
+  const dataSize = sampleCount * 2
+  const buffer = Buffer.alloc(44 + dataSize)
+  buffer.write('RIFF', 0)
+  buffer.writeUInt32LE(36 + dataSize, 4)
+  buffer.write('WAVE', 8)
+  buffer.write('fmt ', 12)
+  buffer.writeUInt32LE(16, 16)
+  buffer.writeUInt16LE(1, 20)
+  buffer.writeUInt16LE(1, 22)
+  buffer.writeUInt32LE(sampleRate, 24)
+  buffer.writeUInt32LE(sampleRate * 2, 28)
+  buffer.writeUInt16LE(2, 32)
+  buffer.writeUInt16LE(16, 34)
+  buffer.write('data', 36)
+  buffer.writeUInt32LE(dataSize, 40)
+  return buffer
 }
 
 async function commandOutputLogPath(args: RunCommandArgs): Promise<string> {

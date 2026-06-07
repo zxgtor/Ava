@@ -489,6 +489,7 @@ function defaultBuiltInRequest(toolName: string, cwd: string): string {
   const testFile = `${testDir}\\tool-write.txt`
   const patchFile = `${testDir}\\patch-target.txt`
   const screenshotPath = `${testDir}\\preview.png`
+  const voiceoverPath = `${testDir}\\voiceover.wav`
   const previewPortByTool: Record<string, number> = {
     'devserver.start': 47831,
     'devserver.stop': 47832,
@@ -537,6 +538,7 @@ function defaultBuiltInRequest(toolName: string, cwd: string): string {
     'preview.open': `Respond with exactly these two tool calls and no extra tool calls:\n${devserverStartCall}\n${previewCall('preview.open', { url: previewUrl })}`,
     'preview.console': `Respond with exactly these two tool calls and no extra tool calls:\n${devserverStartCall}\n${previewCall('preview.console', { url: previewUrl, waitMs: 300 })}`,
     'preview.screenshot': `Respond with exactly these two tool calls and no extra tool calls:\n${devserverStartCall}\n${previewCall('preview.screenshot', { url: previewUrl, outputPath: screenshotPath, waitMs: 300 })}`,
+    'speech.tts_save': `Respond with exactly this one tool call and no extra tool calls: ${previewCall('speech.tts_save', { text: 'Ava unit test voiceover.', outputPath: voiceoverPath, dryRun: true })}`,
   }
 
   return requests[toolName] ?? `Call ${toolName} exactly once with safe minimal arguments for cwd "${cwd}".`

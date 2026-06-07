@@ -120,7 +120,7 @@ function videoOutputTargetPlan(target: string): string {
     case 'video_prompts':
       return 'Ava 会生成镜头级 prompt pack；如果你给了目录，会保存为 Sora/Runway/Kling/Veo 分平台提示词文件。'
     case 'tts_voiceover':
-      return 'Ava 会生成旁白-ready 文本和可保存的 SSML/发音说明；当前不会声称已生成音频文件。'
+      return 'Ava 会生成旁白-ready 文本和可保存的 SSML/发音说明；如果目标路径已知且 TTS 已配置，可用 speech.tts_save 生成音频文件。'
     case 'chat_draft':
     default:
       return 'Ava 会先在聊天里给出脚本、分镜、字幕和素材清单草稿。'
@@ -141,7 +141,7 @@ function videoOutputNextStep(target: string): string {
 function videoOutputLimitations(target: string): string[] {
   const common = ['No MP4/video file is generated in this step.']
   if (target === 'video_prompts') return [...common, 'No real video generation API is called.']
-  if (target === 'tts_voiceover') return [...common, 'No MP3/WAV is generated until a real speech.tts tool exists and succeeds.']
+  if (target === 'tts_voiceover') return [...common, 'MP3/WAV audio exists only after speech.tts_save returns ok.']
   if (target === 'remotion_project') return [...common, 'Remotion Studio starts only if the user asks for preview.']
   return common
 }

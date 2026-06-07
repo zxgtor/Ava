@@ -323,6 +323,7 @@ function unitTestToolArgs(name: string, cwd: string): Record<string, unknown> {
     'preview.open': { url: previewUrl },
     'preview.console': { url: previewUrl, waitMs: 300 },
     'preview.screenshot': { url: previewUrl, outputPath: join(testDir, 'preview.png'), waitMs: 300 },
+    'speech.tts_save': { text: 'Ava unit test voiceover.', outputPath: join(testDir, 'voiceover.wav'), dryRun: true },
   }
   return args[name] ?? {}
 }

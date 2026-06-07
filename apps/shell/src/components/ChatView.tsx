@@ -1927,8 +1927,9 @@ export function ChatView() {
                       'Produce voiceover-ready text with timing, pacing, pronunciation notes, and optional SSML-style cues.',
                       'If the user asks to save/export/write the voiceover pack but no target folder/path is specified, ask one concise question for the target folder before calling file tools.',
                       'If a target folder/path is specified, write a durable voiceover pack with file.write_text. Prefer these files: voiceover-script.md, voiceover-ssml.xml, pronunciation-notes.md, captions.srt.',
-                      'Current Ava Speech v1 can play assistant replies through TTS when enabled, but it does not expose a daemon speech.tts file-generation tool yet. Do not claim an MP3/WAV/audio file was generated unless a real speech tool call exists and succeeds.',
-                      'If the user wants spoken preview, explain they can use Ava Speech playback when configured, or ask before routing to a future speech.tts tool.',
+                      'If the user explicitly asks for an audio file and a target output path/folder is known, call speech.tts_save with the final voiceover text. If only a folder is provided, use voiceover.wav in that folder.',
+                      'Do not claim an MP3/WAV/audio file was generated unless speech.tts_save returns ok. If speech.tts_save fails because TTS is not configured, report the exact configuration gap and keep the text voiceover pack.',
+                      'If the user only wants spoken preview, explain they can use Ava Speech playback when configured; do not save audio unless requested.',
                     ].join(' ')
                   : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
         ].join(' '))
