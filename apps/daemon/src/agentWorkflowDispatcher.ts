@@ -100,6 +100,17 @@ function videoOutputTargetLabel(target: string): string {
   }
 }
 
+function videoOutputTargetDisplay(target: string): string {
+  switch (target) {
+    case 'file_assets': return 'File Assets'
+    case 'remotion_project': return 'Remotion Project'
+    case 'video_prompts': return 'Prompt Pack Files'
+    case 'tts_voiceover': return 'Voiceover / SSML'
+    case 'chat_draft':
+    default: return 'Chat Draft'
+  }
+}
+
 function videoOutputTargetPlan(target: string): string {
   switch (target) {
     case 'file_assets':
@@ -114,6 +125,25 @@ function videoOutputTargetPlan(target: string): string {
     default:
       return 'Ava 会先在聊天里给出脚本、分镜、字幕和素材清单草稿。'
   }
+}
+
+function videoOutputNextStep(target: string): string {
+  switch (target) {
+    case 'file_assets': return 'Ask for target folder if missing; otherwise write script/storyboard/caption files.'
+    case 'remotion_project': return 'Ask for target folder if missing; otherwise scaffold or write a Remotion project.'
+    case 'video_prompts': return 'Ask for target folder if saving; otherwise generate platform-specific prompt pack.'
+    case 'tts_voiceover': return 'Ask for target folder if saving; otherwise generate voiceover-ready text and SSML notes.'
+    case 'chat_draft':
+    default: return 'Generate a practical V1 package in chat.'
+  }
+}
+
+function videoOutputLimitations(target: string): string[] {
+  const common = ['No MP4/video file is generated in this step.']
+  if (target === 'video_prompts') return [...common, 'No real video generation API is called.']
+  if (target === 'tts_voiceover') return [...common, 'No MP3/WAV is generated until a real speech.tts tool exists and succeeds.']
+  if (target === 'remotion_project') return [...common, 'Remotion Studio starts only if the user asks for preview.']
+  return common
 }
 
 function previewForAction(
@@ -198,6 +228,13 @@ function previewForAction(
       const videoTarget = videoOutputTargetFor(request.content)
       return {
         requiresConfirmation: false,
+        workflowPreview: {
+          kind: 'video_workflow',
+          title: 'Video Workflow',
+          outputTarget: videoOutputTargetDisplay(videoTarget),
+          nextStep: videoOutputNextStep(videoTarget),
+          limitations: videoOutputLimitations(videoTarget),
+        },
         text: [
           '我会按短视频创作流程处理，不会直接启动代码项目或生成视频文件。',
           `主题：${shortGoal}`,

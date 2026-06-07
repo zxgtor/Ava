@@ -388,6 +388,13 @@ export type AvaInputDispatchRequest = AvaInputClassifyRequest
 export type AvaActionPreview = {
   text: string
   requiresConfirmation: boolean
+  workflowPreview?: {
+    kind: 'video_workflow'
+    title: string
+    outputTarget: string
+    nextStep: string
+    limitations: string[]
+  }
 }
 
 export type AvaInputDispatchResult = {

@@ -626,6 +626,22 @@ function sanitizeMessage(raw: unknown): Message | null {
     error: typeof m.error === 'string' ? m.error : undefined,
     aborted: m.aborted ? true : undefined,
     commandInvocation: sanitizeCommandInvocation(m.commandInvocation),
+    workflowPreview: sanitizeWorkflowPreview(m.workflowPreview),
+  }
+}
+
+function sanitizeWorkflowPreview(raw: unknown): Message['workflowPreview'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const preview = raw as Record<string, unknown>
+  if (preview.kind !== 'video_workflow') return undefined
+  if (typeof preview.title !== 'string' || typeof preview.outputTarget !== 'string' || typeof preview.nextStep !== 'string') return undefined
+  if (!Array.isArray(preview.limitations) || !preview.limitations.every(item => typeof item === 'string')) return undefined
+  return {
+    kind: 'video_workflow',
+    title: preview.title,
+    outputTarget: preview.outputTarget,
+    nextStep: preview.nextStep,
+    limitations: preview.limitations,
   }
 }
 

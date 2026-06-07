@@ -220,6 +220,13 @@ type InputDispatchResult = {
   actionPreview?: {
     text?: string
     requiresConfirmation?: boolean
+    workflowPreview?: {
+      kind: 'video_workflow'
+      title: string
+      outputTarget: string
+      nextStep: string
+      limitations: string[]
+    }
   }
   reason?: string
 }
@@ -554,9 +561,14 @@ function makeCompletedAssistantMessage(taskId: string, text: string): Message {
 }
 
 function makeActionPreviewMessage(taskId: string, inputDecision: InputDispatchResult): Message | null {
-  const text = inputDecision.actionPreview?.text?.trim()
-  if (!text || inputDecision.actionPreview?.requiresConfirmation) return null
-  return makeCompletedAssistantMessage(taskId, text)
+  const actionPreview = inputDecision.actionPreview
+  if (!actionPreview) return null
+  const text = actionPreview.text?.trim()
+  if (!text || actionPreview.requiresConfirmation) return null
+  return {
+    ...makeCompletedAssistantMessage(taskId, text),
+    workflowPreview: actionPreview.workflowPreview,
+  }
 }
 
 function maybeWithPreview(messages: Message[], preview: Message | null): Message[] {

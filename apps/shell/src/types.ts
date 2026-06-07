@@ -184,6 +184,15 @@ export interface Message {
   /** Accumulated reasoning/thinking content from the model (hidden by default, shown in collapsible block). */
   reasoningContent?: string
   commandInvocation?: CommandInvocation
+  workflowPreview?: WorkflowPreview
+}
+
+export type WorkflowPreview = {
+  kind: 'video_workflow'
+  title: string
+  outputTarget: string
+  nextStep: string
+  limitations: string[]
 }
 
 export interface CommandInvocation {

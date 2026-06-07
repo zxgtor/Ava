@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, ChevronRight, Copy, Edit2, RotateCw, Trash2, Brain, Wrench, Send } from 'lucide-react'
+import { Check, ChevronRight, Copy, Edit2, RotateCw, Trash2, Brain, Wrench, Send, Film } from 'lucide-react'
 import type { AssistantRunPhase, ContentPart, Message } from '../types'
 import { MarkdownContent } from './MarkdownContent'
 import { ToolCallBubble } from './ToolCallBubble'
@@ -64,6 +64,36 @@ function RunIndicator({ phase }: { phase?: AssistantRunPhase }) {
     <span className="run-indicator run-indicator-connecting" aria-label="connecting">
       <span />
     </span>
+  )
+}
+
+function WorkflowPreviewCard({ preview }: { preview: NonNullable<Message['workflowPreview']> }) {
+  if (preview.kind !== 'video_workflow') return null
+  return (
+    <div className="mb-3 rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-3 text-xs text-text select-none">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-cyan-400/15 text-cyan-200">
+          <Film size={14} />
+        </span>
+        <div className="min-w-0">
+          <div className="text-[12px] font-semibold text-cyan-100">{preview.title}</div>
+          <div className="text-[11px] text-text-3">Output: {preview.outputTarget}</div>
+        </div>
+      </div>
+      <div className="rounded-lg bg-surface-1/70 px-2.5 py-2">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-text-3">Next</div>
+        <div className="mt-1 text-[12px] text-text-2">{preview.nextStep}</div>
+      </div>
+      {preview.limitations.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {preview.limitations.map((item, index) => (
+            <span key={`${item}-${index}`} className="rounded-full border border-border-subtle bg-surface-2/70 px-2 py-0.5 text-[10px] text-text-3">
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -468,6 +498,9 @@ function MessageBubbleImpl({
                 <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
                 <span className="truncate">Step: {message.taskStepTitle}</span>
               </div>
+            )}
+            {!isUser && message.workflowPreview && (
+              <WorkflowPreviewCard preview={message.workflowPreview} />
             )}
             {!isUser && message.reasoningContent && (
               <ThinkingBlock content={message.reasoningContent} isStreaming={Boolean(message.streaming)} />
