@@ -92,6 +92,22 @@ function videoOutputTargetLabel(target: string): string {
   }
 }
 
+function videoOutputTargetPlan(target: string): string {
+  switch (target) {
+    case 'file_assets':
+      return '如果你给了目录，Ava 会写入脚本、分镜、字幕、提示词和制作说明文件；没给目录会先问目录。'
+    case 'remotion_project':
+      return '如果你给了目标目录，Ava 会创建 Remotion 项目结构并写入初版 composition；没给目录会先问目录。'
+    case 'video_prompts':
+      return 'Ava 会生成适合 Sora/Runway/Kling/Veo 等工具的镜头级视频提示词。'
+    case 'tts_voiceover':
+      return 'Ava 会生成旁白-ready 文本；使用语音工具前会先确认。'
+    case 'chat_draft':
+    default:
+      return 'Ava 会先在聊天里给出脚本、分镜、字幕和素材清单草稿。'
+  }
+}
+
 function previewForAction(
   action: AvaWorkflowAction,
   request: AvaInputDispatchRequest,
@@ -178,7 +194,7 @@ function previewForAction(
           '我会按短视频创作流程处理，不会直接启动代码项目或生成视频文件。',
           `主题：${shortGoal}`,
           `输出路径：${videoOutputTargetLabel(videoTarget)}`,
-          '我会先确认平台、时长、风格和输出目标；信息足够时按该输出路径生成脚本、分镜、旁白、字幕和素材清单。',
+          videoOutputTargetPlan(videoTarget),
         ].join('\n'),
       }
     }

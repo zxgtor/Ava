@@ -1115,6 +1115,24 @@ function makeWorkflowDispatcherTargets(baseUrl: string): TestTarget[] {
       }),
     },
     {
+      id: 'workflow:video-remotion-project-path',
+      kind: 'workflow',
+      name: 'workflow.video_remotion_project_path',
+      label: 'video_remotion_project_path',
+      description: 'Dispatch Remotion video project requests with a target path to video_creation.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create an editable Remotion video project about LLM training at D:\\Apps\\LLMTrainingVideo.' },
+        expectJson: {
+          'result.classification.route': 'video_creation',
+          'result.action': 'start_video_creation',
+          'result.workflow': 'video_creation',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
       id: 'workflow:video-explain-chat',
       kind: 'workflow',
       name: 'workflow.video_explain_chat',

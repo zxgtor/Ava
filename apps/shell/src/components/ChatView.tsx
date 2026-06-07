@@ -1884,7 +1884,16 @@ export function ChatView() {
                 'If a target folder/path is specified, create a small durable asset package with file.write_text. Prefer these files: script.md, storyboard.md, captions.srt, visual-prompts.md, production-notes.md.',
                 'Do not write binary video/audio files. Do not claim a playable video was generated. After writing, report the created paths and any assumptions.',
               ].join(' ')
-            : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
+            : videoOutputTarget === 'remotion_project'
+              ? [
+                  'The latest user request selected a Remotion editable video project.',
+                  'If no target folder or full Windows path is specified, ask one concise question for the target folder before calling tools.',
+                  'If a target folder/path is specified, create or scaffold the Remotion project there.',
+                  'Preferred scaffold: use shell.run_command with command "npx" and args ["create-video@latest","--yes","--blank","--no-tailwind", projectName] in the target parent folder, then write the video-specific composition files with file.write_text or file.patch.',
+                  'If the scaffold command fails or cannot run safely, fall back to a minimal Remotion project by writing package.json, src/Root.tsx, src/Composition.tsx, src/index.ts, and README.md with file.write_text.',
+                  'After project creation, run a non-long-running validation command such as npm run build when available, or report that install/build was not run. Do not start Remotion Studio unless the user asks for preview.',
+                ].join(' ')
+              : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })
