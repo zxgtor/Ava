@@ -77,11 +77,15 @@ function hasVideoPromptPackRequest(content: string): boolean {
   return /\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt|prompt\s+pack)\b|视频提示词|生成视频提示词|提示词包/i.test(content)
 }
 
+function hasTtsVoiceoverRequest(content: string): boolean {
+  return /\b(tts|voiceover|narration|audio|mp3|wav|spoken|speech|read\s+aloud)\b|旁白|配音|音频|语音|朗读/i.test(content)
+}
+
 function videoOutputTargetFor(content: string): string {
   if (/\b(remotion|editable\s+video|react\s+video|video\s+project)\b|可编辑视频|视频项目/i.test(content)) return 'remotion_project'
   if (hasVideoPromptPackRequest(content)) return 'video_prompts'
+  if (hasTtsVoiceoverRequest(content)) return 'tts_voiceover'
   if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
-  if (/\b(tts|voiceover|narration|audio|mp3|wav|spoken)\b|旁白|配音|音频|语音/i.test(content)) return 'tts_voiceover'
   return 'chat_draft'
 }
 
@@ -105,7 +109,7 @@ function videoOutputTargetPlan(target: string): string {
     case 'video_prompts':
       return 'Ava 会生成镜头级 prompt pack；如果你给了目录，会保存为 Sora/Runway/Kling/Veo 分平台提示词文件。'
     case 'tts_voiceover':
-      return 'Ava 会生成旁白-ready 文本；使用语音工具前会先确认。'
+      return 'Ava 会生成旁白-ready 文本和可保存的 SSML/发音说明；当前不会声称已生成音频文件。'
     case 'chat_draft':
     default:
       return 'Ava 会先在聊天里给出脚本、分镜、字幕和素材清单草稿。'

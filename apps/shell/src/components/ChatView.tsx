@@ -529,11 +529,15 @@ function hasVideoPromptPackRequest(content: string): boolean {
   return /\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt|prompt\s+pack)\b|视频提示词|生成视频提示词|提示词包/i.test(content)
 }
 
+function hasTtsVoiceoverRequest(content: string): boolean {
+  return /\b(tts|voiceover|narration|audio|mp3|wav|spoken|speech|read\s+aloud)\b|旁白|配音|音频|语音|朗读/i.test(content)
+}
+
 function videoOutputTargetFor(content: string): string {
   if (/\b(remotion|editable\s+video|react\s+video|video\s+project)\b|可编辑视频|视频项目/i.test(content)) return 'remotion_project'
   if (hasVideoPromptPackRequest(content)) return 'video_prompts'
+  if (hasTtsVoiceoverRequest(content)) return 'tts_voiceover'
   if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
-  if (/\b(tts|voiceover|narration|audio|mp3|wav|spoken)\b|旁白|配音|音频|语音/i.test(content)) return 'tts_voiceover'
   return 'chat_draft'
 }
 
@@ -1871,8 +1875,8 @@ export function ChatView() {
         const userMsg = makeUserMessage(content, commandInvocation, taskId, attachments ?? [])
         const previewMsg = makeActionPreviewMessage(taskId, inputDecision)
         const placeholder = makeAssistantPlaceholder(taskId)
-        const shouldSaveVideoAssets = hasExplicitVideoAssetSaveRequest(content)
         const videoOutputTarget = videoOutputTargetFor(content)
+        const shouldSaveVideoAssets = videoOutputTarget === 'file_assets' && hasExplicitVideoAssetSaveRequest(content)
         const videoContext = workflowSystemMessage(taskId, [
           'Workflow action: start_video_creation.',
           'The user wants help creating a short-form video or video assets.',
@@ -1905,7 +1909,16 @@ export function ChatView() {
                     'Each platform prompt file should contain scene-by-scene prompts, duration/aspect ratio notes, camera motion, visual style, negative prompts or avoid-list, and continuity notes.',
                     'Do not call a real video generation API and do not claim a video was generated. After writing, report created paths and how to use the prompts.',
                   ].join(' ')
-                : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
+                : videoOutputTarget === 'tts_voiceover'
+                  ? [
+                      'The latest user request selected TTS/voiceover output.',
+                      'Produce voiceover-ready text with timing, pacing, pronunciation notes, and optional SSML-style cues.',
+                      'If the user asks to save/export/write the voiceover pack but no target folder/path is specified, ask one concise question for the target folder before calling file tools.',
+                      'If a target folder/path is specified, write a durable voiceover pack with file.write_text. Prefer these files: voiceover-script.md, voiceover-ssml.xml, pronunciation-notes.md, captions.srt.',
+                      'Current Ava Speech v1 can play assistant replies through TTS when enabled, but it does not expose a daemon speech.tts file-generation tool yet. Do not claim an MP3/WAV/audio file was generated unless a real speech tool call exists and succeeds.',
+                      'If the user wants spoken preview, explain they can use Ava Speech playback when configured, or ask before routing to a future speech.tts tool.',
+                    ].join(' ')
+                  : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })

@@ -727,6 +727,23 @@ function makeIntentGateTargets(baseUrl: string): TestTarget[] {
       }),
     },
     {
+      id: 'intent:voiceover-save',
+      kind: 'intent',
+      name: 'intent.voiceover_save',
+      label: 'voiceover_save',
+      description: 'Classify saved TTS voiceover pack requests as video_creation.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a TTS voiceover script for an LLM training short and save the voiceover pack to D:\\Apps\\VoiceoverPack.' },
+        expectJson: {
+          'result.route': 'video_creation',
+          'result.workflow': 'video_creation',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
       id: 'intent:video-explain-chat',
       kind: 'intent',
       name: 'intent.video_explain_chat',
@@ -1159,6 +1176,24 @@ function makeWorkflowDispatcherTargets(baseUrl: string): TestTarget[] {
         method: 'POST',
         url,
         body: { content: 'Create a Sora Runway Kling prompt pack for an LLM training explainer and save it to D:\\Apps\\PromptPack.' },
+        expectJson: {
+          'result.classification.route': 'video_creation',
+          'result.action': 'start_video_creation',
+          'result.workflow': 'video_creation',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:voiceover-save',
+      kind: 'workflow',
+      name: 'workflow.voiceover_save',
+      label: 'voiceover_save',
+      description: 'Dispatch saved TTS voiceover pack requests to the video_creation workflow.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a TTS voiceover script for an LLM training short and save the voiceover pack to D:\\Apps\\VoiceoverPack.' },
         expectJson: {
           'result.classification.route': 'video_creation',
           'result.action': 'start_video_creation',
