@@ -525,10 +525,14 @@ function hasExplicitVideoAssetSaveRequest(content: string): boolean {
   return /\b(save|write|export|create files?|generate files?|put (?:it|them) (?:in|under)|to files?|as files?|folder|directory)\b|保存|写入|导出|生成文件|创建文件|放到|目录|文件夹/i.test(content)
 }
 
+function hasVideoPromptPackRequest(content: string): boolean {
+  return /\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt|prompt\s+pack)\b|视频提示词|生成视频提示词|提示词包/i.test(content)
+}
+
 function videoOutputTargetFor(content: string): string {
-  if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
   if (/\b(remotion|editable\s+video|react\s+video|video\s+project)\b|可编辑视频|视频项目/i.test(content)) return 'remotion_project'
-  if (/\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt)\b|视频提示词|生成视频提示词/i.test(content)) return 'video_prompts'
+  if (hasVideoPromptPackRequest(content)) return 'video_prompts'
+  if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
   if (/\b(tts|voiceover|narration|audio|mp3|wav|spoken)\b|旁白|配音|音频|语音/i.test(content)) return 'tts_voiceover'
   return 'chat_draft'
 }
@@ -1893,7 +1897,15 @@ export function ChatView() {
                   'If the scaffold command fails or cannot run safely, fall back to a minimal Remotion project by writing package.json, src/Root.tsx, src/Composition.tsx, src/index.ts, and README.md with file.write_text.',
                   'After project creation, run a non-long-running validation command such as npm run build when available, or report that install/build was not run. Do not start Remotion Studio unless the user asks for preview.',
                 ].join(' ')
-              : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
+              : videoOutputTarget === 'video_prompts'
+                ? [
+                    'The latest user request selected Sora/Runway/Kling/Veo-style video prompt pack output.',
+                    'If the user asks to save/export/write the prompt pack but no target folder/path is specified, ask one concise question for the target folder before calling file tools.',
+                    'If a target folder/path is specified, write a durable prompt pack with file.write_text. Prefer these files: prompt-pack.md, sora-prompts.md, runway-prompts.md, kling-prompts.md, veo-prompts.md, shot-list.md.',
+                    'Each platform prompt file should contain scene-by-scene prompts, duration/aspect ratio notes, camera motion, visual style, negative prompts or avoid-list, and continuity notes.',
+                    'Do not call a real video generation API and do not claim a video was generated. After writing, report created paths and how to use the prompts.',
+                  ].join(' ')
+                : 'Mention available paths only as options: save script to files, generate a Remotion project, prepare Sora/video prompts, or use TTS/STT if enabled. Do not call those tools unless the user explicitly asks.',
         ].join(' '))
 
         dispatch({ type: 'ADD_MESSAGE', conversationId: conversation.id, message: userMsg })

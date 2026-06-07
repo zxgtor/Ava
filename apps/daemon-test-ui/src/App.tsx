@@ -710,6 +710,23 @@ function makeIntentGateTargets(baseUrl: string): TestTarget[] {
       }),
     },
     {
+      id: 'intent:video-prompts-save',
+      kind: 'intent',
+      name: 'intent.video_prompts_save',
+      label: 'video_prompts_save',
+      description: 'Classify saved Sora/Runway/Kling prompt pack requests as video_creation.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a Sora Runway Kling prompt pack for an LLM training explainer and save it to D:\\Apps\\PromptPack.' },
+        expectJson: {
+          'result.route': 'video_creation',
+          'result.workflow': 'video_creation',
+          'result.requiresTaskIntake': false,
+        },
+      }),
+    },
+    {
       id: 'intent:video-explain-chat',
       kind: 'intent',
       name: 'intent.video_explain_chat',
@@ -1124,6 +1141,24 @@ function makeWorkflowDispatcherTargets(baseUrl: string): TestTarget[] {
         method: 'POST',
         url,
         body: { content: 'Create an editable Remotion video project about LLM training at D:\\Apps\\LLMTrainingVideo.' },
+        expectJson: {
+          'result.classification.route': 'video_creation',
+          'result.action': 'start_video_creation',
+          'result.workflow': 'video_creation',
+          'result.actionPreview.requiresConfirmation': false,
+        },
+      }),
+    },
+    {
+      id: 'workflow:video-prompts-save',
+      kind: 'workflow',
+      name: 'workflow.video_prompts_save',
+      label: 'video_prompts_save',
+      description: 'Dispatch saved prompt pack requests to the video_creation workflow.',
+      defaultRequest: requestJson({
+        method: 'POST',
+        url,
+        body: { content: 'Create a Sora Runway Kling prompt pack for an LLM training explainer and save it to D:\\Apps\\PromptPack.' },
         expectJson: {
           'result.classification.route': 'video_creation',
           'result.action': 'start_video_creation',

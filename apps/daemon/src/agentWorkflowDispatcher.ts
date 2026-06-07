@@ -73,10 +73,14 @@ function hasExplicitVideoAssetSaveRequest(content: string): boolean {
   return /\b(save|write|export|create files?|generate files?|put (?:it|them) (?:in|under)|to files?|as files?|folder|directory)\b|保存|写入|导出|生成文件|创建文件|放到|目录|文件夹/i.test(content)
 }
 
+function hasVideoPromptPackRequest(content: string): boolean {
+  return /\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt|prompt\s+pack)\b|视频提示词|生成视频提示词|提示词包/i.test(content)
+}
+
 function videoOutputTargetFor(content: string): string {
-  if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
   if (/\b(remotion|editable\s+video|react\s+video|video\s+project)\b|可编辑视频|视频项目/i.test(content)) return 'remotion_project'
-  if (/\b(sora|runway|kling|veo|pika|video\s+prompts?|ai\s+video\s+prompt)\b|视频提示词|生成视频提示词/i.test(content)) return 'video_prompts'
+  if (hasVideoPromptPackRequest(content)) return 'video_prompts'
+  if (hasExplicitVideoAssetSaveRequest(content)) return 'file_assets'
   if (/\b(tts|voiceover|narration|audio|mp3|wav|spoken)\b|旁白|配音|音频|语音/i.test(content)) return 'tts_voiceover'
   return 'chat_draft'
 }
@@ -99,7 +103,7 @@ function videoOutputTargetPlan(target: string): string {
     case 'remotion_project':
       return '如果你给了目标目录，Ava 会创建 Remotion 项目结构并写入初版 composition；没给目录会先问目录。'
     case 'video_prompts':
-      return 'Ava 会生成适合 Sora/Runway/Kling/Veo 等工具的镜头级视频提示词。'
+      return 'Ava 会生成镜头级 prompt pack；如果你给了目录，会保存为 Sora/Runway/Kling/Veo 分平台提示词文件。'
     case 'tts_voiceover':
       return 'Ava 会生成旁白-ready 文本；使用语音工具前会先确认。'
     case 'chat_draft':
